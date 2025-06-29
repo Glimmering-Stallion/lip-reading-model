@@ -1,0 +1,14 @@
+[package]
+name = "lrm_rust"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = "4.5.40"
+image = "0.25.6"
+ndarray = "0.16.1"
+# onnxruntime = "0.0.14"
+opencv = "0.95.0"
+reqwest = { version = "0.12.20", features = ["blocking"] }
+tract-onnx = "0.21.13"
+zip = "4.2.0"

@@ -1,0 +1,27 @@
+# ignore Python virtual environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.lipread/
+env/
+lipread/
+
+# ignore Rust target builds
+/target/
+
+# ignore OS system junk files
+.DS_Store
+__MACOSX/
+
+# ignore zip files and large raw datasets
+data.zip
+
+# ignore entire data folder
+data/
+
+# ignore VSCode settings
+.vscode/
+
+# local shell configs
+.zshrc
