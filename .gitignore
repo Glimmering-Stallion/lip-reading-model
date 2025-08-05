@@ -7,6 +7,9 @@ __pycache__/
 env/
 lipread/
 
+# ignore Python model checkpoints
+LRM Python/models/checkpoint*
+
 # ignore Rust target builds
 /target/
 
@@ -14,11 +17,10 @@ lipread/
 .DS_Store
 __MACOSX/
 
-# ignore zip files and large raw datasets
+# ignore large raw datasets and other misc.
 data.zip
-
-# ignore entire data folder
 data/
+test_frame.png
 
 # ignore VSCode settings
 .vscode/

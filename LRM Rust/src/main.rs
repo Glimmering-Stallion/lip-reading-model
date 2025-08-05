@@ -12,6 +12,10 @@
 // compile single Rust file manually with rustc:                                          rustc [file name]
 // run compiled binary (in same folder):                                                  .\[file name]
 
+// for crate imports:
+
+// import crate with cargo:                                                              cargo add [crate name]
+
 
 
 // imports
@@ -23,17 +27,86 @@ use clap;                       // for terminal arg parsing
 use tract_onnx::prelude::*;     // for ONNX model inference
 use reqwest;                    // for HTTP requests to download data
 use zip;                        // for extracting zip files
+use std::collections::HashMap;  // for bidirectional token-id mapping
+use std::fs::File;
+use std::io::{self, BufRead};
+use image::{GrayImage, Luma};
+// use show_image::{create_window, ImageView, ImageInfo};
 // use onnxruntime;
 
 
 
-fn main() {
+struct TokenMap {
+    char_to_num: HashMap<char, usize>,
+    num_to_char: Vec<char>,
+}
+
+impl TokenMap {
+    fn new(vocab: &str) -> Self {
+        let vocab: Vec<char> = vocab.chars().collect();
+
+        // character to numerical index map and vice versa
+        let mut char_to_num = HashMap::new();
+        for (idx, ch) in vocab.iter().enumerate() { char_to_num.insert(*ch, idx); }
+
+        Self {
+            char_to_num,
+            num_to_char: vocab,
+        }
+    }
+
+    fn char_to_num(&self, ch:char) -> Option<usize> { self.char_to_num.get(&ch).copied() }
+    fn num_to_char(&self, num: usize) -> Option<char> { self.num_to_char.get(num).copied() }
+}
+
+
+
+fn main() -> Result< (), Box<dyn std::error::Error> > {
     // debugging
     // let vector = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     // println!("Input: {:?}, Mean: {}, Std Dev: {}", vector, mean(&vector), std_dev(&vector));
 
-    // load data
-    load_data("../data");
+    // obtain data (if data isn't already loaded)
+    // extract_data("../data");
+
+    // ------ Define vocabulary and token map ------
+
+    let vocab = "abcdefghijklmnopqrstuvwxyz'?!0123456789 ";
+    let token_map = TokenMap::new(vocab);
+    
+    println!("Vocabulary: {:?}", token_map.num_to_char);
+
+    // ----------------- Load data -----------------
+
+    // height and width of cropped ROI (mouth region)
+    let width: u32 = 150;
+    let height: u32 = 50;
+    let dim = (width * height) as usize;
+    
+    let test_path = "../data/s1/bbal6n.mpg";
+    let (test_frames, test_alignments) = load_data(test_path, &token_map)?;
+
+    // debugging
+    let norm_min = test_frames.iter().cloned().fold(f32::INFINITY, f32::min);
+    let norm_max = test_frames.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    // println!("Normalized range: min = {:.3}, max = {:.3}", norm_min, norm_max);
+
+    // extract an arbitrary frame (f32) and rescale to [0, 255] range for u8
+    let frame: Vec<u8> = test_frames[0..dim]
+        .iter()
+        .map(|x| ((x - norm_min) / (norm_max - norm_min) * 255.0).round().clamp(0.0, 255.0) as u8)
+        .collect::<Vec<u8>>();
+
+    // debugging
+    // println!("test_frames.len(): {}", test_frames.len());
+    // println!("frame.len(): {}", frame.len());
+    // println!("Expected per-frame size: {}", width * height);
+    // assert_eq!(frame.len(), dim, "Frame length doesn't match image dimensions!");
+
+    let img_buffer: GrayImage = GrayImage::from_vec(width, height, frame).expect("Failed to create image buffer");
+    img_buffer.save("test_frame.png").expect("Failed to save image");
+
+    Ok(())
 }
 
 
@@ -87,8 +160,8 @@ fn extract_zip(zip_path: &str, extract_to: &str) {
 
 
 
-// load data externally to a given path
-fn load_data(path: &str) {
+// extract data externally to a given path
+fn extract_data(path: &str) {
     // check if the video file exists at the given path
     if !std::path::Path::new(path).exists() {
         println!("Data directory not found, downloading...");
@@ -121,13 +194,8 @@ fn load_data(path: &str) {
     }
 }
 
-
-
 // takes in a video path and outputs a list of floats
-fn load_video(path: &str) -> Vec<f32> {
-    // let mut cap = opencv::videoio::VideoCapture::from_file(path, videoio::CAP_ANY)
-    //     .expect("Failed to open video file");
-
+fn load_video(path: &str) -> Result< Vec<f32>, Box<dyn std::error::Error> > {
     match opencv::videoio::VideoCapture::from_file(path, opencv::videoio::CAP_ANY) {
         Ok(mut cap) => {
             let mut frames: Vec<f32> = vec![];
@@ -151,7 +219,9 @@ fn load_video(path: &str) -> Vec<f32> {
 
                 // crop frame to isolate region of interest (where the mouth is)
                 let roi = opencv::core::Rect::new(80, 190, 150, 50);
-                let mouth_frame = opencv::core::Mat::roi(&gray_frame, roi).expect("Failed to crop frame");
+                let temp = opencv::core::Mat::roi(&gray_frame, roi).expect("Failed to crop frame");
+                let mut mouth_frame = opencv::core::Mat::default();
+                temp.copy_to(&mut mouth_frame).expect("Failed to copy ROI to a continuous Mat");
 
                 // flatten and store
                 let flattened_frame: Vec<f32> = mouth_frame
@@ -165,13 +235,65 @@ fn load_video(path: &str) -> Vec<f32> {
             // standardize frames (by centering to zero mean and scaling to unit variance)
             let mean = mean(&frames);
             let std_dev = std_dev(&frames);
-            frames = frames.iter().map(|&x| (x - mean) / std_dev).collect::<Vec<f32>>();
 
-            return frames;
+            frames = frames.iter().map(|&x| (x - mean) / std_dev).collect::<Vec<f32>>(); // frames as a vector of pixels as floats
+
+            Ok(frames)
         },
         Err(e) => {
             eprintln!("Error opening video file: {}", e);
-            return vec![];
+            Err(Box::new(e))
         }
     }
 }
+
+// takes in an alignments path (as well as TokenMap struct) and outputs a list of char indices
+fn load_alignments(path: &str, token_map: &TokenMap) -> Result< Vec<usize>, Box<dyn std::error::Error> > {
+    match std::fs::File::open(&path) {
+        Ok(file) => {
+            let mut tokens: Vec<String> = vec![];
+            let lines = io::BufReader::new(file).lines();
+
+            for line in lines.flatten() {
+                let line_group = line.split_whitespace().collect::<Vec<_>>();
+                if line_group[2] != "sil" { tokens.push(line_group[2].to_string()); }
+            }
+
+            Ok(tokens
+                .iter()
+                .flat_map(|token| token.chars())
+                .filter_map(|ch| token_map.char_to_num(ch))
+                .collect())
+        },
+        Err(e) => {
+            eprintln!("Error opening alignments file: {}", e);
+            Err(Box::new(e))
+        }
+    }
+}
+
+// function to load data (takes in a data path and outputs frames and alignments)
+fn load_data(path: &str, token_map: &TokenMap) -> Result< (Vec<f32>, Vec<usize>), Box<dyn std::error::Error> > {
+    let filename = std::path::Path::new(&path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(|s| s.to_string());
+
+    match filename {
+        Some(name) => {
+            let video_path = format!("../data/s1/{}.mpg", name);
+            let alignments_path = format!("../data/alignments/s1/{}.align", name);
+
+            let frames = load_video(&video_path)?;
+            let alignments = load_alignments(&alignments_path, token_map)?;
+
+            Ok((frames, alignments))
+        }
+        None => {
+            eprintln!("Failed to extract filename from path: {}", path);
+            Err("Failed to extract filename.".into())
+        }
+    }
+}
+
+
