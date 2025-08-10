@@ -24,7 +24,7 @@ use ndarray;                    // Rust's NumPy equivalent (for numerical operat
 use image;                      // for image processing
 use opencv::{self, videoio::VideoCaptureTrait, core::{MatTrait, Size}, prelude::*};                     // for CV tasks
 use clap;                       // for terminal arg parsing
-use tract_onnx::prelude::*;     // for ONNX model inference
+// use tract_onnx::prelude::*;     // for ONNX model inference
 use reqwest;                    // for HTTP requests to download data
 use zip;                        // for extracting zip files
 use std::collections::HashMap;  // for bidirectional token-id mapping
@@ -32,7 +32,7 @@ use std::fs::File;
 use std::io::{self, BufRead};
 use image::{GrayImage, Luma};
 // use show_image::{create_window, ImageView, ImageInfo};
-// use onnxruntime;
+mod model;
 
 
 
@@ -297,3 +297,23 @@ fn load_data(path: &str, token_map: &TokenMap) -> Result< (Vec<f32>, Vec<usize>)
 }
 
 
+// ----------------------------------------------------------- Model Architecture ------------------------------------------------------------
+
+
+// fn load_model(path: &str) -> TractResult<SimplePlan<TypedFact, Box<dyn TypedOp>>> {
+//     tract_onnx::onnx()
+//         .model_for_path(path)?
+//         .with_input_fact(0, InferenceFact::dt_shape(f32::datum_type(), shape![1, 75, 50, 150, 1]))?
+//         .into_optimized()?
+//         .into_runnable()
+// }
+
+fn ctc_loss<B: Backend>(
+    log_probs: Tensor<B, 3>,
+    targets: Tensor<B, 2, Int>,
+    input_lens: Tensor<B, 1, Int>,
+    target: Tensor<B, 1, Int>,
+    blank: usize,
+) -> Tensor<B, 1> {
+
+}

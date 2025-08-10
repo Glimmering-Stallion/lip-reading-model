@@ -4,13 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+burn = { version = "0.18.0", features = ["ndarray"] }
+burn-ndarray = "0.18.0"
 clap = "4.5.40"
 hashmap = "0.0.0"
 image = "0.25.6"
 ndarray = "0.16.1"
 # onnxruntime = "0.0.14"
-opencv = "0.95.0"
+opencv = "0.95.1"
 reqwest = { version = "0.12.20", features = ["blocking"] }
 # show-image = "0.14.1"
-tract-onnx = "0.21.13"
-zip = "4.2.0"
+# tract-onnx = "0.21.13"
+zip = "4.3.0"
