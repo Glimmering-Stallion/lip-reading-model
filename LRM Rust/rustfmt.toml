@@ -1,0 +1,8 @@
+# format with nightly-only format options:
+# cargo +nightly fmt -- --unstable-features
+imports_granularity = "Crate"
+group_imports = "One"
+wrap_comments = false
+blank_lines_upper_bound = 3
+fn_params_layout = "Tall"
+fn_single_line=false

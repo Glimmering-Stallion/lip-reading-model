@@ -5,7 +5,9 @@ edition = "2024"
 
 [dependencies]
 burn = { version = "0.18.0", features = ["ndarray"] }
+burn-autodiff = "0.18"
 burn-ndarray = "0.18.0"
+burn-train = "0.18.0"
 clap = "4.5.40"
 hashmap = "0.0.0"
 image = "0.25.6"

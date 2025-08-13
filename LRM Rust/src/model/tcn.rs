@@ -3,11 +3,15 @@
 
 
 // imports
-use burn::module::Module;
-use burn::nn::{conv::{Conv1d, Conv1dConfig}, Dropout, DropoutConfig};
-use burn::tensor::{backend::Backend, activation, Tensor};
-use burn::optim::Adam;
-use burn::tensor::activation::log_softmax;
+use burn::{
+    module::Module,
+    nn::{
+        Dropout, DropoutConfig,
+        conv::{Conv1d, Conv1dConfig},
+    },
+    optim::Adam,
+    tensor::{Tensor, activation, activation::log_softmax, backend::Backend},
+};
 
 
 
@@ -31,21 +35,13 @@ impl<B: Backend> TcnBlock<B> {
         dropout_prob: f64,
         device: &B::Device,
     ) -> Self {
-        let conv1 = Conv1dConfig::new(
-            in_channels,
-            out_channels,
-            kernel_size,
-        )
-        .with_dilation(dilation)
-        .init(device);
+        let conv1 = Conv1dConfig::new(in_channels, out_channels, kernel_size)
+            .with_dilation(dilation)
+            .init(device);
 
-        let conv2 = Conv1dConfig::new(
-            out_channels,
-            out_channels,
-            kernel_size,
-        )
-        .with_dilation(dilation)
-        .init(device);
+        let conv2 = Conv1dConfig::new(out_channels, out_channels, kernel_size)
+            .with_dilation(dilation)
+            .init(device);
 
         let padding = (kernel_size - 1) * dilation;
 
@@ -66,16 +62,12 @@ impl<B: Backend> TcnBlock<B> {
         }
     }
 
-    pub fn forward(
-        &self,
-        input: Tensor<B, 3>,
-    ) -> Tensor<B, 3> {
-
+    pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         // manually apply causal left padding to time dimension of input
         // default case:    (left, right, top, bottom) = (dim -1, dim -2)
         // our case:        (timesteps_left, timesteps_right, channels_left, channels_right)
         // resulting input: (padding, 0, 0, 0)
-        
+
         let x = input.clone().pad((self.padding, 0, 0, 0), 0.0); // first left-padding
         let x = activation::relu(self.conv1.forward(x));
         let x = self.dropout.forward(x);
@@ -99,6 +91,8 @@ impl<B: Backend> TcnBlock<B> {
 pub struct TemporalConvNet<B: Backend> {
     tcn_blocks: Vec<TcnBlock<B>>,
 }
+
+
 
 pub struct TemporalConvNetConfig {
     pub channels: [usize; 2],
@@ -133,17 +127,16 @@ impl<B: Backend> TemporalConvNet<B> {
                 device,
             );
             tcn_blocks.push(tcn_block);
-            current_in_channels = out_channels; 
+            current_in_channels = out_channels;
         }
 
         Self { tcn_blocks }
     }
 
-    pub fn forward(
-        &self,
-        mut x: Tensor<B, 3>,
-    ) -> Tensor<B, 3> {
-        for tcn_block in &self.tcn_blocks { x = tcn_block.forward(x); }
+    pub fn forward(&self, mut x: Tensor<B, 3>) -> Tensor<B, 3> {
+        for tcn_block in &self.tcn_blocks {
+            x = tcn_block.forward(x);
+        }
         x
     }
 }
@@ -187,8 +180,7 @@ impl TemporalConvNetConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::backend::ndarray::NdArray;
-    use burn::tensor::Tensor;
+    use burn::{backend::ndarray::NdArray, tensor::Tensor};
     use burn_ndarray::NdArrayDevice;
 
     type B = NdArray<f32>;
@@ -200,11 +192,9 @@ mod tests {
         let c_out = 32;
 
         let block = TcnBlock::<B>::new(
-            c_in,
-            c_out,
-            3,       // kernel
-            2,          // dilation
-            0.1,    // dropout
+            c_in, c_out, 3,   // kernel
+            2,   // dilation
+            0.1, // dropout
             &device,
         );
 
@@ -218,18 +208,15 @@ mod tests {
     fn tcn_is_causal() {
         // type B = NdArray<f32>;
 
-        let device: NdArrayDevice  = Default::default();
+        let device: NdArrayDevice = Default::default();
         let (n, c, t) = (2, 4, 32); // 2 batches to compare two cases
         let t0 = 10; // current timestep
 
         // causal TCN with no dropout for determinism
-        let tcn: TemporalConvNet<B> = TemporalConvNetConfig::new(
-            [c, c],
-            3,
-        )
-        .with_layers(3)
-        .with_dropout(0.0)
-        .init(&device);
+        let tcn: TemporalConvNet<B> = TemporalConvNetConfig::new([c, c], 3)
+            .with_layers(3)
+            .with_dropout(0.0)
+            .init(&device);
 
         // input tensor with two batches
         // first batch: only prefix (control)
@@ -237,11 +224,13 @@ mod tests {
         let x = Tensor::<B, 3>::zeros([n, c, t], &device);
 
         // make identical prefix (past) for both batches: fill [:, :, 0..=t0] with a constant
-        let prefix = Tensor::<B, 3>::zeros([n, c, t0 + 1], &device) + 0.5;
+        const ARBITRARY_PREFIX_OFFSET: f64 = 0.5;
+        let prefix = Tensor::<B, 3>::zeros([n, c, t0 + 1], &device) + ARBITRARY_PREFIX_OFFSET;
         let x = x.slice_assign([0..n, 0..c, 0..(t0 + 1)], prefix);
 
         // perturb suffix (future) for second batch: set [1, :, t0+1..] to another constant
-        let suffix = Tensor::<B, 3>::zeros([1, c, t - (t0 + 1)], &device) + 3.14;
+        const ARBITRARY_SUFFIX_OFFSET: f64 = 3.15;
+        let suffix = Tensor::<B, 3>::zeros([1, c, t - (t0 + 1)], &device) + ARBITRARY_SUFFIX_OFFSET;
         let x = x.slice_assign([1..2, 0..c, (t0 + 1)..t], suffix);
 
         // run TCN

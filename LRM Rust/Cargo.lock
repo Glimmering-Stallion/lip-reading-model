@@ -3208,7 +3208,9 @@ name = "lrm_rust"
 version = "0.1.0"
 dependencies = [
  "burn",
+ "burn-autodiff",
  "burn-ndarray",
+ "burn-train",
  "clap",
  "hashmap",
  "image",
