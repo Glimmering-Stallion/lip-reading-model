@@ -5,14 +5,19 @@
 // imports
 mod tcn;
 use burn::{
-    module::Module,
+    module::{Module, Param, ParamId},
     nn::{
+        {GroupNorm, GroupNormConfig},
+        Initializer,
         conv::{Conv3d, Conv3dConfig},
         Linear, LinearConfig, PaddingConfig3d,
     },
     tensor::{activation, backend::Backend, Shape, Tensor},
+    optim::GradientsParams,
 };
+use opencv::photo::fast_nl_means_denoising_vec_def;
 use tcn::{TemporalConvNet, TemporalConvNetConfig};
+use burn_autodiff::Autodiff;
 
 
 
@@ -27,9 +32,9 @@ static PRINT_ONCE: Once = Once::new();
 // define model architecture
 #[derive(Module, Debug)]
 pub struct LRModel<B: Backend> {
-    conv1: Conv3d<B>,
-    conv2: Conv3d<B>,
-    conv3: Conv3d<B>,
+    conv1: Conv3d<B>, gn1: GroupNorm<B>,
+    conv2: Conv3d<B>, gn2: GroupNorm<B>,
+    conv3: Conv3d<B>, gn3: GroupNorm<B>,
 
     tcn1: TemporalConvNet<B>,
     tcn2: TemporalConvNet<B>,
@@ -39,30 +44,91 @@ pub struct LRModel<B: Backend> {
 
 
 
-// default input parameters: input_channels = 1, output_channels = 128, input_dims = (50, 150), vocab_size = 41
+// helper for model layer tensor stat debugging
+#[cfg(test)]
+fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(name: &str, t: &burn::tensor::Tensor<B, D>) {
+    let data = t.clone().to_data().convert::<f32>();
+    let s = data.as_slice::<f32>().unwrap();
+    let (mut min, mut max, mut sum, mut nans, mut infs) = (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
+    for &v in s {
+        if v.is_nan() { nans += 1; }
+        if v.is_infinite() { infs += 1; }
+        if v.is_finite() { if v < min { min = v } if v > max { max = v } sum += v; }
+    }
+    let mean = sum / (s.len().max(1) as f32);
+    println!("{name} | mean = {mean:.6} min = {min:.6} max = {max:.6} NaNs = {nans} Infs = {infs} len = {}", s.len());
+}
+#[cfg(not(test))]
+fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(_name: &str, _t: &burn::tensor::Tensor<B, D>) {}
+
+
+
+// helper for model gradient debugging
+#[cfg(test)]
+fn print_grad_stats<B: Backend>(label: &str, t: &Tensor<B, 1>) {
+    let v = t.clone().to_data().convert::<f32>();
+    let s = v.as_slice::<f32>().unwrap();
+    let (mut min, mut max, mut sum, mut n_nan, mut n_inf) =
+        (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
+    for &x in s {
+        if x.is_nan() { n_nan += 1; }
+        if x.is_infinite() { n_inf += 1; }
+        if x.is_finite() {
+            if x < min { min = x; }
+            if x > max { max = x; }
+            sum += x;
+        }
+    }
+    let mean = sum / (s.len().max(1) as f32);
+    println!("{label} | mean={mean:.6} min={min:.6} max={max:.6} NaNs={n_nan} Infs={n_inf} len={}", s.len());
+}
+
+
+
+// default input parameters: input_channels = 1, output_channels = 128, frame_dims = (50, 150), vocab_size = 41
 impl<B: Backend> LRModel<B> {
     pub fn new(
         in_channels: usize,
         out_channels: usize,
-        input_dims: (usize, usize),
+        frame_dims: (usize, usize),
+        norm_groups: usize,
         vocab_size: usize,
         device: &B::Device,
     ) -> Self {
-        let (height, width) = input_dims;
+        let (height, width) = frame_dims;
 
-        let conv1 = Conv3dConfig::new([in_channels, out_channels], [3, 3, 3])
+        let conv1_out = out_channels;        // 8
+        let conv2_out = out_channels * 2;    // 16
+        let conv3_out = 75;
+
+        let conv1 = Conv3dConfig::new([in_channels, conv1_out], [3, 3, 3])
             .with_stride([1, 2, 2])
             .with_padding(PaddingConfig3d::Explicit(1, 1, 1))
+            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
+            .init(device);
+        let gn1 = GroupNormConfig::new(norm_groups, conv1_out)
+            .with_epsilon(1e-5)
+            .with_affine(true)
             .init(device);
 
-        let conv2 = Conv3dConfig::new([out_channels, out_channels * 2], [3, 3, 3])
+        let conv2 = Conv3dConfig::new([conv1_out, conv2_out], [3, 3, 3])
             .with_stride([1, 2, 2])
             .with_padding(PaddingConfig3d::Explicit(1, 1, 1))
+            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
+            .init(device);
+        let gn2 = GroupNormConfig::new(norm_groups, conv2_out)
+            .with_epsilon(1e-5)
+            .with_affine(true)
             .init(device);
 
-        let conv3 = Conv3dConfig::new([out_channels * 2, 75], [3, 3, 3])
+        let conv3 = Conv3dConfig::new([conv2_out, conv3_out], [3, 3, 3])
             .with_stride([1, 2, 2])
             .with_padding(PaddingConfig3d::Explicit(1, 1, 1))
+            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
+            .init(device);
+        let gn3 = GroupNormConfig::new(norm_groups, conv3_out)
+            .with_epsilon(1e-5)
+            .with_affine(true)
             .init(device);
 
         let tcn1 = TemporalConvNetConfig::new([75 * (height / 8) * (width / 8), out_channels], 3)
@@ -75,12 +141,15 @@ impl<B: Backend> LRModel<B> {
             .with_dropout(0.5)
             .init(device);
 
-        let fc = LinearConfig::new(75, vocab_size).init(device);
+        let fc = LinearConfig::new(75, vocab_size)
+            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
+            .with_bias(true) 
+            .init(device);
 
         Self {
-            conv1,
-            conv2,
-            conv3,
+            conv1, gn1,
+            conv2, gn2,
+            conv3, gn3,
             tcn1,
             tcn2,
             fc,
@@ -93,9 +162,9 @@ impl<B: Backend> LRModel<B> {
         // three 3D convolutional layers with ReLU activation and strided downsampling
         // input shape: (batch, channels, timesteps, height, width)
         // output shape: (batch, channels, timesteps, height/(2^3), width/(2^3))
-        let x = activation::relu(self.conv1.forward(input));
-        let x = activation::relu(self.conv2.forward(x));
-        let x = activation::relu(self.conv3.forward(x));
+        let x = activation::relu(self.gn1.forward(self.conv1.forward(input)));
+        let x = activation::relu(self.gn2.forward(self.conv2.forward(x)));
+        let x = activation::relu(self.gn3.forward(self.conv3.forward(x)));
 
         // reshape input to rank 3 as NCT format for TCN layers (bringing timesteps to last dim)
         // input shape: (batch, channels, timesteps, height/(2^3), width/(2^3))
@@ -121,9 +190,75 @@ impl<B: Backend> LRModel<B> {
 
         y
     }
+}
+
+
+
+pub trait TrainEval {
+    fn set_train(&mut self, on: bool);
+    fn train(&mut self) { self.set_train(true); }
+    fn eval(&mut self) { self.set_train(false); }
+}
+
+
+
+impl<B: Backend> TrainEval for LRModel<B> {
+    fn set_train(&mut self, on: bool) {
+        self.tcn1.set_train(on);
+        self.tcn2.set_train(on);
+    }
+}
+
+
+
+#[cfg(test)]
+pub struct ParamIds {
+    pub conv1_w: ParamId,
+    pub conv2_w: ParamId,
+    pub conv3_w: ParamId,
+    pub fc_w:    ParamId,
+}
+
+
+
+#[cfg(test)]
+impl<B0: Backend> LRModel<Autodiff<B0>> {
+    pub fn param_ids(&self) -> ParamIds {
+        ParamIds {
+            conv1_w: self.conv1.weight.id,
+            conv2_w: self.conv2.weight.id,
+            conv3_w: self.conv3.weight.id,
+            fc_w:    self.fc.weight.id,
+        }
+    }
+
+    pub fn debug_print_grads(&self, grads: &GradientsParams) {
+        let ids = self.param_ids();
+        // tiny helper
+        fn print_grad_stats<B: burn::tensor::backend::Backend, const D: usize>(
+            name: &str,
+            t: &burn::tensor::Tensor<B, D>,
+        ) {
+            let data = t.clone().to_data().convert::<f32>();
+            let s = data.as_slice::<f32>().unwrap();
+            let (mut min, mut max, mut sum, mut nans, mut infs) = (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
+            for &v in s {
+                if v.is_nan() { nans += 1; }
+                if v.is_infinite() { infs += 1; }
+                if v.is_finite() { if v < min { min = v } if v > max { max = v } sum += v; }
+            }
+            let mean = sum / (s.len().max(1) as f32);
+            println!("{name} | mean={mean:.6} min={min:.6} max={max:.6} NaNs={nans} Infs={infs} len={}", s.len());
+        }
+
+        if let Some(g) = grads.get::<B0, 5>(ids.conv1_w) { print_grad_stats("grad conv1.weight", &g); }
+        if let Some(g) = grads.get::<B0, 5>(ids.conv2_w) { print_grad_stats("grad conv2.weight", &g); }
+        if let Some(g) = grads.get::<B0, 5>(ids.conv3_w) { print_grad_stats("grad conv3.weight", &g); }
+        if let Some(g) = grads.get::<B0, 2>(ids.fc_w)    { print_grad_stats("grad fc.weight",    &g); }
+    }
 
     #[cfg(test)]
-    pub fn inspect_shapes_once(&self, input: Tensor<B, 5>) {
+    pub fn inspect_shapes_once(&self, input: Tensor<Autodiff<B0>, 5>) {
         PRINT_ONCE.call_once(|| {
             println!("IN (N, C, T, H, W): {:?}", input.dims());
 
@@ -140,10 +275,10 @@ impl<B: Backend> LRModel<B> {
             let x = x.reshape(Shape::new([batch, channels * height * width, timesteps]));
             println!("RS (N, C_feat, T): {:?}", x.dims());
 
-            let x: Tensor<B, 3> = activation::relu(self.tcn1.forward(x));
+            let x = activation::relu(self.tcn1.forward(x));
             println!("TCN1 (N, C_feat, T): {:?}", x.dims());
 
-            let x: Tensor<B, 3> = activation::relu(self.tcn2.forward(x));
+            let x = activation::relu(self.tcn2.forward(x));
             println!("TCN2 (N, C_feat, T): {:?}", x.dims());
 
             let x = x.swap_dims(1, 2);
@@ -169,11 +304,19 @@ mod tests {
     #[test]
     fn model_input_shapes_data_flow_small() {
         let (n, c, t, h, w) = (1, 1, 8, 16, 16);
-        let out_channels = 8;
+        let out_channels = 10;
         let vocab_size = 41;
+        let norm_groups = 5;
 
         let device = Default::default();
-        let model = LRModel::<B>::new(c, out_channels, (h, w), vocab_size, &device);
+        let model = LRModel::<B>::new(
+            c,
+            out_channels,
+            (h, w),
+            norm_groups,
+            vocab_size,
+            &device
+        );
 
         let input = Tensor::<B, 5>::zeros([n, c, t, h, w], &device);
         let output = model.forward(input);

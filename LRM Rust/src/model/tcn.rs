@@ -6,11 +6,10 @@
 use burn::{
     module::Module,
     nn::{
-        Dropout, DropoutConfig,
         conv::{Conv1d, Conv1dConfig},
+        Dropout, DropoutConfig,
     },
-    optim::Adam,
-    tensor::{Tensor, activation, activation::log_softmax, backend::Backend},
+    tensor::{activation, activation::log_softmax, backend::Backend, Tensor},
 };
 
 
@@ -22,6 +21,7 @@ pub struct TcnBlock<B: Backend> {
     padding: usize,
     dropout: Dropout,
     proj: Option<Conv1d<B>>,
+    is_train: bool,
 }
 
 
@@ -59,8 +59,11 @@ impl<B: Backend> TcnBlock<B> {
             padding,
             dropout,
             proj,
+            is_train: true,
         }
     }
+
+    pub fn set_train(&mut self, on: bool) { self.is_train = on; }
 
     pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         // manually apply causal left padding to time dimension of input
@@ -70,11 +73,11 @@ impl<B: Backend> TcnBlock<B> {
 
         let x = input.clone().pad((self.padding, 0, 0, 0), 0.0); // first left-padding
         let x = activation::relu(self.conv1.forward(x));
-        let x = self.dropout.forward(x);
+        let x = if self.is_train { self.dropout.forward(x) } else { x };
 
         let x = x.pad((self.padding, 0, 0, 0), 0.0); // second left-padding
         let x = activation::relu(self.conv2.forward(x));
-        let x = self.dropout.forward(x);
+        let x = if self.is_train { self.dropout.forward(x) } else { x };
 
         let residual = match &self.proj {
             Some(p) => p.forward(input),
@@ -133,6 +136,10 @@ impl<B: Backend> TemporalConvNet<B> {
         Self { tcn_blocks }
     }
 
+    pub fn set_train(&mut self, on: bool) {
+        for tcn_block in &mut self.tcn_blocks { tcn_block.set_train(on); }
+    }
+
     pub fn forward(&self, mut x: Tensor<B, 3>) -> Tensor<B, 3> {
         for tcn_block in &self.tcn_blocks {
             x = tcn_block.forward(x);
@@ -159,7 +166,7 @@ impl TemporalConvNetConfig {
             channels,
             kernel_size,
             layers: 4,
-            dropout_prob: 0.1,
+            dropout_prob: 0.0,
         }
     }
 

@@ -18,6 +18,20 @@
 
 
 
+// modules
+mod ctc;
+mod model;
+mod train;
+mod utils;
+
+
+
+// custom imports
+use model::LRModel;
+use crate::utils::{mean, std_dev, extract_zip};
+
+
+
 // imports
 use clap; // for terminal arg parsing
 use image::{GrayImage, Luma}; // for image processing
@@ -36,10 +50,9 @@ use std::{
     io::{self, BufRead},
     vec,
 };
-use zip; // for extracting zip files
-// use show_image::{create_window, ImageView, ImageInfo};
-mod model;
-mod train;
+use burn::{
+    nn::loss::Reduction,
+};
 
 
 
@@ -84,7 +97,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ------ Define vocabulary and token map ------
 
-    let vocab = "abcdefghijklmnopqrstuvwxyz'?!0123456789 ";
+    let vocab = "abcdefghijklmnopqrstuvwxyz'?!0123456789 _";
+    let vocab_size = vocab.chars().count();
     let token_map = TokenMap::new(vocab);
 
     println!("Vocabulary: {:?}", token_map.num_to_char);
@@ -131,52 +145,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ----------------- Model training -----------------
     
+    let blank_id = vocab_size - 1;
     // let loader_factory = || dataloader::DataLoader::new("/path/to/data").iter();
-    // let model = train::LRModel::<train::AD>::new(c, out_channels, (h, w), vocab_size, &device);
-    // let (_model, last_loss) = train::train_loop(model, epochs, lr, loader_factory);
+    // let model = LRModel::<train::AD>::new(c, out_channels, (h, w), vocab_size, &device);
+    // let (_model, losses) = train::train_loop(model, epochs, learning_rate, loader_factory, blank_index);
 
     Ok(())
-}
-
-
-
-/* ------------------------------------------------------------ Utility Functions ------------------------------------------------------------ */
-
-
-
-fn mean(data: &Vec<f32>) -> f32 {
-    let count = data.len() as f32;
-    let sum: f32 = data.iter().sum();
-    sum / count
-}
-
-fn std_dev(data: &Vec<f32>) -> f32 {
-    let count = data.len();
-    let mean = mean(data);
-    let variance: f32 = data.iter().map(|x| x - mean).map(|x| x * x).sum::<f32>() / count as f32;
-    variance.sqrt()
-}
-
-fn extract_zip(zip_path: &str, extract_to: &str) {
-    let mut archive =
-        zip::ZipArchive::new(std::fs::File::open(zip_path).expect("Failed to open zip file."))
-            .expect("Failed to read zip file.");
-
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).expect("Failed to read file from zip.");
-        let out_path = std::path::Path::new(extract_to).join(file.sanitized_name());
-
-        if file.name().ends_with('/') {
-            std::fs::create_dir_all(&out_path).expect("Failed to create directory.");
-        } else {
-            if let Some(p) = out_path.parent() {
-                std::fs::create_dir_all(p).expect("Failed to create parent directory.");
-            }
-            let mut outfile = std::fs::File::create(&out_path).expect("Failed to create file.");
-            std::io::copy(&mut file, &mut outfile).expect("Failed to write file.");
-        }
-    }
-    println!("Extracted zip file to {}", extract_to);
 }
 
 

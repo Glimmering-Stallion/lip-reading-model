@@ -13,6 +13,9 @@ LRM Python/models/checkpoint*
 # ignore Rust target builds
 /target/
 
+# ignore papers dir
+/papers/
+
 # ignore OS system junk files
 .DS_Store
 __MACOSX/
