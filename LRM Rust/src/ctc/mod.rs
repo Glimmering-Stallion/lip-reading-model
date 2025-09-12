@@ -4,6 +4,7 @@
 
 pub mod ctc_loss;
 pub mod ctc_decode;
+pub mod lm;
 
 // pub use ctc_loss::CtcLoss;
 // pub use ctc_decode::{greedy_decode /*, BeamCfg, beam_search */};

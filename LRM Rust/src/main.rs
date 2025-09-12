@@ -23,67 +23,28 @@ mod ctc;
 mod model;
 mod train;
 mod utils;
-
-
+mod vocab;
 
 // custom imports
-use model::LRModel;
-use crate::utils::{mean, std_dev, extract_zip};
-
-
+use crate::utils::{extract_zip, mean, std_dev};
+use crate::vocab::{TokenMap, VOCAB, BLANK_ID};
 
 // imports
 use clap; // for terminal arg parsing
 use image::{GrayImage, Luma}; // for image processing
-use ndarray; // Rust's NumPy equivalent (for numerical operations)
+use model::LRModel;
 use opencv::{
     self,
     core::{MatTrait, Size},
     prelude::*,
-    videoio::VideoCaptureTrait,
-}; // for CV tasks
-// use tract_onnx::prelude::*;     // for ONNX model inference
+    videoio::VideoCaptureTrait, // for CV tasks
+};
 use reqwest; // for HTTP requests to download data
 use std::{
-    collections::HashMap, // for bidirectional token-id mapping
     fs::File,
     io::{self, BufRead},
     vec,
 };
-use burn::{
-    nn::loss::Reduction,
-};
-
-
-
-struct TokenMap {
-    char_to_num: HashMap<char, usize>,
-    num_to_char: Vec<char>,
-}
-
-impl TokenMap {
-    fn new(vocab: &str) -> Self {
-        let vocab: Vec<char> = vocab.chars().collect();
-
-        // character to numerical index map and vice versa
-        let mut char_to_num = HashMap::new();
-        for (idx, ch) in vocab.iter().enumerate() {
-            char_to_num.insert(*ch, idx);
-        }
-
-        Self {
-            char_to_num,
-            num_to_char: vocab,
-        }
-    }
-
-    fn char_to_num(&self, ch: char) -> Option<usize> {
-        self.char_to_num.get(&ch).copied()
-    }
-    fn num_to_char(&self, num: usize) -> Option<char> {
-        self.num_to_char.get(num).copied()
-    }
-}
 
 
 
@@ -95,13 +56,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // obtain data (if data isn't already loaded)
     // extract_data("../data");
 
-    // ------ Define vocabulary and token map ------
+    // ------ Obtain vocabulary and token map ------
 
-    let vocab = "abcdefghijklmnopqrstuvwxyz'?!0123456789 _";
-    let vocab_size = vocab.chars().count();
+    let vocab = VOCAB;
+    let blank_id = BLANK_ID;
     let token_map = TokenMap::new(vocab);
 
-    println!("Vocabulary: {:?}", token_map.num_to_char);
+    println!("Vocabulary: {:?}", vocab);
 
     // ----------------- Load data -----------------
 
@@ -144,8 +105,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("Failed to save image");
 
     // ----------------- Model training -----------------
-    
-    let blank_id = vocab_size - 1;
+
     // let loader_factory = || dataloader::DataLoader::new("/path/to/data").iter();
     // let model = LRModel::<train::AD>::new(c, out_channels, (h, w), vocab_size, &device);
     // let (_model, losses) = train::train_loop(model, epochs, learning_rate, loader_factory, blank_index);
@@ -273,7 +233,7 @@ fn load_alignments(
             Ok(tokens
                 .iter()
                 .flat_map(|token| token.chars())
-                .filter_map(|ch| token_map.char_to_num(ch))
+                .filter_map(|ch| token_map.id_of(ch))
                 .collect())
         }
         Err(e) => {
@@ -309,26 +269,3 @@ fn load_data(
         }
     }
 }
-
-
-
-// ----------------------------------------------------------- Model Architecture ------------------------------------------------------------
-
-
-
-// fn load_model(path: &str) -> TractResult<SimplePlan<TypedFact, Box<dyn TypedOp>>> {
-//     tract_onnx::onnx()
-//         .model_for_path(path)?
-//         .with_input_fact(0, InferenceFact::dt_shape(f32::datum_type(), shape![1, 75, 50, 150, 1]))?
-//         .into_optimized()?
-//         .into_runnable()
-// }
-
-// fn ctc_loss<B: Backend>(
-//     log_probs: Tensor<B, 3>,
-//     targets: Tensor<B, 2, Int>,
-//     input_lens: Tensor<B, 1, Int>,
-//     target: Tensor<B, 1, Int>,
-//     blank: usize,
-// ) -> Tensor<B, 1> {
-// }

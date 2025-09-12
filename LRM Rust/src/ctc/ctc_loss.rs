@@ -1,37 +1,65 @@
-// Connectionist Temporal Classification (CTC) implementation
+// Connectionist Temporal Classification (CTC) loss implementation
 
 // CTC is used for sequence-to-sequence tasks where input and output alignments is unknown
-
-// if using beam search as the decoder, expect O(DWB * log(WB)) complexity
-// where D = depth (timesteps), W = beam width (# of kept hypotheses), B = branch factor (vocab size)
 
 
 
 // custom imports
-use crate::utils::{log_sum_exp_2, log_sum_exp_3};
+use crate::utils::{log_sum_exp_2_tensor, log_sum_exp_3_tensor};
+
 // imports
 use burn::{
     config::Config,
     module::Ignored,
-    nn::loss::Reduction,
+    nn::loss::{Reduction, CosineEmbeddingLoss},
     prelude::Int,
     tensor::{activation::log_softmax, backend::Backend, Shape, Tensor},
 };
 
 
 
+#[derive(Debug, Config)]
+pub struct CtcLossConfig {
+    #[config(default = "0")]
+    pub blank_id: usize, // id of blank token in vocab
+
+    #[config(default = "Reduction::Mean")]
+    pub reduction: Reduction, // Burn's reduction method (mean, sum, auto)
+}
+
+
+
+impl CtcLossConfig {
+    pub fn init(&self) -> CtcLoss {
+        CtcLoss {
+            blank_id: self.blank_id,
+            reduction: Ignored(self.reduction.clone()),
+        }
+    }
+}
+
+
+
 #[derive(Debug)]
 pub struct CtcLoss {
-    pub blank_id: usize,      // index of blank token in vocab
-    pub reduction: Ignored<Reduction>, // reduction method (mean, sum, none)
+    pub blank_id: usize,
+    pub reduction: Ignored<Reduction>,
 }
 
 
 
 impl CtcLoss {
+    /// compute CTC loss for batch of samples
+    /// needs separate input/target lengths for true lengths,
+    /// as inputs/targets are assumed to be padded to max lengths in batch
+    /// params:
+    /// - inputs: [N, T_max, Vocab] (logits from model)
+    /// - targets: [N, T_max] (target sequences)
+    /// - input_lengths: [N] (non-padded lengths of inputs)
+    /// - target_lengths: [N] (non-padded lengths of targets)
     pub fn forward<B: Backend>(
         &self,
-        inputs: Tensor<B, 3>, // [N, T, Vocab] (raw, unnormalized predictions)
+        inputs: Tensor<B, 3>, // [N, T_max, Vocab] (logits from model)
         targets: Tensor<B, 2, Int>, // [N, T_max] (target sequences)
         input_lengths: Tensor<B, 1, Int>, // [N]
         target_lengths: Tensor<B, 1, Int>, // [N]
@@ -44,7 +72,15 @@ impl CtcLoss {
         }
     }
 
-    /// like `forward`, but without reduction (returns one loss per batch item)
+    /// like `forward`, but without reduction
+    /// needs separate input/target lengths for true lengths,
+    /// as inputs/targets are assumed to be padded to max lengths in batch
+    /// params:
+    /// - inputs: [N, T_max, Vocab] (logits from model)
+    /// - targets: [N, T_max] (target sequences)
+    /// - input_lengths: [N] (non-padded lengths of inputs)
+    /// - target_lengths: [N] (non-padded lengths of targets)
+    /// returns: [N] (loss per sample in batch)
     pub fn forward_no_reduction<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,
@@ -94,9 +130,9 @@ impl CtcLoss {
     /// compute neg log-likelihood for single sample
     /// loss computed via: logits --> log softmax --> forward DP --> loss
     /// params:
-    /// - log_probs: log-probabilities for each timestep and vocab symbol given by model [T, V]
+    /// - log_probs: log-probabilities for each vocab symbol per-timestep given by model [T, Vocab]
     /// - targets: ground-truth target sequence of symbol int IDs [L]
-    /// - vocab_size: size of vocabulary V
+    /// - vocab_size: size of vocabulary Vocab
     /// - device: specifier for where tensors ops should be computed
     #[inline]
     fn per_sample_loss<B: Backend>(
@@ -108,16 +144,16 @@ impl CtcLoss {
     ) -> Tensor<B, 1> {
         let blank = self.blank_id as i64;
         let timesteps = log_probs.dims()[0];
-        // let sentinel_value = f32::NEG_INFINITY;
-        let sentinel_value = -1e30;
-        let neg_inf = Tensor::<B, 1>::full([1], sentinel_value, device);
+        // let sentinel_value = f32::NEG_INFINITY; // causes NaNs
+        let sentinel_value = -1e30; // numerically stable
+        let large_negs = Tensor::<B, 1>::full([1], sentinel_value, device);
 
-        // original and blank-extended lengths of target sequence
-        let l: usize = targets.dims()[0];
-        let l_ext = 2 * l + 1;
+        // original and blank-interleaved lengths of target sequence
+        let l_orig: usize = targets.dims()[0];
+        let l_intr = 2 * l_orig + 1;
 
         // make [T + 1] blanks and take [T] labels, padded to [T + 1]
-        let blanks = Tensor::<B, 1, Int>::full([l + 1], blank, device);
+        let blanks = Tensor::<B, 1, Int>::full([l_orig + 1], blank, device);
         let labels = Tensor::<B, 1, Int>::cat(
             vec![
                 targets.clone(),
@@ -127,78 +163,78 @@ impl CtcLoss {
         );
 
         // perform: stack --> transpose --> flatten
-        // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-extended targets)
-        let ext_ids = {
+        // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-interleaved targets)
+        let intr_ids = {
             let blank_label_pairs = Tensor::stack::<2>(vec![blanks, labels], 1);
-            blank_label_pairs.reshape([2 * (l + 1)]).slice([0..l_ext])
+            blank_label_pairs.reshape([2 * (l_orig + 1)]).slice([0..l_intr])
         };
 
         // can-skip-by-1 & can-skip-by-2 validity masks
-        // goal: (pos is odd) && (pos > 1) && (ext_ids[pos] != ext_ids[pos − 2]) && (ext_ids[pos] != blank)
-        let ext_pos = Tensor::<B, 1, Int>::arange(0..(l_ext as i64), device); // blank-extended symbol positions
-        let odd_mask = ext_pos.clone().remainder_scalar(2).not_equal_elem(0);
-        let gt_1_mask = ext_pos.clone().greater_elem(1);
-        let prev_2_ids = ext_ids.clone().roll_dim(-2, 0); // shift right by 2 on dim 0
-        let neq_prev_2_ids_mask = ext_ids.clone().not_equal(prev_2_ids.clone());
-        let not_blank_mask = ext_ids.clone().not_equal_elem(blank);
-        let can_skip_1_mask = ext_pos.clone().greater_elem(0);
-        let can_skip_2_mask = odd_mask.clone()
+        // goal: (pos is odd) && (pos > 1) && (intr_ids[pos] != intr_ids[pos − 2]) && (intr_ids[pos] != blank)
+        let intr_pos = Tensor::<B, 1, Int>::arange(0..(l_intr as i64), device); // blank-interleaved symbol positions
+        let odd_mask = intr_pos.clone().remainder_scalar(2).not_equal_elem(0);
+        let gt_1_mask = intr_pos.clone().greater_elem(1);
+        let prev_2_ids = intr_ids.clone().roll_dim(-2, 0); // shift right by 2 on dim 0
+        let neq_prev_2_ids_mask = intr_ids.clone().not_equal(prev_2_ids.clone());
+        let not_blank_mask = intr_ids.clone().not_equal_elem(blank);
+        let can_skip_1_mask = intr_pos.clone().greater_elem(0);
+        let can_skip_2_mask = odd_mask
+            .clone()
             .bool_and(gt_1_mask.clone())
             .bool_and(neq_prev_2_ids_mask.clone())
             .bool_and(not_blank_mask.clone());
 
         // curr/next transfer buffers of forward log-probs
-        let mut curr_fwd = Tensor::<B, 1>::full(Shape::new([l_ext]), sentinel_value, device);
-        let mut next_fwd = Tensor::<B, 1>::full(Shape::new([l_ext]), sentinel_value, device);
+        let mut curr_fwd = Tensor::<B, 1>::full(Shape::new([l_intr]), sentinel_value, device);
+        let mut next_fwd = Tensor::<B, 1>::full(Shape::new([l_intr]), sentinel_value, device);
 
         // t = 0 (base case)
         // valid start positions: begin at first blank or symbol after it
         let log_probs_0_v = log_probs.clone().slice([0..1, 0..vocab_size]);
-        if l_ext >= 1 {
-            let id_0_0 = ext_ids.clone().slice([0..1]).unsqueeze_dim(0);
+        if l_intr >= 1 {
+            let id_0_0 = intr_ids.clone().slice([0..1]).unsqueeze_dim(0);
             let log_prob_0_0 = log_probs_0_v.clone().gather(1, id_0_0).reshape([1]);
             curr_fwd = curr_fwd.slice_assign([0..1], log_prob_0_0);
         }
-        if l_ext >= 2 {
-            let id_0_1 = ext_ids.clone().slice([1..2]).unsqueeze_dim(0);
+        if l_intr >= 2 {
+            let id_0_1 = intr_ids.clone().slice([1..2]).unsqueeze_dim(0);
             let log_prob_0_1 = log_probs_0_v.clone().gather(1, id_0_1).reshape([1]);
             curr_fwd = curr_fwd.slice_assign([1..2], log_prob_0_1);
         }
 
-        // t >= 1 (recurrence case)
+        // t ≥ 1 (recurrence case)
         for t in 1..timesteps {
-
             // reset buffer
             next_fwd = Tensor::<B, 1>::full_like(&next_fwd, sentinel_value);
 
             // grab chunk of log-probs of each symbol at current timestep
-            let log_prob_row = log_probs.clone().slice([t..(t + 1), 0..vocab_size]);
+            let log_probs_t = log_probs.clone().slice([t..(t + 1), 0..vocab_size]);
 
             // probs at previous positions
             let prev_1_probs = curr_fwd.clone().roll_dim(-1, 0); // shift by 1
             let prev_2_probs = curr_fwd.clone().roll_dim(-2, 0); // shift by 2
 
-            for pos in 0..l_ext {
+            for pos in 0..l_intr {
                 // possible actions at current timestep (based on what could have happened at previous frame)
-                // - stay: log-prob of staying at same symbol in extended target sequence    (from same position)
-                // - adv_1: log-prob of advancing by one symbol                              (from one position earlier)
-                // - adv_2: log-prob of skipping blank to advance by two symbols             (from two positions earlier)
+                // - stay:  log-prob of staying at same symbol in interleaved target sequence   (from same position)
+                // - adv_1: log-prob of advancing by one symbol                                 (from one position earlier)
+                // - adv_2: log-prob of skipping blank to advance by two symbols                (from two positions earlier)
                 let stay = curr_fwd.clone().slice([pos..(pos + 1)]);
-                let adv_1 = neg_inf.clone().mask_where(
+                let adv_1 = large_negs.clone().mask_where(
                     can_skip_1_mask.clone().slice([pos..(pos + 1)]),
                     prev_1_probs.clone().slice([pos..(pos + 1)]),
                 );
-                let adv_2 = neg_inf.clone().mask_where(
+                let adv_2 = large_negs.clone().mask_where(
                     can_skip_2_mask.clone().slice([pos..(pos + 1)]),
                     prev_2_probs.clone().slice([pos..(pos + 1)]),
                 );
 
                 // compute accumulated log-prob for current path (in time-vocab grid) from all possible actions
-                let path_log_prob = log_sum_exp_3(stay, adv_1, adv_2);
+                let path_log_prob = log_sum_exp_3_tensor(stay, adv_1, adv_2);
 
-                // grab symbol log-prob at current position in extended target sequence given by model
-                let sym_id = ext_ids.clone().slice([pos..(pos + 1)]).unsqueeze_dim(0);
-                let sym_log_prob = log_prob_row.clone().gather(1, sym_id).reshape([1]);
+                // grab symbol log-prob at current position in interleaved target sequence given by model
+                let sym_id = intr_ids.clone().slice([pos..(pos + 1)]).unsqueeze_dim(0);
+                let sym_log_prob = log_probs_t.clone().gather(1, sym_id).reshape([1]);
 
                 // prep updated collection of forward log-probs
                 // combine log-prob of current path with log-prob of current symbol (from model output)
@@ -209,37 +245,15 @@ impl CtcLoss {
         }
 
         // end at last blank or symbol before it
-        let end_1 = curr_fwd.clone().slice([(l_ext - 1)..l_ext]);
-        let end_2 = if l_ext >= 2 {
-            curr_fwd.clone().slice([(l_ext - 2)..(l_ext - 1)])
+        let end_1 = curr_fwd.clone().slice([(l_intr - 1)..l_intr]);
+        let end_2 = if l_intr >= 2 {
+            curr_fwd.clone().slice([(l_intr - 2)..(l_intr - 1)])
         } else {
-            neg_inf.clone()
+            large_negs.clone()
         };
-        let total_log_prob = log_sum_exp_2(end_1.clone(), end_2.clone());
+        let total_log_prob = log_sum_exp_2_tensor(end_1.clone(), end_2.clone());
 
         -total_log_prob // loss
-    }
-}
-
-
-
-#[derive(Debug, Config)]
-pub struct CtcLossConfig {
-    #[config(default = "0")]
-    pub blank_id: usize, // id of blank token in vocab
-
-    #[config(default = "Reduction::Mean")]
-    pub reduction: Reduction, // Burn's reduction method (mean, sum, auto)
-}
-
-
-
-impl CtcLossConfig {
-    pub fn init(&self) -> CtcLoss {
-        CtcLoss {
-            blank_id: self.blank_id,
-            reduction: Ignored(self.reduction.clone()),
-        }
     }
 }
 
@@ -251,10 +265,11 @@ mod tests {
     use super::*;
     use burn::{
         backend::ndarray::NdArray,
-        prelude::Int,
         nn::loss::Reduction,
-        tensor::Tensor,
+        prelude::Int,
+        tensor::Tensor
     };
+
     type B = NdArray<f32>;
 
     fn tensorize_lengths(
@@ -303,13 +318,8 @@ mod tests {
             [0..1, 1..2, 1..2],
             Tensor::<B, 3>::from_floats([[[5.0]]], &device),
         );
-        
-        let loss = loss.forward(
-            logits,
-            targets,
-            in_len,
-            tgt_len
-        ).into_scalar();
+
+        let loss = loss.forward(logits, targets, in_len, tgt_len).into_scalar();
 
         // with such peaked logits, loss should be near zero
         println!("\nLoss = {:?} | Threshold = {:?}\n", loss, threshold);
@@ -333,38 +343,58 @@ mod tests {
         // target = "AA" (repeat), which should forbid the 2-pos jump when same consecutive symbol
         let targets = Tensor::<B, 2, Int>::from_ints([[1i64, 1i64]], &device);
 
-        // case 1 (hostile alignment, t = 3): can't skip, 
+        // case 1 (hostile alignment, t = 3): can't skip,
         let (in_len_1, tgt_len_1) = tensorize_lengths(1, t_1, 2, &device);
         let mut logits_1 = Tensor::<B, 3>::zeros([1, t_1, vocab], &device);
-        logits_1 = logits_1.slice_assign([0..1, 0..1, 0..1], Tensor::<B, 3>::from_floats([[[4.0]]], &device)); // high blank at t = 0
-        logits_1 = logits_1.slice_assign([0..1, 1..2, 1..2], Tensor::<B, 3>::from_floats([[[4.0]]], &device)); // high 'A' at t = 1
-        logits_1 = logits_1.slice_assign([0..1, 2..3, 1..2], Tensor::<B, 3>::from_floats([[[4.0]]], &device)); // high 'A' at t = 2
-        let loss_hostile = loss.forward(
-            logits_1,
-            targets.clone(),
-            in_len_1,
-            tgt_len_1
-        ).into_scalar();
+        logits_1 = logits_1.slice_assign(
+            [0..1, 0..1, 0..1],
+            Tensor::<B, 3>::from_floats([[[4.0]]], &device),
+        ); // high blank at t = 0
+        logits_1 = logits_1.slice_assign(
+            [0..1, 1..2, 1..2],
+            Tensor::<B, 3>::from_floats([[[4.0]]], &device),
+        ); // high 'A' at t = 1
+        logits_1 = logits_1.slice_assign(
+            [0..1, 2..3, 1..2],
+            Tensor::<B, 3>::from_floats([[[4.0]]], &device),
+        ); // high 'A' at t = 2
+        let loss_hostile = loss
+            .forward(logits_1, targets.clone(), in_len_1, tgt_len_1)
+            .into_scalar();
 
         // case 2 (friendly alignment, t = 4): can't skip, doesn't skip, and uses intermediate blank
         let (in_len_2, tgt_len_2) = tensorize_lengths(1, t_2, 2, &device);
         let mut logits_2 = Tensor::<B, 3>::zeros([1, t_2, vocab], &device);
-        logits_2 = logits_2.slice_assign([0..1, 0..1, 0..1], Tensor::<B, 3>::from_floats([[[4.0]]], &device)); // high blank at t = 0
-        logits_2 = logits_2.slice_assign([0..1, 1..2, 1..2], Tensor::<B, 3>::from_floats([[[4.0]]], &device)); // high 'A' at t = 1
-        logits_2 = logits_2.slice_assign([0..1, 2..3, 0..1], Tensor::<B, 3>::from_floats([[[4.0]]], &device)); // high blank at t = 2
-        logits_2 = logits_2.slice_assign([0..1, 3..4, 1..2], Tensor::<B, 3>::from_floats([[[4.0]]], &device)); // high 'A' at t = 3
-        let loss_friendly = loss.forward(
-            logits_2,
-            targets.clone(),
-            in_len_2,
-            tgt_len_2
-        )
-        .into_scalar();
+        logits_2 = logits_2.slice_assign(
+            [0..1, 0..1, 0..1],
+            Tensor::<B, 3>::from_floats([[[4.0]]], &device),
+        ); // high blank at t = 0
+        logits_2 = logits_2.slice_assign(
+            [0..1, 1..2, 1..2],
+            Tensor::<B, 3>::from_floats([[[4.0]]], &device),
+        ); // high 'A' at t = 1
+        logits_2 = logits_2.slice_assign(
+            [0..1, 2..3, 0..1],
+            Tensor::<B, 3>::from_floats([[[4.0]]], &device),
+        ); // high blank at t = 2
+        logits_2 = logits_2.slice_assign(
+            [0..1, 3..4, 1..2],
+            Tensor::<B, 3>::from_floats([[[4.0]]], &device),
+        ); // high 'A' at t = 3
+        let loss_friendly = loss
+            .forward(logits_2, targets.clone(), in_len_2, tgt_len_2)
+            .into_scalar();
 
         // should be: case 1 loss > case 2 loss
-        println!("\nLoss 1 = {:?} | Loss 2 = {:?}\n", loss_hostile, loss_friendly);
+        println!(
+            "\nLoss 1 = {:?} | Loss 2 = {:?}\n",
+            loss_hostile, loss_friendly
+        );
         assert!(loss_hostile.is_finite() && loss_friendly.is_finite());
-        assert!(loss_hostile > loss_friendly, "hostile loss case (t = 3) should be higher than friendly loss case (t = 4)");
+        assert!(
+            loss_hostile > loss_friendly,
+            "hostile loss case (t = 3) should be higher than friendly loss case (t = 4)"
+        );
     }
 
     #[test]
@@ -400,13 +430,7 @@ mod tests {
             Tensor::<B, 3>::from_floats([[[5.0]]], &device),
         );
 
-        let loss = loss.forward(
-            logits,
-            targets,
-            in_len,
-            tgt_len
-        )
-        .into_scalar();
+        let loss = loss.forward(logits, targets, in_len, tgt_len).into_scalar();
 
         println!("\nLoss = {:?} | Threshold = {:?}\n", loss, threshold);
         assert!(loss < threshold, "loss too large");
@@ -458,7 +482,10 @@ mod tests {
         let loss_0 = losses.clone().slice([0..1]).into_scalar();
         let loss_1 = losses.clone().slice([1..2]).into_scalar();
 
-        println!("\nLoss 0 = {:?} | Loss 1 = {:?} | Threshold = {:?}\n", loss_0, loss_1, threshold);
+        println!(
+            "\nLoss 0 = {:?} | Loss 1 = {:?} | Threshold = {:?}\n",
+            loss_0, loss_1, threshold
+        );
         assert!(
             loss_0 < threshold && loss_1 < threshold,
             "padding not respected"
@@ -506,27 +533,16 @@ mod tests {
             Tensor::<B, 3>::from_floats([[[3.0]]], &device),
         );
 
-        let loss_a = loss.forward(
-            logits_a,
-            targets.clone(),
-            in_len.clone(),
-            tgt_len.clone()
-        )
-        .into_scalar();
+        let loss_a = loss
+            .forward(logits_a, targets.clone(), in_len.clone(), tgt_len.clone())
+            .into_scalar();
 
-        let loss_b = loss.forward(
-            logits_b,
-            targets,
-            in_len,
-            tgt_len
-        )
-        .into_scalar();
+        let loss_b = loss
+            .forward(logits_b, targets, in_len, tgt_len)
+            .into_scalar();
 
         println!("\nLoss a = {:?} | Loss b = {:?}\n", loss_a, loss_b);
-        assert!(
-            loss_b < loss_a,
-            "increasing confidence should lower loss"
-        );
+        assert!(loss_b < loss_a, "increasing confidence should lower loss");
     }
 
     #[test]
@@ -535,7 +551,7 @@ mod tests {
         let blank_id = 0usize;
         let vocab = 3usize; // {blank = 0, 'A' = 1, 'B' = 2}
         let t = 4usize;
-                let threshold = 1e-6;
+        let threshold = 1e-6;
         let reduction = Reduction::Mean;
 
         let loss = CtcLossConfig::new()
@@ -564,25 +580,29 @@ mod tests {
             Tensor::<B, 3>::from_floats([[[4.0]]], &device),
         );
 
-        let avg_internal_loss = loss.forward(
-            logits.clone(),
-            targets.clone(),
-            in_len.clone(),
-            tgt_len.clone()
-        )
-        .into_scalar();
+        let avg_internal_loss = loss
+            .forward(
+                logits.clone(),
+                targets.clone(),
+                in_len.clone(),
+                tgt_len.clone(),
+            )
+            .into_scalar();
 
         let losses = loss.forward_no_reduction(
             logits.clone(),
             targets.clone(),
             in_len.clone(),
-            tgt_len.clone()
+            tgt_len.clone(),
         );
         let loss_0 = losses.clone().slice([0..1]).into_scalar();
         let loss_1 = losses.clone().slice([1..2]).into_scalar();
         let avg_external_loss = (loss_0 + loss_1) / 2.0;
 
-        println!("\nInternal avg loss = {:?} | External avg loss = {:?}\n", avg_internal_loss, avg_external_loss);
+        println!(
+            "\nInternal avg loss = {:?} | External avg loss = {:?}\n",
+            avg_internal_loss, avg_external_loss
+        );
         assert!(
             (avg_internal_loss - avg_external_loss) < threshold,
             "internally computed avg loss should be identical to externally computed avg loss",
@@ -595,7 +615,7 @@ mod tests {
         let blank_id = 0usize;
         let vocab = 3usize; // {blank = 0, 'A' = 1, 'B' = 2}
         let t = 4usize;
-                let threshold = 1e-6;
+        let threshold = 1e-6;
         let reduction = Reduction::Sum;
 
         let loss = CtcLossConfig::new()
@@ -624,25 +644,29 @@ mod tests {
             Tensor::<B, 3>::from_floats([[[4.0]]], &device),
         );
 
-        let sum_internal_loss = loss.forward(
-            logits.clone(),
-            targets.clone(),
-            in_len.clone(),
-            tgt_len.clone()
-        )
-        .into_scalar();
+        let sum_internal_loss = loss
+            .forward(
+                logits.clone(),
+                targets.clone(),
+                in_len.clone(),
+                tgt_len.clone(),
+            )
+            .into_scalar();
 
         let losses = loss.forward_no_reduction(
             logits.clone(),
             targets.clone(),
             in_len.clone(),
-            tgt_len.clone()
+            tgt_len.clone(),
         );
         let loss_0 = losses.clone().slice([0..1]).into_scalar();
         let loss_1 = losses.clone().slice([1..2]).into_scalar();
         let sum_external_loss = loss_0 + loss_1;
 
-        println!("\nInternal sum loss = {:?} | External sum loss = {:?}\n", sum_internal_loss, sum_external_loss);
+        println!(
+            "\nInternal sum loss = {:?} | External sum loss = {:?}\n",
+            sum_internal_loss, sum_external_loss
+        );
         assert!(
             (sum_internal_loss - sum_external_loss) < threshold,
             "internally computed sum loss should be identical to externally computed sum loss",

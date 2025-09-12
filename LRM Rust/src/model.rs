@@ -7,22 +7,20 @@ mod tcn;
 use burn::{
     module::{Module, Param, ParamId},
     nn::{
-        {GroupNorm, GroupNormConfig},
-        Initializer,
         conv::{Conv3d, Conv3dConfig},
-        Linear, LinearConfig, PaddingConfig3d,
+        GroupNorm, GroupNormConfig, Initializer, Linear, LinearConfig, PaddingConfig3d,
     },
-    tensor::{activation, backend::Backend, Shape, Tensor},
     optim::GradientsParams,
+    tensor::{activation, backend::Backend, Shape, Tensor},
 };
-use opencv::photo::fast_nl_means_denoising_vec_def;
-use tcn::{TemporalConvNet, TemporalConvNetConfig};
 use burn_autodiff::Autodiff;
+use opencv::photo::fast_nl_means_denoising_vec_def;
 
 
 
 #[cfg(test)]
 use std::sync::Once;
+use tcn::{TemporalConvNet, TemporalConvNetConfig};
 
 #[cfg(test)]
 static PRINT_ONCE: Once = Once::new();
@@ -46,20 +44,40 @@ pub struct LRModel<B: Backend> {
 
 // helper for model layer tensor stat debugging
 #[cfg(test)]
-fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(name: &str, t: &burn::tensor::Tensor<B, D>) {
+fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(
+    name: &str,
+    t: &burn::tensor::Tensor<B, D>,
+) {
     let data = t.clone().to_data().convert::<f32>();
     let s = data.as_slice::<f32>().unwrap();
-    let (mut min, mut max, mut sum, mut nans, mut infs) = (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
+    let (mut min, mut max, mut sum, mut nans, mut infs) =
+        (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
     for &v in s {
-        if v.is_nan() { nans += 1; }
-        if v.is_infinite() { infs += 1; }
-        if v.is_finite() { if v < min { min = v } if v > max { max = v } sum += v; }
+        if v.is_nan() {
+            nans += 1;
+        }
+        if v.is_infinite() {
+            infs += 1;
+        }
+        if v.is_finite() {
+            if v < min {
+                min = v
+            }
+            if v > max {
+                max = v
+            }
+            sum += v;
+        }
     }
     let mean = sum / (s.len().max(1) as f32);
     println!("{name} | mean = {mean:.6} min = {min:.6} max = {max:.6} NaNs = {nans} Infs = {infs} len = {}", s.len());
 }
 #[cfg(not(test))]
-fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(_name: &str, _t: &burn::tensor::Tensor<B, D>) {}
+fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(
+    _name: &str,
+    _t: &burn::tensor::Tensor<B, D>,
+) {
+}
 
 
 
@@ -71,16 +89,27 @@ fn print_grad_stats<B: Backend>(label: &str, t: &Tensor<B, 1>) {
     let (mut min, mut max, mut sum, mut n_nan, mut n_inf) =
         (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
     for &x in s {
-        if x.is_nan() { n_nan += 1; }
-        if x.is_infinite() { n_inf += 1; }
+        if x.is_nan() {
+            n_nan += 1;
+        }
+        if x.is_infinite() {
+            n_inf += 1;
+        }
         if x.is_finite() {
-            if x < min { min = x; }
-            if x > max { max = x; }
+            if x < min {
+                min = x;
+            }
+            if x > max {
+                max = x;
+            }
             sum += x;
         }
     }
     let mean = sum / (s.len().max(1) as f32);
-    println!("{label} | mean={mean:.6} min={min:.6} max={max:.6} NaNs={n_nan} Infs={n_inf} len={}", s.len());
+    println!(
+        "{label} | mean={mean:.6} min={min:.6} max={max:.6} NaNs={n_nan} Infs={n_inf} len={}",
+        s.len()
+    );
 }
 
 
@@ -97,14 +126,17 @@ impl<B: Backend> LRModel<B> {
     ) -> Self {
         let (height, width) = frame_dims;
 
-        let conv1_out = out_channels;        // 8
-        let conv2_out = out_channels * 2;    // 16
+        let conv1_out = out_channels; // 8
+        let conv2_out = out_channels * 2; // 16
         let conv3_out = 75;
 
         let conv1 = Conv3dConfig::new([in_channels, conv1_out], [3, 3, 3])
             .with_stride([1, 2, 2])
             .with_padding(PaddingConfig3d::Explicit(1, 1, 1))
-            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
+            .with_initializer(Initializer::KaimingUniform {
+                gain: 1.0,
+                fan_out_only: false,
+            })
             .init(device);
         let gn1 = GroupNormConfig::new(norm_groups, conv1_out)
             .with_epsilon(1e-5)
@@ -114,7 +146,10 @@ impl<B: Backend> LRModel<B> {
         let conv2 = Conv3dConfig::new([conv1_out, conv2_out], [3, 3, 3])
             .with_stride([1, 2, 2])
             .with_padding(PaddingConfig3d::Explicit(1, 1, 1))
-            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
+            .with_initializer(Initializer::KaimingUniform {
+                gain: 1.0,
+                fan_out_only: false,
+            })
             .init(device);
         let gn2 = GroupNormConfig::new(norm_groups, conv2_out)
             .with_epsilon(1e-5)
@@ -124,7 +159,10 @@ impl<B: Backend> LRModel<B> {
         let conv3 = Conv3dConfig::new([conv2_out, conv3_out], [3, 3, 3])
             .with_stride([1, 2, 2])
             .with_padding(PaddingConfig3d::Explicit(1, 1, 1))
-            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
+            .with_initializer(Initializer::KaimingUniform {
+                gain: 1.0,
+                fan_out_only: false,
+            })
             .init(device);
         let gn3 = GroupNormConfig::new(norm_groups, conv3_out)
             .with_epsilon(1e-5)
@@ -142,14 +180,20 @@ impl<B: Backend> LRModel<B> {
             .init(device);
 
         let fc = LinearConfig::new(75, vocab_size)
-            .with_initializer(Initializer::KaimingUniform { gain: 1.0, fan_out_only: false })
-            .with_bias(true) 
+            .with_initializer(Initializer::KaimingUniform {
+                gain: 1.0,
+                fan_out_only: false,
+            })
+            .with_bias(true)
             .init(device);
 
         Self {
-            conv1, gn1,
-            conv2, gn2,
-            conv3, gn3,
+            conv1,
+            gn1,
+            conv2,
+            gn2,
+            conv3,
+            gn3,
             tcn1,
             tcn2,
             fc,
@@ -196,8 +240,12 @@ impl<B: Backend> LRModel<B> {
 
 pub trait TrainEval {
     fn set_train(&mut self, on: bool);
-    fn train(&mut self) { self.set_train(true); }
-    fn eval(&mut self) { self.set_train(false); }
+    fn train(&mut self) {
+        self.set_train(true);
+    }
+    fn eval(&mut self) {
+        self.set_train(false);
+    }
 }
 
 
@@ -216,7 +264,7 @@ pub struct ParamIds {
     pub conv1_w: ParamId,
     pub conv2_w: ParamId,
     pub conv3_w: ParamId,
-    pub fc_w:    ParamId,
+    pub fc_w: ParamId,
 }
 
 
@@ -228,7 +276,7 @@ impl<B0: Backend> LRModel<Autodiff<B0>> {
             conv1_w: self.conv1.weight.id,
             conv2_w: self.conv2.weight.id,
             conv3_w: self.conv3.weight.id,
-            fc_w:    self.fc.weight.id,
+            fc_w: self.fc.weight.id,
         }
     }
 
@@ -241,20 +289,44 @@ impl<B0: Backend> LRModel<Autodiff<B0>> {
         ) {
             let data = t.clone().to_data().convert::<f32>();
             let s = data.as_slice::<f32>().unwrap();
-            let (mut min, mut max, mut sum, mut nans, mut infs) = (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
+            let (mut min, mut max, mut sum, mut nans, mut infs) =
+                (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
             for &v in s {
-                if v.is_nan() { nans += 1; }
-                if v.is_infinite() { infs += 1; }
-                if v.is_finite() { if v < min { min = v } if v > max { max = v } sum += v; }
+                if v.is_nan() {
+                    nans += 1;
+                }
+                if v.is_infinite() {
+                    infs += 1;
+                }
+                if v.is_finite() {
+                    if v < min {
+                        min = v
+                    }
+                    if v > max {
+                        max = v
+                    }
+                    sum += v;
+                }
             }
             let mean = sum / (s.len().max(1) as f32);
-            println!("{name} | mean={mean:.6} min={min:.6} max={max:.6} NaNs={nans} Infs={infs} len={}", s.len());
+            println!(
+                "{name} | mean={mean:.6} min={min:.6} max={max:.6} NaNs={nans} Infs={infs} len={}",
+                s.len()
+            );
         }
 
-        if let Some(g) = grads.get::<B0, 5>(ids.conv1_w) { print_grad_stats("grad conv1.weight", &g); }
-        if let Some(g) = grads.get::<B0, 5>(ids.conv2_w) { print_grad_stats("grad conv2.weight", &g); }
-        if let Some(g) = grads.get::<B0, 5>(ids.conv3_w) { print_grad_stats("grad conv3.weight", &g); }
-        if let Some(g) = grads.get::<B0, 2>(ids.fc_w)    { print_grad_stats("grad fc.weight",    &g); }
+        if let Some(g) = grads.get::<B0, 5>(ids.conv1_w) {
+            print_grad_stats("grad conv1.weight", &g);
+        }
+        if let Some(g) = grads.get::<B0, 5>(ids.conv2_w) {
+            print_grad_stats("grad conv2.weight", &g);
+        }
+        if let Some(g) = grads.get::<B0, 5>(ids.conv3_w) {
+            print_grad_stats("grad conv3.weight", &g);
+        }
+        if let Some(g) = grads.get::<B0, 2>(ids.fc_w) {
+            print_grad_stats("grad fc.weight", &g);
+        }
     }
 
     #[cfg(test)]
@@ -309,14 +381,7 @@ mod tests {
         let norm_groups = 5;
 
         let device = Default::default();
-        let model = LRModel::<B>::new(
-            c,
-            out_channels,
-            (h, w),
-            norm_groups,
-            vocab_size,
-            &device
-        );
+        let model = LRModel::<B>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
 
         let input = Tensor::<B, 5>::zeros([n, c, t, h, w], &device);
         let output = model.forward(input);

@@ -1,26 +1,23 @@
-// model training loop
+// Model training loop
 
 
 
 // custom imports
 use crate::ctc::ctc_loss::CtcLossConfig;
 // use crate::ctc::ctc_decode::{greedy_decode /*, beam_search*/};
-use crate::model::LRModel;
-
-
 
 // imports
-use burn_autodiff::Autodiff;
+use crate::model::LRModel;
 use burn::{
     backend::ndarray::NdArray,
-    nn::loss::Reduction,
-    prelude::Int,
-    optim::{AdamConfig, GradientsParams, Optimizer},
     grad_clipping::GradientClippingConfig,
-    tensor::{backend::Backend, Tensor},
     lr_scheduler::LrScheduler,
+    nn::loss::Reduction,
+    optim::{AdamConfig, GradientsParams, Optimizer},
+    prelude::Int,
+    tensor::{backend::Backend, Tensor},
 };
-
+use burn_autodiff::Autodiff;
 
 
 
@@ -31,7 +28,7 @@ pub type AD = Autodiff<B0>; // autodiff backend
 
 #[derive(Clone)]
 pub struct Batch<B: Backend> {
-    inputs: Tensor<B, 5>,  // [N, C, T, H, W]
+    inputs: Tensor<B, 5>,       // [N, C, T, H, W]
     targets: Tensor<B, 2, Int>, // [N, L] (L padded to max target length in batch)
 
     input_lengths: Tensor<B, 1, Int>,  // [N]
@@ -61,7 +58,8 @@ pub fn train_epoch<S: LrScheduler>(
         targets,
         input_lengths,
         target_lengths,
-    } in loader {
+    } in loader
+    {
         // forward pass
         let logits = model.forward(inputs); // [N, T, Vocab] (these are the raw, unnormalized predictions)
 
@@ -136,18 +134,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{model::TrainEval, utils::mean};
     use burn::{
         backend::ndarray::NdArray,
         lr_scheduler::noam::NoamLrSchedulerConfig,
         prelude::Int,
-        tensor::{
-            backend::Backend,
-            Distribution,
-            Tensor
-        }
+        tensor::{backend::Backend, Distribution, Tensor},
     };
     use burn_autodiff::Autodiff;
-    use crate::{model::TrainEval, utils::mean};
 
     // backends
     type B = NdArray<f32>;
@@ -189,28 +183,18 @@ mod tests {
 
         // dummy model
         let device = Default::default();
-        let mut model = LRModel::<AD>::new(
-            c,
-            out_channels,
-            (h, w),
-            norm_groups,
-            vocab_size,
-            &device
-        );
+        let mut model =
+            LRModel::<AD>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
         model.eval(); // disable TCN dropout for more determinism in this unit test
 
         // debugging: inspect model's layers' shapes
         println!("\nModel layer shapes:");
-        model.inspect_shapes_once(Tensor::<AD, 5>::random(
-            [n, c, t, h, w],
-            in_dist,
-            &device,
-        ));
+        model.inspect_shapes_once(Tensor::<AD, 5>::random([n, c, t, h, w], in_dist, &device));
 
         // fixed-value random inputs
         let (inputs, targets, in_len, tgt_len) = (
             Tensor::<AD, 5>::random([n, c, t, h, w], in_dist, &device), // random pixel values per frame
-            Tensor::<AD,2, Int>::random([n, l], tgt_dist, &device), // random symbol ID
+            Tensor::<AD, 2, Int>::random([n, l], tgt_dist, &device),    // random symbol ID
             Tensor::<AD, 1, Int>::from_ints([t as i64], &device),
             Tensor::<AD, 1, Int>::from_ints([l as i64], &device),
         );
@@ -223,7 +207,7 @@ mod tests {
                         inputs: inputs.clone(),
                         targets: targets.clone(),
                         input_lengths: in_len.clone(),
-                        target_lengths:tgt_len.clone(),
+                        target_lengths: tgt_len.clone(),
                     });
 
                     // // debugging: print input/target tensor values (floats/ints)

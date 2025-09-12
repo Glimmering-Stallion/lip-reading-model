@@ -40,7 +40,22 @@ pub fn std_dev<T: Float>(data: &[T]) -> T {
 }
 
 #[inline]
-pub fn log_sum_exp_2<B: Backend, const D: usize>(a: Tensor<B, D>, b: Tensor<B, D>) -> Tensor<B, D> {
+pub fn log_sum_exp_2_scalar(a: f32, b: f32) -> f32 {
+    let max = a.max(b);
+    let sum = (a - max).exp() + (b - max).exp();
+    let lse = max + sum.ln();
+
+    // handle pairwise (-inf, -inf) cases (to avoid NaNs from -inf - -inf)
+    if lse.is_nan() { f32::NEG_INFINITY } else { lse }
+}
+
+#[inline]
+pub fn log_sum_exp_3_scalar(a: f32, b: f32, c: f32) -> f32 {
+    log_sum_exp_2_scalar(log_sum_exp_2_scalar(a, b), c)
+}
+
+#[inline]
+pub fn log_sum_exp_2_tensor<B: Backend, const D: usize>(a: Tensor<B, D>, b: Tensor<B, D>) -> Tensor<B, D> {
     let max = a.clone().max_pair(b.clone()); // element-wise maxxing
     let sum = (a - max.clone()).exp().add((b - max.clone()).exp());
     let lse = max.clone().add(sum.log());
@@ -51,12 +66,12 @@ pub fn log_sum_exp_2<B: Backend, const D: usize>(a: Tensor<B, D>, b: Tensor<B, D
 }
 
 #[inline]
-pub fn log_sum_exp_3<B: Backend, const D: usize>(
+pub fn log_sum_exp_3_tensor<B: Backend, const D: usize>(
     a: Tensor<B, D>,
     b: Tensor<B, D>,
     c: Tensor<B, D>,
 ) -> Tensor<B, D> {
-    log_sum_exp_2(log_sum_exp_2(a, b), c)
+    log_sum_exp_2_tensor(log_sum_exp_2_tensor(a, b), c)
 }
 
 pub fn extract_zip(zip_path: &str, extract_to: &str) {

@@ -199,8 +199,8 @@ mod tests {
         let c_out = 32;
 
         let block = TcnBlock::<B>::new(
-            c_in, c_out, 3,   // kernel
-            2,   // dilation
+            c_in, c_out, 3, // kernel
+            2, // dilation
             0.1, // dropout
             &device,
         );
@@ -213,8 +213,6 @@ mod tests {
 
     #[test]
     fn tcn_is_causal() {
-        // type B = NdArray<f32>;
-
         let device: NdArrayDevice = Default::default();
         let (n, c, t) = (2, 4, 32); // 2 batches to compare two cases
         let t0 = 10; // current timestep
