@@ -11,7 +11,7 @@ lipread/
 LRM Python/models/checkpoint*
 
 # ignore Rust target builds
-/target/
+**/target/
 
 # ignore papers dir
 /papers/
@@ -24,6 +24,9 @@ __MACOSX/
 data.zip
 data/
 test_frame.png
+
+# ignore models (in both Python and Rust dirs)
+models/*
 
 # ignore VSCode settings
 .vscode/

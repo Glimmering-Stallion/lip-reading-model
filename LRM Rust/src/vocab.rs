@@ -10,7 +10,8 @@ use std::{
 
 
 pub const VOCAB: &str = "abcdefghijklmnopqrstuvwxyz'?!0123456789 _";
-pub const BLANK_ID: usize = VOCAB.len() - 1;
+pub const VOCAB_SIZE: usize = VOCAB.len();
+pub const BLANK_ID: usize = VOCAB_SIZE - 1;
 
 
 

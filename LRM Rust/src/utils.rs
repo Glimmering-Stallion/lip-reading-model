@@ -1,4 +1,4 @@
-// Utility Functions
+// Utility functions
 
 
 
@@ -24,6 +24,8 @@ use zip; // for extracting zip files
 //     variance.sqrt()
 // }
 
+
+
 #[inline]
 pub fn mean<T: Float>(data: &[T]) -> T {
     let count = T::from(data.len()).unwrap();
@@ -39,6 +41,8 @@ pub fn std_dev<T: Float>(data: &[T]) -> T {
     variance.sqrt()
 }
 
+
+
 #[inline]
 pub fn log_sum_exp_2_scalar(a: f32, b: f32) -> f32 {
     let max = a.max(b);
@@ -53,6 +57,8 @@ pub fn log_sum_exp_2_scalar(a: f32, b: f32) -> f32 {
 pub fn log_sum_exp_3_scalar(a: f32, b: f32, c: f32) -> f32 {
     log_sum_exp_2_scalar(log_sum_exp_2_scalar(a, b), c)
 }
+
+
 
 #[inline]
 pub fn log_sum_exp_2_tensor<B: Backend, const D: usize>(a: Tensor<B, D>, b: Tensor<B, D>) -> Tensor<B, D> {
@@ -72,26 +78,4 @@ pub fn log_sum_exp_3_tensor<B: Backend, const D: usize>(
     c: Tensor<B, D>,
 ) -> Tensor<B, D> {
     log_sum_exp_2_tensor(log_sum_exp_2_tensor(a, b), c)
-}
-
-pub fn extract_zip(zip_path: &str, extract_to: &str) {
-    let mut archive =
-        zip::ZipArchive::new(std::fs::File::open(zip_path).expect("Failed to open zip file."))
-            .expect("Failed to read zip file.");
-
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i).expect("Failed to read file from zip.");
-        let out_path = std::path::Path::new(extract_to).join(file.sanitized_name());
-
-        if file.name().ends_with('/') {
-            std::fs::create_dir_all(&out_path).expect("Failed to create directory.");
-        } else {
-            if let Some(p) = out_path.parent() {
-                std::fs::create_dir_all(p).expect("Failed to create parent directory.");
-            }
-            let mut outfile = std::fs::File::create(&out_path).expect("Failed to create file.");
-            std::io::copy(&mut file, &mut outfile).expect("Failed to write file.");
-        }
-    }
-    println!("Extracted zip file to {}", extract_to);
 }

@@ -1,10 +1,11 @@
 // src/ctc/mod.rs
 
-//! CTC: training loss + inference decoders
+//! Connectionist Temporal Classification (CTC) components
+//!
+//! - `ctc_loss`: training loss function
+//! - `ctc_decode`: greedy/beam search decoders
+//! - `lm`: language model modules for shallow fusion
 
-pub mod ctc_loss;
 pub mod ctc_decode;
+pub mod ctc_loss;
 pub mod lm;
-
-// pub use ctc_loss::CtcLoss;
-// pub use ctc_decode::{greedy_decode /*, BeamCfg, beam_search */};

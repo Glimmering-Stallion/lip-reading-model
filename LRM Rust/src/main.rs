@@ -18,37 +18,50 @@
 
 
 
-// modules
-mod ctc;
-mod model;
-mod train;
-mod utils;
-mod vocab;
-
-// custom imports
-use crate::utils::{extract_zip, mean, std_dev};
-use crate::vocab::{TokenMap, VOCAB, BLANK_ID};
-
+use burn::module::Module;
 // imports
-use clap; // for terminal arg parsing
-use image::{GrayImage, Luma}; // for image processing
-use model::LRModel;
-use opencv::{
-    self,
-    core::{MatTrait, Size},
-    prelude::*,
-    videoio::VideoCaptureTrait, // for CV tasks
-};
-use reqwest; // for HTTP requests to download data
+use lrm_rust::prelude::*;
+use clap::Parser;
+use image::{GrayImage, Luma};
+// use opencv::{
+//     self,
+//     core::{MatTrait, Size},
+//     videoio::VideoCaptureTrait,
+// };
 use std::{
-    fs::File,
-    io::{self, BufRead},
-    vec,
+    error::Error,
+    // io::{self, BufRead},
 };
 
 
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[derive(Parser, Debug)]
+#[command(name = "lm_build")]
+#[command(about = "Train an N-gram language model and save it to disk")]
+struct Args {
+    /// path to local text file corpus (mutually exclusive with --url)
+    #[arg(long)]
+    corpus: Option<String>,
+
+    /// URL to remote JSONL.gz shard (mutually exclusive with --corpus)
+    #[arg(long)]
+    url: Option<String>,
+
+    /// path to output model file
+    #[arg(long, default_value = "models/ngram_lm.bin")]
+    output: String,
+
+    /// N-gram size
+    #[arg(long, default_value_t = 3)]
+    n: usize,
+}
+
+
+
+fn main() -> Result<(), Box<dyn Error>> {
+
+    let args = Args::parse();
+
     // debugging
     // let vector = vec![1.0, 2.0, 3.0, 4.0, 5.0];
     // println!("Input: {:?}, Mean: {}, Std Dev: {}", vector, mean(&vector), std_dev(&vector));
@@ -58,20 +71,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ------ Obtain vocabulary and token map ------
 
-    let vocab = VOCAB;
     let blank_id = BLANK_ID;
-    let token_map = TokenMap::new(vocab);
+    let token_map = TokenMap::new(VOCAB);
 
-    println!("Vocabulary: {:?}", vocab);
+    println!("Vocabulary: {:?}", VOCAB);
 
     // ----------------- Load data -----------------
 
+    // create data dir if it doesn't exist
+    std::fs::create_dir_all("data")?;
+
     // height and width of cropped ROI (mouth region)
+    // TODO: make this region adaptively tracking based on face detection
     let width: u32 = 150;
     let height: u32 = 50;
     let dim = (width * height) as usize;
 
-    let test_path = "../data/s1/bbal6n.mpg";
+    let test_path = "../data/grid-lr-dataset/s1/bbal6n.mpg";
     let (test_frames, test_alignments) = load_data(test_path, &token_map)?;
 
     // debugging
@@ -104,168 +120,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .save("test_frame.png")
         .expect("Failed to save image");
 
-    // ----------------- Model training -----------------
+    // ------------- N-Gram Model training --------------
+    
+    // collect training sequences as Vec<usize>
+    // TODO: check if this is right path
+    let corpus_dir = "../data/librispeech-lm-corpus/corpus";
+    if !std::path::Path::new(corpus_dir).exists() {
+        println!("Corpus not found locally — downloading (this may take a while)...");
+        let url = "https://www.openslr.org/resources/11/librispeech-lm-corpus.tgz";
+        import_corpus(url, "data")?;
+        println!("Download + extract complete");
+    }
+
+    // now stream lines from local files
+    // convert lines -> ids -> feed LM.train(...)
+    let sequences = Box::new(
+        stream_corpus_lines(corpus_dir).filter_map(move |line| {
+            token_map.chars_to_ids(line.chars().collect())
+        })
+    );
+
+    // does lm model already exist?
+    if !std::path::Path::new(&args.output).exists() {
+        // init LM, train, and save
+        let mut lm = NgramLMConfig::new()
+            .with_n(args.n)
+            .init();
+        lm.train(sequences);
+        lm.save(&args.output)?;
+        println!("Saved N-gram LM to {}", args.output);
+    } else {
+        println!("N-gram LM already exists at {}, skipping training", args.output);
+    }
+
+    // ------------- LipNet Model training --------------
 
     // let loader_factory = || dataloader::DataLoader::new("/path/to/data").iter();
     // let model = LRModel::<train::AD>::new(c, out_channels, (h, w), vocab_size, &device);
     // let (_model, losses) = train::train_loop(model, epochs, learning_rate, loader_factory, blank_index);
 
     Ok(())
-}
-
-
-
-/* ---------------------------------------------------- Data Loading/Processing Functions ---------------------------------------------------- */
-
-
-
-// extract data externally to a given path
-fn extract_data(path: &str) {
-    // check if the video file exists at the given path
-    if !std::path::Path::new(path).exists() {
-        println!("Data directory not found, downloading...");
-
-        let url = "https://drive.google.com/uc?id=1YlvpDLix3S-U8fd-gqRwPcWXAXm8JwjL";
-        let output = "../data.zip";
-
-        // download file from URL
-        match reqwest::blocking::get(url) {
-            Ok(mut response) => {
-                if response.status().is_success() {
-                    let mut file = std::fs::File::create(output).expect("Failed to create file.");
-                    response
-                        .copy_to(&mut file)
-                        .expect("Failed to write to file.");
-                    println!("File downloaded successfully to {}", output);
-
-                    // extract zip file
-                    extract_zip(output, "../data");
-                } else {
-                    eprintln!("Failed to download file: {}", response.status());
-                    return;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error parsing URL: {}", e);
-                return;
-            }
-        }
-    } else {
-        println!("Data directory already exists, downloading skipped.");
-    }
-}
-
-// takes in a video path and outputs a list of floats
-fn load_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
-    match opencv::videoio::VideoCapture::from_file(path, opencv::videoio::CAP_ANY) {
-        Ok(mut cap) => {
-            let mut frames: Vec<f32> = vec![];
-
-            let mut frame = opencv::core::Mat::default();
-            while cap.read(&mut frame).expect("Error reading frame") {
-                let size = frame.size().expect("Failed to get frame size");
-                if size.width == 0 || size.height == 0 {
-                    break; // End of video
-                }
-
-                // convert frame to grayscale
-                let mut gray_frame = opencv::core::Mat::default();
-                opencv::imgproc::cvt_color(
-                    &frame,
-                    &mut gray_frame,
-                    opencv::imgproc::COLOR_BGR2GRAY,
-                    0,
-                    opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
-                )
-                .expect("Failed to convert frame to grayscale");
-
-                // crop frame to isolate region of interest (where the mouth is)
-                let roi = opencv::core::Rect::new(80, 190, 150, 50);
-                let temp = opencv::core::Mat::roi(&gray_frame, roi).expect("Failed to crop frame");
-                let mut mouth_frame = opencv::core::Mat::default();
-                temp.copy_to(&mut mouth_frame)
-                    .expect("Failed to copy ROI to a continuous Mat");
-
-                // flatten and store
-                let flattened_frame: Vec<f32> = mouth_frame
-                    .data_bytes()
-                    .expect("Failed to get frame data")
-                    .iter()
-                    .map(|&pixel| pixel as f32)
-                    .collect();
-                frames.extend(flattened_frame);
-            }
-            // standardize frames (by centering to zero mean and scaling to unit variance)
-            let mean = mean(&frames);
-            let std_dev = std_dev(&frames);
-
-            frames = frames
-                .iter()
-                .map(|&x| (x - mean) / std_dev)
-                .collect::<Vec<f32>>(); // frames as a vector of pixels as floats
-
-            Ok(frames)
-        }
-        Err(e) => {
-            eprintln!("Error opening video file: {}", e);
-            Err(Box::new(e))
-        }
-    }
-}
-
-// takes in an alignments path (as well as TokenMap struct) and outputs a list of char indices
-fn load_alignments(
-    path: &str,
-    token_map: &TokenMap,
-) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
-    match std::fs::File::open(&path) {
-        Ok(file) => {
-            let mut tokens: Vec<String> = vec![];
-            let lines = io::BufReader::new(file).lines();
-
-            for line in lines.flatten() {
-                let line_group = line.split_whitespace().collect::<Vec<_>>();
-                if line_group[2] != "sil" {
-                    tokens.push(line_group[2].to_string());
-                }
-            }
-
-            Ok(tokens
-                .iter()
-                .flat_map(|token| token.chars())
-                .filter_map(|ch| token_map.id_of(ch))
-                .collect())
-        }
-        Err(e) => {
-            eprintln!("Error opening alignments file: {}", e);
-            Err(Box::new(e))
-        }
-    }
-}
-
-// function to load data (takes in a data path and outputs frames and alignments)
-fn load_data(
-    path: &str,
-    token_map: &TokenMap,
-) -> Result<(Vec<f32>, Vec<usize>), Box<dyn std::error::Error>> {
-    let filename = std::path::Path::new(&path)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(|s| s.to_string());
-
-    match filename {
-        Some(name) => {
-            let video_path = format!("../data/s1/{}.mpg", name);
-            let alignments_path = format!("../data/alignments/s1/{}.align", name);
-
-            let frames = load_video(&video_path)?;
-            let alignments = load_alignments(&alignments_path, token_map)?;
-
-            Ok((frames, alignments))
-        }
-        None => {
-            eprintln!("Failed to extract filename from path: {}", path);
-            Err("Failed to extract filename.".into())
-        }
-    }
 }

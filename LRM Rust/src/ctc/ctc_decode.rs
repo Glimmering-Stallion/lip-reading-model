@@ -12,7 +12,6 @@ use crate::utils::{log_sum_exp_2_scalar, log_sum_exp_3_scalar};
 // imports
 use burn::{
     config::Config,
-    nn::transformer::{TransformerDecoder, TransformerDecoderConfig},
     tensor::{activation::log_softmax, backend::Backend, Tensor},
 };
 use std::{
@@ -89,7 +88,7 @@ pub struct CtcDecoder {
     pub blank_id: usize,
     pub search_type: CtcDecodeType,
     pub beam_width: usize,
-    pub language_model: Option<LanguageModel>,
+    pub language_model: Option<Box<dyn LanguageModel + Send + Sync>>,
     pub lm_alpha: f32,
     pub lm_beta: f32,
 }
@@ -353,6 +352,7 @@ pub fn collapse_path<T: PartialEq + Copy>(path: &[T], blank_id: T) -> Vec<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::prelude::*;
     use std::array;
     use burn::{
         backend::ndarray::NdArray,
@@ -361,8 +361,8 @@ mod tests {
 
     type B = NdArray<f32>;
 
+    use crate::prelude::*;
     use crate::ctc::lm::LanguageModelConfig;
-    use crate::vocab::{TokenMap, VOCAB, BLANK_ID};
 
     // helper to create one-hot logits for testing
     fn one_hot_logits<const V: usize>(hot: usize, hi: f32, lo: f32) -> [f32; V] {
@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn test_greedy_search_decode_random() {
         let vocab = VOCAB;
-        let vocab_size = vocab.len();
+        let vocab_size = VOCAB_SIZE;
         let blank_id = BLANK_ID;
         let token_map = TokenMap::new(vocab);
         let device = Default::default();
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_greedy_search_decode_fixed() {
-        const V: usize = VOCAB.len();
+        const V: usize = VOCAB_SIZE;
         const N: usize = 2;
         const T: usize = 11;
 
@@ -477,7 +477,7 @@ mod tests {
     #[test]
     fn test_beam_search_decode_random() {
         let vocab = VOCAB;
-        let vocab_size = vocab.len();
+        let vocab_size = VOCAB_SIZE;
         let blank_id = BLANK_ID;
         let token_map = TokenMap::new(vocab);
         let device = Default::default();
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn test_beam_search_decode_fixed() {
-        const V: usize = VOCAB.len();
+        const V: usize = VOCAB_SIZE;
         const N: usize = 2;
         const T: usize = 11;
 
@@ -565,7 +565,7 @@ mod tests {
 
     #[test]
     fn test_beam_eq_greedy_when_beam_width_1() {
-        const V: usize = VOCAB.len();
+        const V: usize = VOCAB_SIZE;
         const N: usize = 2;
         const T: usize = 11;
 
@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn test_decode_preserves_duplicates_when_blanks_present() {
-        const V: usize = VOCAB.len();
+        const V: usize = VOCAB_SIZE;
         const N: usize = 5;
         const T: usize = 14;
 
@@ -806,6 +806,31 @@ mod tests {
 
     #[test]
     fn test_beam_lm_integration() {
+        // let vocab = "ab_".chars().collect::<Vec<_>>();
+        // let blank = 2;
+
+        // // Logits shaped so per-frame argmax at t=2 would lean 'b',
+        // // but sequences aligning to "aa" win with LM.
+        // let logits = /* small 1x5x3 tensor with near-ties */;
+
+        // let lm = LanguageModelConfig::new()
+        //     .with_corpus("aaaaaaaaaaa".to_string())
+        //     .with_vocab(vocab.iter().collect())
+        //     .with_blank_id(blank)
+        //     .with_k(0.5)
+        //     .init();
+
+        // let decoder = CtcDecoderConfig::new()
+        //     .with_search_type(CtcDecodeType::BeamSearch)
+        //     .with_beam_width(3)
+        //     .with_blank_id(blank)
+        //     .with_language_model(lm.to_config())   // or .with_language_model(Some(lm_cfg))
+        //     .with_lm_alpha(1.0)
+        //     .with_lm_beta(0.0)
+        //     .init();
+
+        // let out = decoder.forward(logits);
+        // assert_eq!(out[0], vec![0, 0]); // "aa"
         todo!();
     }
 }
