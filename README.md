@@ -1,7 +1,7 @@
-# Project: End-to-End Lip Reading System in Rust (No Audio)
+# Project: End-to-End Visual Speech Recognition Model (VSRM) in Rust (Audioless)
 
 Objective:
-Build a real-time, audio-free lip-reading system entirely in Rust, covering data ingestion, model architecture, training, and decoding, with a long-term goal of live camera inference using a dynamically tracking mouth-cropped ROI.
+Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering data ingestion, model architecture, training, and decoding, with a long-term goal of live camera inference using a dynamically tracking mouth-cropped ROI.
 
 ---
 
@@ -18,7 +18,8 @@ Build a real-time, audio-free lip-reading system entirely in Rust, covering data
   - Infer file name stems automatically.
   - Pair videos with alignment annotations.
   - Download and extract compressed datasets when missing.
-- For now, using GRID dataset from [Kaggle](https://www.kaggle.com/datasets/mohamedbentalb/lipreading-dataset) (make sure to unzip, rename from "data" to "grid-lr-dataset", and place under project's dedicated "data" dir).
+- For now, using [GRID](https://zenodo.org/records/3625687) S1 dataset as proof of concept that the VSRM can converge (make sure to unzip, place "s1" and "alignments" files under "grid-lr-dataset", and place under project's dedicated "data" dir).
+- In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) dataset in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
 
 ### Alignment & Vocabulary Handling
 - Implemented parsing of .align files.
@@ -36,8 +37,12 @@ Build a real-time, audio-free lip-reading system entirely in Rust, covering data
   - Is removed during decoding.
 
 ### Model Architecture (Rust, Burn)
-- Implemented a full spatiotemporal neural network in Rust.
-- Uses a 3D convolutional front-end for joint spatial–temporal feature extraction.
+- Implemented a full spatiotemporal VSLM in Rust.
+- Uses a 3D convolutional (Conv3D) front-end for joint spatial–temporal feature extraction.
+- Gave strided convolutions to Conv3D layers (over 3D maxpooling) for learned rather than naive downsampling.
+- Uses GroupNorm following Conv3D layers for mitigating internal covariance shift during forward/backward passes. GroupNorm chosen over:
+  - BatchNorm because BatchNorm struggles with small batches and larger batches is memory-heavy against high-dim video data.
+  - LayerNorm because LayerNorm globalizes its averaging across all channels, pixels, and timesteps, leading to "washing-out" of localized variations in spatial data.
 - Replaced BiLSTMs with a Temporal Convolutional Network (TCN) to improve:
   - Parallelism
   - Inference latency
@@ -66,8 +71,8 @@ Build a real-time, audio-free lip-reading system entirely in Rust, covering data
   - Variable-length input and target sequences
 - Designed to be framework-agnostic within Burn.
 
-### Decoding & Inference
-- Implemented greedy CTC decoding.
+### Custom CTC Decoding & Inference
+- Implemented greedy CTC decoding from scratch.
 - Implemented prefix beam search decoding, including:
   - Separate blank and non-blank probability tracking
   - Log-probability accumulation
@@ -75,13 +80,17 @@ Build a real-time, audio-free lip-reading system entirely in Rust, covering data
 - Decoder architecture designed to support incremental and streaming inference.
 
 ### Language Model Integration (In Progress)
-- Added a dedicated language model interface for prefix beam search.
-- Designed for character-level n-gram scoring.
+- Incorporated a dedicated language model interface for CTC decoder's prefix beam search.
+- Designed for character-level N-gram scoring.
+- In future, might consider a word-level N-gram.
+- Uses an enum to support different LM types (N-gram LM, Neural LM, etc.)
 - Supports configurable:
-  - Language model weight (alpha)
-  - Insertion bonus (beta)
-- Currently implementing the LM logic to improve decoding coherence.
-- Training on the OpenSLR LibriSpeech LM Corpus dataset.
+  - Language model weight (alpha): controls influence of LM over base VSRM's predictions (lower alpha means trusting VSRM over LM more and vice versa for higher alpha).
+  - Insertion bonus (beta): counteracts LM's bias toward shorter sequences (adding more tokens makes log-prob score more negative, where beta adds a small positive bonus).
+- Currently implementing an N-gram lm to improve decoding coherence.
+- Training on the [OpenSLR LibriSpeech LM Norm](https://www.openslr.org/11) corpus.
+- For now, just using the pre-trained [3-gram ARPA LM](https://www.openslr.org/11) word-level N-gram model.
+- In future, will consider using a tiny neural LM (char/BPE GRU or small Transformer) with prefix-state caching per beam (running it only on top-K acoustic symbols each step to bound cost; or use it as an N-best reranker after beam, which mitigates per-frame latency).
 
 ### System Design & Engineering Decisions
 - Entire pipeline implemented in Rust.
@@ -106,4 +115,4 @@ Build a real-time, audio-free lip-reading system entirely in Rust, covering data
 ---
 
 ## Summary
-This project represents a full end-to-end implementation of a lip-reading system in Rust, covering data processing, model architecture, training, loss computation, and decoding. The system is designed with real-time deployment in mind and avoids reliance on Python-based ML frameworks, emphasizing performance, safety, and extensibility.
+This project represents a full end-to-end implementation of a VSRM lip-reading system in Rust, covering data processing, model architecture, training, loss computation, and decoding. The system is designed with real-time deployment in mind and avoids reliance on Python-based ML frameworks, emphasizing performance, safety, and extensibility.

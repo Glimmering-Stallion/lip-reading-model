@@ -36,7 +36,7 @@ impl LanguageModelConfig {
     pub fn init(&self) -> Box<dyn LanguageModel + Send + Sync> {
         match self {
             Self::NgramLM(cfg) => Box::new(cfg.init()),
-            // Self::NeuralLM(NeuralLMConfig) => Box::new(cfg.init()),
+            // Self::NeuralLM(NeuralLMConfig) => Box::new(cfg.init()), // placeholder for future neural LM
         }
     }
 }
@@ -45,6 +45,7 @@ impl LanguageModelConfig {
 
 pub trait LanguageModel: Debug {
     fn score(&self, sequence: &[usize]) -> f32;
+    fn perplexity(&self, data: Box<dyn Iterator<Item = Vec<usize>>>) -> f32;
     fn next_log_prob(&self, prefix: &[usize], next: usize) -> f32;
 }
 
@@ -57,18 +58,25 @@ pub struct NgramLMConfig {
 
     #[config(default = 0)]
     vocab_size: usize,
+
+    // none by default
+    path: Option<String>,
 }
 
 
 
 impl NgramLMConfig {
     pub fn init(&self) -> NgramLM {
-        NgramLM {
-            n: self.n,
-            vocab_size: self.vocab_size,
-            n_gram_counts: HashMap::new(),
-            prefix_counts: HashMap::new(),
-            unique_followers: HashMap::new(),
+        if let Some(path) = &self.path {
+            NgramLM::load(path).unwrap()
+        } else {
+            NgramLM {
+                n: self.n,
+                vocab_size: self.vocab_size,
+                n_gram_counts: HashMap::new(),
+                prefix_counts: HashMap::new(),
+                unique_followers: HashMap::new(),
+            }
         }
     }
 }
@@ -81,9 +89,9 @@ pub struct NgramLM {
     vocab_size: usize, // total vocab size
 
     // <sequence: count> maps
-    n_gram_counts: HashMap<Vec<usize>, usize>, // frequency counts of n-grams sequences
-    prefix_counts: HashMap<Vec<usize>, usize>, // total counts of (n-1)-gram prefixes
-    unique_followers: HashMap<Vec<usize>, usize>, // num distinct followers after prefixes
+    n_gram_counts: HashMap<Vec<usize>, usize>,    // frequency counts of n-gram sequences                   (e.g. count of "the")
+    prefix_counts: HashMap<Vec<usize>, usize>,    // frequency counts of (n-1)-gram prefixes                (e.g. count of "th")
+    unique_followers: HashMap<Vec<usize>, usize>, // frequency counts of distinct followers after prefixes  (e.g. count of distinct followers after "th")
 }
 
 
@@ -92,16 +100,37 @@ impl LanguageModel for NgramLM {
     fn score(&self, sequence: &[usize]) -> f32 {
         if sequence.is_empty() { return 0.0; } // log-prob of empty sequence is 0
 
-        // compute log-prob of entire sequence with chain rule
         let mut total_log_prob = 0.0;
+
+        // compute log-prob of entire sequence with chain rule
         for i in 0..sequence.len() {
-            let start = i.saturating_sub(self.n - 1);
-            let prefix = &sequence[start..i]; // n - 1 history
-            let next = sequence[i]; // next char
-            total_log_prob += self.next_log_prob(prefix, next);
+            let start = i.saturating_sub(self.n - 1);      // i - (n - 1)
+            let prefix = &sequence[start..i];           // (n - 1) history
+            let next = sequence[i];                        // next char
+            total_log_prob += self.next_log_prob(prefix, next);   // total sum of log-probs
         }
 
         total_log_prob
+    }
+
+    fn perplexity(&self, data: Box<dyn Iterator<Item = Vec<usize>>>) -> f32 {
+        let mut total_log_prob = 0.0;
+        let mut total_tokens = 0;
+        
+        // accumulate per-sequence log-probs and tokens
+        for sequence in data {
+            total_log_prob += self.score(&sequence);
+            total_tokens += sequence.len();
+        }
+
+        // debugging
+        // println!("Total tokens in eval set: {}", total_tokens);
+
+        if total_tokens == 0 { return f32::INFINITY; } // perplexity undefined for empty dataset
+
+        // perplexity score
+        let avg_log_prob = total_log_prob / total_tokens as f32;
+        (-avg_log_prob).exp()
     }
 
     /// return a log-prob bonus for extending a given prefix with a next char
@@ -110,16 +139,18 @@ impl LanguageModel for NgramLM {
         let mut n_gram = prefix.to_vec();
         n_gram.push(next);
 
-        // get counts
+        // get counts and assign to floats with simpler var names
         let c = *self.n_gram_counts.get(&n_gram).unwrap_or(&0) as f32;
-        let t = *self.unique_followers.get(prefix).unwrap_or(&0) as f32;
         let n = *self.prefix_counts.get(prefix).unwrap_or(&0) as f32;
+        let t = *self.unique_followers.get(prefix).unwrap_or(&0) as f32;
         
-        // apply Witten-Bell smoothing
-        let lambda = if n > 0.0 { t / (t + n) } else { 1.0 };
-        let prob_mle = if n > 0.0 { c as f32 / n } else { 0.0 };
-        let prob_bo = self.prob_backoff(prefix, next);
-        ((1.0 - lambda) * prob_mle + lambda * prob_bo).max(1e-12).ln() // avoid log(0) situations
+        // apply Witten-Bell smoothing (to handle unseen n-grams for robustness)
+        let lambda = if n > 0.0 { t / (t + n) } else { 1.0 };       // backoff weight (based on num unique followers)
+        let prob_mle = if n > 0.0 { c as f32 / n } else { 0.0 };    // MLE prob from current n-gram
+        let prob_bo = self.prob_backoff(prefix, next);              // backoff prob from (n-1)-gram
+
+        // final prob for current window: convert to log space (with max(1e-12) here to avoid log(0) situations)
+        ((1.0 - lambda) * prob_mle + lambda * prob_bo).max(1e-12).ln()
     }
 }
 
@@ -134,7 +165,7 @@ impl NgramLM {
 
     pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
         let mut f = File::open(path)?;
-        let (lm, _len): (Self, usize) = bincode::serde::decode_from_std_read(&mut f, config::standard())?;
+        let lm: Self = bincode::serde::decode_from_std_read(&mut f, config::standard())?;
         Ok(lm)
     }
 
@@ -143,10 +174,10 @@ impl NgramLM {
         let mut uf_container: HashMap<Vec<usize>, HashSet<usize>> = HashMap::new();
 
         // count all n-grams in training data
-        for sequence in data {
-            for i in 0..sequence.len() {
-                for j in 1..=self.n {
-                    if i + j <= sequence.len() {
+        for sequence in data {       // loop through each training sequence (text lines)
+            for i in 0..sequence.len() {  // loop through each position in sequence (chars)
+                for j in 1..=self.n {     // loop through each n-gram size (1 to n)
+                    if i + j <= sequence.len() { // out of bounds check
                         let n_gram = &sequence[i..(i + j)];
                         *self.n_gram_counts.entry(n_gram.to_vec()).or_insert(0) += 1;
 
@@ -154,7 +185,7 @@ impl NgramLM {
                         if n_gram.len() > 1 {
                             let (prefix, next) = (n_gram[..(n_gram.len() - 1)].to_vec(), *n_gram.last().unwrap());
                             *self.prefix_counts.entry(prefix.clone()).or_insert(0) += 1;
-                            uf_container.entry(prefix).or_default().insert(next);
+                            uf_container.entry(prefix).or_default().insert(next); // for given prefix, add "next" to its unique follower set
                         }
                     }
                 }
@@ -169,11 +200,11 @@ impl NgramLM {
 
     fn prob_backoff(&self, prefix: &[usize], next: usize) -> f32 {
         if prefix.is_empty() {
-            // unigram case
+            // unigram base case
             1.0 / (self.vocab_size - 1) as f32 // uniform over vocab excluding blank
         } else {
             // recursive backoff
-            let shorter_prefix = if prefix.len() > 1 { &prefix[1..] } else { &[] };
+            let shorter_prefix = if prefix.len() > 1 { &prefix[1..] } else { &[] }; // drop first char
             self.next_log_prob(shorter_prefix, next).exp()
         }
     }
@@ -184,49 +215,107 @@ impl NgramLM {
 // tests
 #[cfg(test)]
 mod tests {
+    use std::{env, path::Path};
+
+    use crate::vocab::{TokenMap, VOCAB, VOCAB_SIZE, BLANK_ID};
     use super::*;
 
     #[test]
     fn test_ngram_lm_score_with_known_counts() {
-        let mut lm = NgramLM {
-            n: 3,
-            vocab_size: 5, // e.g. a, b, c,  , _
-            n_gram_counts: HashMap::new(),
-            prefix_counts: HashMap::new(),
-            unique_followers: HashMap::new(),
-        };
+         // a tri-gram with vocab: a, b, c,  , _
+        let mut ngram_lm = NgramLMConfig::new()
+            .with_n(3)
+            .with_vocab_size(5)
+            .init();
 
-        // example counts for testing
-        lm.n_gram_counts.insert(vec![0], 10); // 'a'
-        lm.n_gram_counts.insert(vec![1], 5);  // 'b'
-        lm.n_gram_counts.insert(vec![0, 0], 6); // 'aa'
-        lm.n_gram_counts.insert(vec![0, 1], 4); // 'ab'
-        lm.n_gram_counts.insert(vec![1, 0], 2); // 'ba'
-        lm.n_gram_counts.insert(vec![0, 0, 0], 3); // 'aaa'
-        lm.n_gram_counts.insert(vec![0, 0, 1], 3); // 'aab'
-        lm.n_gram_counts.insert(vec![0, 1, 0], 2); // 'aba'
+        // example counts for testing:
+        // n-gram counts arbitraryly chosen
+        // prefix and unique follower counts consistent with chosen n-gram counts
+        ngram_lm.n_gram_counts.insert(vec![0], 10);       // 'a'
+        ngram_lm.n_gram_counts.insert(vec![1], 5);        // 'b'
+        ngram_lm.n_gram_counts.insert(vec![0, 0], 6);     // 'aa'
+        ngram_lm.n_gram_counts.insert(vec![0, 1], 4);     // 'ab'
+        ngram_lm.n_gram_counts.insert(vec![1, 0], 2);     // 'ba'
+        ngram_lm.n_gram_counts.insert(vec![0, 0, 0], 3);  // 'aaa'
+        ngram_lm.n_gram_counts.insert(vec![0, 0, 1], 3);  // 'aab'
+        ngram_lm.n_gram_counts.insert(vec![0, 1, 0], 2);  // 'aba'
 
-        lm.prefix_counts.insert(vec![], 15); // total unigrams
-        lm.prefix_counts.insert(vec![0], 10); // total bigrams starting with 'a'
-        lm.prefix_counts.insert(vec![1], 5);  // total bigrams starting with 'b'
-        lm.prefix_counts.insert(vec![0, 0], 6); // total trigrams starting with 'aa'
-        lm.prefix_counts.insert(vec![0, 1], 4); // total trigrams starting with 'ab'
+        ngram_lm.prefix_counts.insert(vec![], 15);        // total unigrams
+        ngram_lm.prefix_counts.insert(vec![0], 10);       // total bigrams starting with 'a'
+        ngram_lm.prefix_counts.insert(vec![1], 5);        // total bigrams starting with 'b'
+        ngram_lm.prefix_counts.insert(vec![0, 0], 6);     // total trigrams starting with 'aa'
+        ngram_lm.prefix_counts.insert(vec![0, 1], 4);     // total trigrams starting with 'ab'
 
-        lm.unique_followers.insert(vec![], 2); // distinct unigrams
-        lm.unique_followers.insert(vec![0], 2); // distinct bigrams after 'a'
-        lm.unique_followers.insert(vec![1], 1); // distinct bigrams after 'b'
-        lm.unique_followers.insert(vec![0, 0], 2); // distinct trigrams after 'aa'
-        lm.unique_followers.insert(vec![0, 1], 1); // distinct trigrams after 'ab'
+        ngram_lm.unique_followers.insert(vec![], 2);      // distinct unigrams
+        ngram_lm.unique_followers.insert(vec![0], 2);     // distinct bigrams after 'a'
+        ngram_lm.unique_followers.insert(vec![1], 1);     // distinct bigrams after 'b'
+        ngram_lm.unique_followers.insert(vec![0, 0], 2);  // distinct trigrams after 'aa'
+        ngram_lm.unique_followers.insert(vec![0, 1], 1);  // distinct trigrams after 'ab'
+
+        // example sequence (aab – 001), v = 5 (a, b, c,  , _):
+        // when i = 0 (a – 0):      c = 10,     n = 15,     t = 2,     λ = 2/17,    mle = 2/3,     bo = 1/4,        P(0)       = (1 - 2/17)(2/3) + (2/17)(1/4)  = 21/34   ≈ 0.6176
+        // when i = 1 (aa – 00):    c = 6,      n = 10,     t = 2,     λ = 1/6,     mle = 3/5,     bo = P(0),       P(0 | 0)   = (1 - 1/6)(3/5) + (1/6)(21/34)  = 41/68   ≈ 0.6029
+        // when i = 2 (aab – 001):  c = 3,      n = 6,      t = 2,     λ = 1/4,     mle = 1/2,     bo = P(1 | 0),   P(1 | 00)  = (1 - 1/4)(1/2) + (1/4)(79/204) = 385/816 ≈ 0.4718
+        // where for P(1 | 0):      c = 4,      n = 10,     t = 2,     λ = 1/6,     mle = 2/5,     bo = P(1),       P(1 | 0)   = (1 - 1/6)(2/5) + (1/6)(11/34)  = 79/204  ≈ 0.3872
+        // where for P(1):          c = 5,      n = 15,     t = 2,     λ = 2/17,    mle = 1/3,     bo = 1/4,        P(1)       = (1 - 2/17)(1/3) + (2/17)(1/4)  = 11/34   ≈ 0.3235
+        // final log-prob: ln(0.6176 * 0.6029 * 0.4718) ≈ ln(0.1757) ≈ -1.7389
 
         // test scoring
         let seq = vec![0, 0, 1]; // "aab"
-        let log_prob = lm.score(&seq);
-        println!("Log-prob of sequence {:?}: {:.4}", seq, log_prob);
+        let log_prob = ngram_lm.score(&seq);
+        println!("Log-prob of sequence {:?}: {:.4}", seq, log_prob); // should print approx. -1.7389
         assert!(log_prob.is_finite());
     }
 
     #[test]
     fn test_ngram_lm_load_and_score_saved_model() {
-        todo!()
+        let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+        let ngram_lm_path = Path::new(&rust_root)
+            .join("models")
+            .join("ngram_lm.bin");
+
+        let ngram_lm = NgramLMConfig::new()
+            .with_n(3)
+            .with_vocab_size(VOCAB_SIZE)
+            .with_path(ngram_lm_path.to_str().map(|s| s.to_string()))
+            .init();
+
+        let token_map = TokenMap::new(VOCAB);
+
+        // test strings
+        let string_1 = "";
+        let string_2 = "the";
+        let string_3 = "xyz";
+        let string_4 = "happ";
+        let string_5 = "happy";
+        let string_6 = "happz";
+
+        // convert to numerical id vec sequences
+        let test_seq_1 = token_map.chars_to_ids(string_1.chars().collect()).unwrap(); // empty sequence
+        let test_seq_2 = token_map.chars_to_ids(string_2.chars().collect()).unwrap(); // common word
+        let test_seq_3 = token_map.chars_to_ids(string_3.chars().collect()).unwrap(); // gibberish sequence
+        let test_seq_4 = token_map.chars_to_ids(string_4.chars().collect()).unwrap(); // base prefix sequence
+        let test_seq_5 = token_map.chars_to_ids(string_5.chars().collect()).unwrap(); // high prob sequence
+        let test_seq_6 = token_map.chars_to_ids(string_6.chars().collect()).unwrap(); // low prob sequence
+
+        // pretrained n-gram scores
+        let score_1 = ngram_lm.score(&test_seq_1);
+        let score_2 = ngram_lm.score(&test_seq_2);
+        let score_3 = ngram_lm.score(&test_seq_3);
+        let score_4 = ngram_lm.score(&test_seq_4);
+        let score_5 = ngram_lm.score(&test_seq_5);
+        let score_6 = ngram_lm.score(&test_seq_6);
+
+        // sanity checks
+        println!("N-gram score for \'{}\': {}", string_1, score_1);
+        println!("N-gram score for \'{}\': {}", string_2, score_2);
+        println!("N-gram score for \'{}\': {}", string_3, score_3);
+        println!("N-gram baseline score for \'{}\': {}", string_4, score_4);
+        println!("N-gram score for \'{}\' following \'{}\': {}", string_5.chars().last().unwrap(), string_4, (score_5 - score_4));
+        println!("N-gram score for \'{}\' following \'{}\': {}", string_6.chars().last().unwrap(), string_4, (score_6 - score_4));
+
+        assert_eq!(score_1, 0.0);   // empty sequence should have log-prob of zero
+        assert!(score_2 > score_3); // common word should have higher score than gibberish
+        assert!((score_5 - score_4) > (score_6 - score_4)); // 'y' should have higher prob than 'z' after 'happ'
     }
 }

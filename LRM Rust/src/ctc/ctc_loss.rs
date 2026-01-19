@@ -106,6 +106,7 @@ impl CtcLoss {
             .unwrap()
             .to_vec();
 
+        // loop over samples in batch
         for sample in 0..n {
             let sample_input_length = input_lengths_to_host[sample] as usize;
             let sample_target_length = target_lengths_to_host[sample] as usize;
@@ -272,6 +273,7 @@ mod tests {
 
     type B = NdArray<f32>;
 
+    /// helper to create length tensors for batch
     fn tensorize_lengths(
         batch_size: usize,
         input_length: usize,

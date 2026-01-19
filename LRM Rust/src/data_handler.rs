@@ -4,6 +4,7 @@
 
 use crate::prelude::*;
 use flate2::read::GzDecoder;
+use rand::Rng;
 use reqwest::blocking::{get, Client};
 // use serde_json::Value;
 use std::{
@@ -11,6 +12,7 @@ use std::{
     fs::{self, File},
     io::{self, BufRead, BufReader, Cursor},
     path::Path,
+    sync::{atomic, Arc},
 };
 use opencv::{
     self,
@@ -19,6 +21,7 @@ use opencv::{
     videoio::VideoCaptureTrait, // for CV tasks
 };
 use tar::Archive;
+use indicatif::{ProgressBar, ProgressStyle};
 
 
 
@@ -59,42 +62,51 @@ pub fn stream_jsonl_gz(url: String) -> Result<Vec<String>, Box<dyn Error>> {
 
 
 
-// download a corpus .tgz and extract to out_dir
-pub fn import_corpus(url: &str, out_dir: &str) -> Result<(), Box<dyn Error>> {
-    // http get
-    let resp = get(url)?.error_for_status()?;
-    let bytes = resp.bytes()?;
-    let cursor = Cursor::new(bytes);
+/// stream all text lines under a corpus line by line while applying sampling and basic preprocessing (takes in a file path as String for ownership)
+pub fn stream_corpus_lines(file_path: String, sample_rate: f64) -> impl Iterator<Item = String> {
+    println!("Streaming corpus lines from: {}", file_path);
+    let file = File::open(&file_path).expect("Failed to open corpus file");
+    let metadata = file.metadata().expect("Failed to get file metadata");
+    let file_size = metadata.len();
 
-    // gzip decode and tar extract
-    let gz = GzDecoder::new(cursor);
-    let mut archive = Archive::new(gz);
-    archive.unpack(out_dir)?;
+    let prog_bar = ProgressBar::new(file_size);
+    prog_bar.set_style(
+        ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({msg}) (ETA: {eta})")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    let kept_count = Arc::new(atomic::AtomicU64::new(0));
 
-    Ok(())
-}
+    let pb_inspect = prog_bar.clone();
+    let pb_filter = prog_bar.clone();
+    let pb_final = prog_bar.clone();
+    let count_filter = kept_count.clone();
 
+    let reader = BufReader::new(file);
+    let mut rng = rand::rng();
 
-
-// stream all .txt files under a corpus dir line by line
-pub fn stream_corpus_lines(corpus_dir: &str) -> impl Iterator<Item = String> {
-    fs::read_dir(corpus_dir)
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("txt"))
-        .flat_map(|path| {
-            let content = fs::read_to_string(path).unwrap_or_default();
-            content.lines()
-                .map(|line| {
-                    line.to_lowercase()
-                        .replace(|c: char| !c.is_alphanumeric() && !c.is_whitespace(), "") // strip non-vocab chars
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .filter(|line| !line.is_empty())
+    reader.lines()
+        .filter_map(|line| line.ok())
+        .inspect(move |line| pb_inspect.inc(line.len() as u64 + 1)) // update bar per line read
+        .filter(move |_| rng.random::<f64>() < sample_rate) // keep line with certain prob
+        .inspect(move |_| {
+            let count = count_filter.fetch_add(1, atomic::Ordering::SeqCst);
+            if count % 1000 == 0 { // update message every 1000 lines to save CPU
+                pb_filter.set_message(format!("{} lines kept", count));
+            }
+        })
+        .map(|line| {
+            line.to_lowercase()
+                .replace(|c: char| !c.is_alphanumeric() && !c.is_whitespace(), "") // strip non-vocab chars
+                .split_whitespace()
                 .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|line| !line.is_empty())
+        .inspect(move |_| {
+            if pb_final.position() >= pb_final.length().unwrap_or(u64::MAX) {
+                pb_final.finish_with_message("Done");
+            }
         })
 }
 
@@ -104,23 +116,26 @@ pub fn stream_corpus_lines(corpus_dir: &str) -> impl Iterator<Item = String> {
 
 
 
+/// extract zip file to a given path
 pub fn extract_zip(zip_path: &str, extract_to: &str) {
-    let mut archive =
-        zip::ZipArchive::new(std::fs::File::open(zip_path).expect("Failed to open zip file."))
-            .expect("Failed to read zip file.");
+    let input_file = File::open(zip_path).expect("Failed to open zip file.");
+    let mut archive = zip::ZipArchive::new(input_file).expect("Failed to read zip file.");
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("Failed to read file from zip.");
-        let out_path = std::path::Path::new(extract_to).join(file.sanitized_name());
+        let out_path = match file.enclosed_name() {
+            Some(path) => Path::new(extract_to).join(path),
+            None => continue, // skip files with invalid names if need be
+        };
 
         if file.name().ends_with('/') {
-            std::fs::create_dir_all(&out_path).expect("Failed to create directory.");
+            fs::create_dir_all(&out_path).expect("Failed to create directory.");
         } else {
             if let Some(p) = out_path.parent() {
-                std::fs::create_dir_all(p).expect("Failed to create parent directory.");
+                fs::create_dir_all(p).expect("Failed to create parent directory.");
             }
-            let mut outfile = std::fs::File::create(&out_path).expect("Failed to create file.");
-            std::io::copy(&mut file, &mut outfile).expect("Failed to write file.");
+            let mut outfile = File::create(&out_path).expect("Failed to create file.");
+            io::copy(&mut file, &mut outfile).expect("Failed to write file.");
         }
     }
     println!("Extracted zip file to {}", extract_to);
@@ -128,29 +143,63 @@ pub fn extract_zip(zip_path: &str, extract_to: &str) {
 
 
 
-// extract data externally to a given path
-pub fn extract_data(path: &str) {
-    // check if the video file exists at the given path
-    if !std::path::Path::new(path).exists() {
-        println!("Data directory not found, downloading...");
+/// extract gzip file to a given path
+pub fn extract_gzip(gzip_path: &str, extract_to: &str) {
+    let input_file = File::open(gzip_path).expect("Failed to open gzip file.");
+    let mut decoder = GzDecoder::new(input_file);
+    
+    // get folder path from the 'extract_to' string and create it
+    let path = Path::new(extract_to);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("Failed to create parent directory for extraction.");
+    }
 
-        let url = "https://drive.google.com/uc?id=1YlvpDLix3S-U8fd-gqRwPcWXAXm8JwjL";
-        let output = "../data.zip";
+    let mut out_file = File::create(path).expect("Failed to create output file.");
+
+    io::copy(&mut decoder, &mut out_file).expect("Failed to decompress gzip content.");
+    println!("Extracted gzip file to {}", extract_to);
+}
+
+
+
+/// extract GRID corpus data externally to a given path
+pub fn extract_grid_data(root_path: &str) {
+    let root_path = Path::new(root_path);
+    let data_dir = root_path.join("data");
+    let grid_dir = data_dir.join("grid-lr-dataset");
+
+    // check if the GRID dataset exists at the given path
+    if !grid_dir.exists() {
+        println!("Grid data not found, downloading...");
+
+        // use client with NO timeout for large files
+        let client = reqwest::blocking::Client::builder()
+            .timeout(None)
+            .build()
+            .expect("Failed to create HTTP client");
+
+        let url = "https://drive.google.com/uc?id=1YlvpDLix3S-U8fd-gqRwPcWXAXm8JwjL&confirm=t&export=download";
+        let output = root_path.join("data.zip");
 
         // download file from URL
-        match reqwest::blocking::get(url) {
+        match client.get(url).send() {
             Ok(mut response) => {
                 if response.status().is_success() {
-                    let mut file = std::fs::File::create(output).expect("Failed to create file.");
-                    response
-                        .copy_to(&mut file)
-                        .expect("Failed to write to file.");
-                    println!("File downloaded successfully to {}", output);
+                    let mut file = File::create(&output).expect("Failed to create file.");
+                    response.copy_to(&mut file).expect("Failed to write to file.");
+                    println!("File downloaded successfully to {}", grid_dir.to_string_lossy());
 
                     // extract zip file
-                    extract_zip(output, "../data");
+                    extract_zip(&output.to_string_lossy(), &root_path.to_string_lossy());
+
+                    // rename extracted subdir to grid-lr-dataset
+                    let nested_dir = data_dir.join("data");
+                    if nested_dir.exists() { fs::rename(&nested_dir, &grid_dir).expect("Failed to rename extracted directory."); }
+
+                    // clean up zip file
+                    fs::remove_file(&output).expect("Failed to delete zip file.");
                 } else {
-                    eprintln!("Failed to download file: {}", response.status());
+                    eprintln!("Failed to download GRID dataset: {}", response.status());
                     return;
                 }
             }
@@ -160,13 +209,65 @@ pub fn extract_data(path: &str) {
             }
         }
     } else {
-        println!("Data directory already exists, downloading skipped.");
+        println!("GRID dataset already exists, downloading skipped");
     }
 }
 
 
 
-// takes in a video path and outputs a list of floats
+/// extract SLR corpus dataset externally to a given path
+pub fn extract_slr_dataset(root_path: &str) {
+    let root_path = Path::new(root_path);
+    let data_dir = root_path.join("data");
+    let slr_dir = data_dir.join("librispeech-lm-norm");
+    let final_path = slr_dir.join("librispeech-lm-norm.txt");
+
+    // check if the SLR dataset exists at the given path
+    if !final_path.exists() {
+        println!("SLR dataset not found, downloading...");
+
+        fs::create_dir_all(&slr_dir).expect("Failed to create SLR directory");
+
+        // use client with NO timeout for large files
+        let client = reqwest::blocking::Client::builder()
+            .timeout(None)
+            .build()
+            .expect("Failed to create HTTP client");
+
+        let url = "https://www.openslr.org/resources/11/librispeech-lm-norm.txt";
+        let output = data_dir.join("librispeech-lm-norm.gz");
+
+        // download and extract corpus
+        match client.get(url).send() {
+            Ok(mut response) => {
+                if response.status().is_success() {
+                    let mut file = File::create(&output).expect("Failed to create file.");
+                    response.copy_to(&mut file).expect("Failed to write to file.");
+                    println!("SLR dataset downloaded successfully to {}", slr_dir.to_string_lossy());
+
+                    // extract gzip file
+                    extract_gzip(&output.to_string_lossy(), &final_path.to_string_lossy());
+
+                    // clean up gzip file
+                    fs::remove_file(&output).expect("Failed to delete gzip file.");
+                } else {
+                    eprintln!("Failed to download SLR dataset: {}", response.status());
+                    return;
+                }
+            }
+            Err(e) => {
+                eprintln!("Error parsing URL: {}", e);
+                return;
+            }
+        }
+    } else {
+        println!("SLR dataset already exists, downloading skipped");
+    }
+}
+
+
+
+/// takes in a video path and outputs a list of floats
 pub fn load_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     match opencv::videoio::VideoCapture::from_file(path, opencv::videoio::CAP_ANY) {
         Ok(mut cap) => {
@@ -226,7 +327,7 @@ pub fn load_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
 
 
 
-// takes in an alignments path (as well as TokenMap struct) and outputs a list of char indices
+/// takes in an alignments path (as well as TokenMap struct) and outputs a list of char indices
 pub fn load_alignments(
     path: &str,
     token_map: &TokenMap,
@@ -258,29 +359,33 @@ pub fn load_alignments(
 
 
 
-// function to load data (takes in a data path and outputs frames and alignments)
+/// function to load data (takes in a data path and outputs frames and alignments)
 pub fn load_data(
-    path: &str,
+    root_path: &str,
+    video_name: &str,
     token_map: &TokenMap,
 ) -> Result<(Vec<f32>, Vec<usize>), Box<dyn std::error::Error>> {
-    let filename = std::path::Path::new(&path)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(|s| s.to_string());
-
-    match filename {
-        Some(name) => {
-            let video_path = format!("../data/s1/{}.mpg", name);
-            let alignments_path = format!("../data/alignments/s1/{}.align", name);
-
-            let frames = load_video(&video_path)?;
-            let alignments = load_alignments(&alignments_path, token_map)?;
-
-            Ok((frames, alignments))
-        }
-        None => {
-            eprintln!("Failed to extract filename from path: {}", path);
-            Err("Failed to extract filename.".into())
-        }
+    if video_name.trim().is_empty() {
+        eprintln!("Error: Provided video_name is empty.");
+        return Err("Failed to extract filename: video_name was empty.".into());
     }
+
+    // join project root with LR data path for an absolute path
+    let grid_dataset_path = Path::new(root_path).join("data/grid-lr-dataset");
+
+    let video_path = grid_dataset_path
+        .join("s1")
+        .join(video_name)
+        .with_extension("mpg");
+
+    let alignments_path = grid_dataset_path
+        .join("alignments")
+        .join("s1")
+        .join(video_name)
+        .with_extension("align");
+
+    let frames = load_video(&video_path.to_string_lossy())?;
+    let alignments = load_alignments(&alignments_path.to_string_lossy(), token_map)?;
+
+    Ok((frames, alignments))
 }

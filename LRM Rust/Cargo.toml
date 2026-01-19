@@ -21,6 +21,7 @@ zip = "5.1.1"
 flate2 = "1.1.2"
 serde_json = "1.0.145"
 tar = "0.4.44"
+indicatif = "0.18.3"
 
 # onnxruntime = "0.0.14"
 # hashmap = "0.0.0"

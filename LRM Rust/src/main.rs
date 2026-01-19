@@ -20,7 +20,7 @@
 
 use burn::module::Module;
 // imports
-use lrm_rust::prelude::*;
+use lrm_rust::{ctc::lm::{self, LanguageModel}, prelude::*};
 use clap::Parser;
 use image::{GrayImage, Luma};
 // use opencv::{
@@ -29,7 +29,11 @@ use image::{GrayImage, Luma};
 //     videoio::VideoCaptureTrait,
 // };
 use std::{
+    sync::{atomic, Arc},
     error::Error,
+    path::Path,
+    env,
+    fs,
     // io::{self, BufRead},
 };
 
@@ -48,7 +52,7 @@ struct Args {
     url: Option<String>,
 
     /// path to output model file
-    #[arg(long, default_value = "models/ngram_lm.bin")]
+    #[arg(long, default_value = "ngram_lm.bin")]
     output: String,
 
     /// N-gram size
@@ -60,7 +64,7 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
 
-    let args = Args::parse();
+    // ------------------------------------------- Initial setup --------------------------------------------
 
     // debugging
     // let vector = vec![1.0, 2.0, 3.0, 4.0, 5.0];
@@ -68,18 +72,30 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // obtain data (if data isn't already loaded)
     // extract_data("../data");
-
-    // ------ Obtain vocabulary and token map ------
-
-    let blank_id = BLANK_ID;
-    let token_map = TokenMap::new(VOCAB);
-
-    println!("Vocabulary: {:?}", VOCAB);
-
-    // ----------------- Load data -----------------
+    
+    let args = Args::parse();
 
     // create data dir if it doesn't exist
-    std::fs::create_dir_all("data")?;
+    fs::create_dir_all("data")?;
+
+    // dynamically get Rust project root and relevant dir paths
+    let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+    let models_path = Path::new(&rust_root).join("models");
+    let data_path = Path::new(&rust_root).join("data");
+
+    if !models_path.exists() { fs::create_dir(&models_path).expect("Failed to create output directory for models") }
+    if !data_path.exists() { fs::create_dir(&data_path).expect("Failed to create output directory for data") }
+
+    let token_map = Arc::new(TokenMap::new(VOCAB)); // bidirectional char-id mapping
+
+    // debugging
+    println!("Vocabulary: {:?}", VOCAB);
+    println!("Vocabulary size: {}", VOCAB_SIZE);
+    println!("Blank token ID: {}", BLANK_ID);
+
+    // -------------------------------------- Load data for VSRM model --------------------------------------
+
+    // let data_path = root_path.join("data/grid-lr-dataset");
 
     // height and width of cropped ROI (mouth region)
     // TODO: make this region adaptively tracking based on face detection
@@ -87,8 +103,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let height: u32 = 50;
     let dim = (width * height) as usize;
 
-    let test_path = "../data/grid-lr-dataset/s1/bbal6n.mpg";
-    let (test_frames, test_alignments) = load_data(test_path, &token_map)?;
+    let test_input = "bbal6n";
+    let (test_frames, test_alignments) = load_data(&rust_root, test_input, &token_map)?;
 
     // debugging
     let norm_min = test_frames.iter().cloned().fold(f32::INFINITY, f32::min);
@@ -114,46 +130,71 @@ fn main() -> Result<(), Box<dyn Error>> {
     // println!("Expected per-frame size: {}", width * height);
     // assert_eq!(frame.len(), dim, "Frame length doesn't match image dimensions!");
 
-    let img_buffer: GrayImage =
-        GrayImage::from_vec(width, height, frame).expect("Failed to create image buffer");
+    let img_buffer: GrayImage = GrayImage::from_vec(width, height, frame).expect("Failed to create image buffer");
     img_buffer
         .save("test_frame.png")
         .expect("Failed to save image");
 
-    // ------------- N-Gram Model training --------------
+    // ------------------------------------- Load data for N-gram model -------------------------------------
+
+    let corpus_path = data_path
+        .join("librispeech-lm-norm")
+        .join("librispeech-lm-norm.txt");
+
+    let corpus = corpus_path.to_string_lossy().to_string();
+
+    // using extract_slr_dataset function in data_handler.rs to download + extract N-Gram corpus if needed
+    extract_slr_dataset(rust_root.as_str());
+
+    // --------------------------------- N-Gram Model training/evaluation -----------------------------------
+
+    let output_path = models_path.join(&args.output); // output path for where LM model resides
     
-    // collect training sequences as Vec<usize>
-    // TODO: check if this is right path
-    let corpus_dir = "../data/librispeech-lm-corpus/corpus";
-    if !std::path::Path::new(corpus_dir).exists() {
-        println!("Corpus not found locally — downloading (this may take a while)...");
-        let url = "https://www.openslr.org/resources/11/librispeech-lm-corpus.tgz";
-        import_corpus(url, "data")?;
-        println!("Download + extract complete");
-    }
+    // does an LM model already exist?
+    let lm = if !output_path.exists() {
+        println!("N-gram LM model not found at {}, proceeding to train fresh model", output_path.to_string_lossy());
 
-    // now stream lines from local files
-    // convert lines -> ids -> feed LM.train(...)
-    let sequences = Box::new(
-        stream_corpus_lines(corpus_dir).filter_map(move |line| {
-            token_map.chars_to_ids(line.chars().collect())
-        })
-    );
+        
+        // now stream lines from local files (5% sampling rate, which is ~200MG of the 4GB corpus)
+        // convert lines -> ids -> feed LM.train(...)
+        let train_token_map = Arc::clone(&token_map);
+        let train_sequences = stream_corpus_lines(corpus.clone(), 0.05)
+            .filter_map(move |line| train_token_map.chars_to_ids(line.chars().collect()));
 
-    // does lm model already exist?
-    if !std::path::Path::new(&args.output).exists() {
-        // init LM, train, and save
+        // init, train, and save n-gram LM
         let mut lm = NgramLMConfig::new()
             .with_n(args.n)
+            .with_vocab_size(VOCAB_SIZE)
             .init();
-        lm.train(sequences);
-        lm.save(&args.output)?;
-        println!("Saved N-gram LM to {}", args.output);
-    } else {
-        println!("N-gram LM already exists at {}, skipping training", args.output);
-    }
 
-    // ------------- LipNet Model training --------------
+        // safety check: make sure parent dir exists one more time just in case
+        if let Some(parent) = output_path.parent() { fs::create_dir_all(parent).ok(); }
+
+        lm.train(Box::new(train_sequences));
+        lm.save(&output_path.to_str().unwrap())?;
+        println!("Saved N-gram LM to {}", output_path.to_string_lossy());
+
+        lm
+    } else {
+        println!("N-gram LM model already exists at {}, skipping corpus streaming and training", output_path.to_string_lossy());
+
+        // load existing n-gram LM
+        let lm = NgramLM::load(&output_path.to_str().unwrap()).unwrap();
+        println!("Loaded N-gram LM from {}", output_path.to_string_lossy());
+
+        lm
+    };
+
+    // evaluate n-gram LM on held-out eval set (0.1% sampling rate)
+    let eval_token_map = Arc::clone(&token_map);
+    let eval_sequences = stream_corpus_lines(corpus.clone(), 0.05)
+        .filter_map(move |line| eval_token_map.chars_to_ids(line.chars().collect()))
+        .take(100000);
+
+    let perplexity = lm.perplexity(Box::new(eval_sequences));
+    println!("N-gram LM perplexity on eval set: {:.3}", perplexity);
+
+    // --------------------------------------- LipNet Model training ----------------------------------------
 
     // let loader_factory = || dataloader::DataLoader::new("/path/to/data").iter();
     // let model = LRModel::<train::AD>::new(c, out_channels, (h, w), vocab_size, &device);

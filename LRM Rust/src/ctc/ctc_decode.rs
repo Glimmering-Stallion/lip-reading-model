@@ -21,15 +21,23 @@ use std::{
 
 
 struct BeamPrefix {
-    sequence: Vec<usize>, // sequence of symbol ids in vocab
-    log_prob_blank: f32, // log-prob of prefix ending in blank
-    log_prob_non_blank: f32, // log-prob of prefix ending in non-blank
+    sequence: Vec<usize>,       // sequence of symbol ids in vocab
+    log_prob_blank: f32,        // log-prob of prefix ending in blank
+    log_prob_non_blank: f32,    // log-prob of prefix ending in non-blank
+    log_prob_lm: f32,           // log-prob from language model (for LM fusion)
 }
 
 
 
 impl BeamPrefix {
-    fn score(&self) -> f32 { log_sum_exp_2_scalar(self.log_prob_blank, self.log_prob_non_blank) }
+    fn score(&self, alpha: f32, beta: f32) -> f32 {
+        let vsrm_score = log_sum_exp_2_scalar(self.log_prob_blank, self.log_prob_non_blank);
+        let lm_score = self.log_prob_lm;
+        let length_reward = self.sequence.len() as f32;
+
+        // total score
+        vsrm_score + (alpha * lm_score) + (beta * length_reward)  // shallow LM fusion
+    }
     fn last_char(&self) -> Option<usize> { self.sequence.last().copied() }
 }
 
@@ -57,12 +65,12 @@ pub struct CtcDecoderConfig {
     pub beam_width: usize, // beam width for beam search
 
     #[config(default = "None")]
-    pub language_model: Option<LanguageModelConfig>, // optional language model to supplement beam search
+    pub lm: Option<LanguageModelConfig>, // optional language model to supplement beam search
     
-    #[config(default = 0.0)]
+    #[config(default = 0.5)] // typically between [0.0, 2.0]
     pub lm_alpha: f32, // weight of language model score when combining with acoustic model score
     
-    #[config(default = 0.0)]
+    #[config(default = 1.5)] // typically between [0.0, 10.0]
     pub lm_beta: f32, // length normalization factor for beam search (to avoid short sequence bias)
 }
 
@@ -74,7 +82,7 @@ impl CtcDecoderConfig {
             blank_id: self.blank_id,
             search_type: self.search_type.clone(),
             beam_width: self.beam_width,
-            language_model: self.language_model.as_ref().map(|lm| lm.init()),
+            lm: self.lm.as_ref().map(|lm| lm.init()),
             lm_alpha: self.lm_alpha,
             lm_beta: self.lm_beta,
         }
@@ -88,7 +96,7 @@ pub struct CtcDecoder {
     pub blank_id: usize,
     pub search_type: CtcDecodeType,
     pub beam_width: usize,
-    pub language_model: Option<Box<dyn LanguageModel + Send + Sync>>,
+    pub lm: Option<Box<dyn LanguageModel + Send + Sync>>,
     pub lm_alpha: f32,
     pub lm_beta: f32,
 }
@@ -146,6 +154,7 @@ impl CtcDecoder {
         let (n, t, vocab_size) = (log_probs.clone().dims()[0], log_probs.clone().dims()[1], log_probs.clone().dims()[2]);
         let mut top_seq_ids = Vec::with_capacity(n);
 
+        // loop over samples in batch
         for sample in 0..n {
             let sample_log_probs = log_probs.clone().slice([sample..(sample + 1), 0..t, 0..vocab_size]).squeeze(0);
             top_seq_ids.push(self.per_sample_decode(sample_log_probs));
@@ -169,20 +178,21 @@ impl CtcDecoder {
         let (timesteps, vocab_size) = (log_probs.dims()[0], log_probs.dims()[1]);
 
         // t = -1 (base case)
-        // initialize beam with empty prefix
+        // initialize beam with empty prefix (starts with size 1 and grows to beam_width)
         let mut prefixes = vec![
             BeamPrefix {
                 sequence: Vec::new(),
                 log_prob_blank: 0.0, // log(1)
                 log_prob_non_blank: sentinel_value, // log(0)
+                log_prob_lm: 0.0,
             }
         ];
 
         // 0 ≤ t ≤ T - 1 (recurrence case)
         for t in 0..timesteps {
             // reset buffer
-            // maps sequence of symbol ids to (log_prob_blank, log_prob_non_blank)
-            let mut next_prefixes: HashMap<Vec<usize>, (f32, f32)> = HashMap::new();
+            // maps sequence of symbol ids to (log_prob_blank, log_prob_non_blank, log_prob_lm)
+            let mut next_prefixes: HashMap<Vec<usize>, (f32, f32, f32)> = HashMap::new();
 
             // grab chunk of log-probs of each symbol at current timestep (given by model)
             let log_probs_t: Vec<f32> = log_probs.clone().slice([t..(t + 1), 0..vocab_size])
@@ -204,15 +214,16 @@ impl CtcDecoder {
                 // accumulate total log-prob of prefix ending with blank
                 let entry = next_prefixes
                     .entry(sequence_key.clone())
-                    .or_insert((sentinel_value, sentinel_value));
+                    .or_insert((sentinel_value, sentinel_value, prefix.log_prob_lm));
                 entry.0 = log_sum_exp_2_scalar(entry.0, ext_log_prob);
 
                 // extend with non-blank characters (v is the candidate symbol id in vocab)
                 for v in 0..vocab_size {
                     if v == blank { continue; }
 
-                    // case A: previous path ended with non-blank
-                    // case B: previous path ended with blank
+                    // case A (skip):       same char, previous path ended with non-blank
+                    // case B (stretch):    same char, previous path ended with blank
+                    // case C (append):     diff char, previous path ended with either blank or non-blank
                     match prefix.last_char() {
                         // if v equals last char in prefix path
                         // can only extend from path ending with blank log-prob
@@ -233,7 +244,7 @@ impl CtcDecoder {
                             // accumulate total log-prob of prefix ending with non-blank
                             let entry_a = next_prefixes
                                 .entry(sequence_key_a.clone())
-                                .or_insert((sentinel_value, sentinel_value));
+                                .or_insert((sentinel_value, sentinel_value, prefix.log_prob_lm));
                             entry_a.1 = log_sum_exp_2_scalar(entry_a.1, ext_log_prob_a);
 
                             // --------------- (B) ---------------
@@ -248,17 +259,15 @@ impl CtcDecoder {
                             // compute succeeding log-prob of extending prefix with same symbol at current timestep
                             let mut ext_log_prob_b = prefix.log_prob_blank + log_probs_t[v];
 
-                            // optional language model score adjustment (applied only when extending with duplicate char)
-                            if let Some(lm) = self.language_model.as_ref() {
-                                ext_log_prob_b += self.lm_alpha * lm.next_log_prob(&prefix.sequence, v); // shallow LM fusion
-                                ext_log_prob_b += self.lm_beta * (prefix.sequence.len() as f32 + 1.0); // optional length reward (against short sequence bias)
-                            }
+                            // optional language model score adjustment (applied for extending with duplicate char)
+                            let mut new_lm_log_prob = prefix.log_prob_lm;
+                            if let Some(lm) = self.lm.as_ref() { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, v); }
 
                             // update log-prob for current prefix path (ending with non-blanks)
                             // accumulate total log-prob of prefix ending with non-blank
                             let entry_b = next_prefixes
                                 .entry(sequence_key_b.clone())
-                                .or_insert((sentinel_value, sentinel_value));
+                                .or_insert((sentinel_value, sentinel_value, new_lm_log_prob));
                             entry_b.1 = log_sum_exp_2_scalar(entry_b.1, ext_log_prob_b);
                         }
 
@@ -280,17 +289,15 @@ impl CtcDecoder {
                                 prefix.log_prob_non_blank,
                             ) + log_probs_t[v];
 
-                            // optional language model score adjustment (applied only when extending with different char)
-                            if let Some(lm) = self.language_model.as_ref() {
-                                ext_log_prob_c += self.lm_alpha * lm.next_log_prob(&prefix.sequence, v); // shallow LM fusion
-                                ext_log_prob_c += self.lm_beta * (prefix.sequence.len() as f32 + 1.0); // optional length reward (against short sequence bias)
-                            }
+                            // optional language model score adjustment (applied for extending with different char)
+                            let mut new_lm_log_prob = prefix.log_prob_lm;
+                            if let Some(lm) = self.lm.as_ref() { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, v); }
 
                             // update log-prob for current prefix path (ending with non-blanks)
                             // accumulate total log-prob of prefix ending with non-blank
                             let entry_c = next_prefixes
                                 .entry(sequence_key_c.clone())
-                                .or_insert((sentinel_value, sentinel_value));
+                                .or_insert((sentinel_value, sentinel_value, new_lm_log_prob));
                             entry_c.1 = log_sum_exp_2_scalar(entry_c.1, ext_log_prob_c);
                         }
                     }
@@ -300,14 +307,19 @@ impl CtcDecoder {
             // convert HashMap to Vec<BeamPrefix> for sorting
             let mut next_prefixes_vec: Vec<BeamPrefix> = next_prefixes
                 .into_iter()
-                .map(|(sequence, (log_prob_blank, log_prob_non_blank))| BeamPrefix {
+                .map(|(sequence, (log_prob_blank, log_prob_non_blank, log_prob_lm))| BeamPrefix {
                     sequence,
                     log_prob_blank,
                     log_prob_non_blank,
+                    log_prob_lm,
                 }).collect();
 
             // sort by score (descending)
-            next_prefixes_vec.sort_by(|a, b| b.score().partial_cmp(&a.score()).unwrap());
+            next_prefixes_vec.sort_by(|a, b|
+                b.score(self.lm_alpha, self.lm_beta)
+                    .partial_cmp(&a.score(self.lm_alpha, self.lm_beta))
+                    .unwrap()
+            );
 
             // keep top beam_width prefixes
             prefixes = next_prefixes_vec.into_iter().take(self.beam_width).collect();
@@ -315,7 +327,11 @@ impl CtcDecoder {
 
         // return highest scoring prefix sequence
         let best_prefix = prefixes.into_iter()
-            .max_by(|a, b| a.score().partial_cmp(&b.score()).unwrap())
+            .max_by(|a, b|
+                a.score(self.lm_alpha, self.lm_beta)
+                    .partial_cmp(&b.score(self.lm_alpha, self.lm_beta))
+                    .unwrap()
+            )
             .unwrap();
 
         // convert usize ids to i64 ids
@@ -353,7 +369,11 @@ pub fn collapse_path<T: PartialEq + Copy>(path: &[T], blank_id: T) -> Vec<T> {
 mod tests {
     use super::*;
     use crate::prelude::*;
-    use std::array;
+    use std::{
+        array,
+        env,
+        path::Path,
+    };
     use burn::{
         backend::ndarray::NdArray,
         tensor::{backend::Backend, Distribution, Tensor},
@@ -364,10 +384,21 @@ mod tests {
     use crate::prelude::*;
     use crate::ctc::lm::LanguageModelConfig;
 
-    // helper to create one-hot logits for testing
+    // helper to create one-hot logits array of vocab size for testing
     fn one_hot_logits<const V: usize>(hot: usize, hi: f32, lo: f32) -> [f32; V] {
         let mut row = [lo; V];
         row[hot] = hi;
+        row
+    }
+
+    // helper to create multi-hot logits array of vocab size for testing
+    fn multi_hot_logits<const V: usize>(hots: &[usize], hi: &[f32], lo: f32) -> [f32; V] {
+        let mut row = [lo; V];
+        for i in 0..hots.len() {
+            let char_id = hots[i];
+            let score = hi[i];
+            row[char_id] = score;
+        }
         row
     }
 
@@ -806,31 +837,143 @@ mod tests {
 
     #[test]
     fn test_beam_lm_integration() {
-        // let vocab = "ab_".chars().collect::<Vec<_>>();
-        // let blank = 2;
+        const V: usize = VOCAB_SIZE;
+        const N: usize = 1;
+        const T: usize = 4;
 
-        // // Logits shaped so per-frame argmax at t=2 would lean 'b',
-        // // but sequences aligning to "aa" win with LM.
-        // let logits = /* small 1x5x3 tensor with near-ties */;
+        const HI: f32 = 8.0; // big logit for target symbol
+        const LO: f32 = 0.0; // baseline for rest
 
-        // let lm = LanguageModelConfig::new()
-        //     .with_corpus("aaaaaaaaaaa".to_string())
-        //     .with_vocab(vocab.iter().collect())
-        //     .with_blank_id(blank)
-        //     .with_k(0.5)
-        //     .init();
+        let token_map = TokenMap::new(VOCAB);
+        let device = Default::default();
 
-        // let decoder = CtcDecoderConfig::new()
-        //     .with_search_type(CtcDecodeType::BeamSearch)
-        //     .with_beam_width(3)
-        //     .with_blank_id(blank)
-        //     .with_language_model(lm.to_config())   // or .with_language_model(Some(lm_cfg))
-        //     .with_lm_alpha(1.0)
-        //     .with_lm_beta(0.0)
-        //     .init();
+        let (a_id, e_id, h_id, t_id, blank_id) = (0, 4, 7, 19, BLANK_ID); // "a", "e", "h", "t", "_"
 
-        // let out = decoder.forward(logits);
-        // assert_eq!(out[0], vec![0, 0]); // "aa"
-        todo!();
+        // dummy logits for 1 sample, 4 timesteps, 41 vocab symbols (manually biased high blanks)
+        let logits: [[[f32; V]; T]; N] = [[
+            one_hot_logits(t_id, HI, LO),                            // t = 0: "t"
+            one_hot_logits(h_id, HI, LO),                            // t = 1: "h"
+            multi_hot_logits(&[e_id, a_id], &[HI, HI], LO),     // t = 2: "e"/"a" tie
+            one_hot_logits(blank_id, HI, LO),                        // t = 3: "_"
+        ]];
+        let logits = Tensor::<B, 3>::from_data(logits, &device);
+
+        let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+        let ngram_lm_path = Path::new(&rust_root)
+            .join("models")
+            .join("ngram_lm.bin");
+
+        let ngram_lm = NgramLMConfig::new()
+            .with_n(3)
+            .with_vocab_size(VOCAB_SIZE)
+            .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
+
+        let lm = LanguageModelConfig::NgramLM(ngram_lm); // lm wrapper
+
+        let beam_decoder = CtcDecoderConfig::new()
+            .with_search_type(CtcDecodeType::BeamSearch)
+            .with_beam_width(10)
+            .with_blank_id(blank_id)
+            .with_lm(Some(lm))
+            .with_lm_alpha(2.0)
+            .init();
+
+        let beam_decoded_id_sequences = beam_decoder.forward(logits.clone());
+        let beam_decoded_char_sequences = beam_decoded_id_sequences
+            .iter()
+            .map(|seq| {
+                token_map
+                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<char>>>();
+
+        println!("\nBeam decoded id sequences: {:?}", beam_decoded_id_sequences);
+        println!("Beam decoded char sequences: {:?}\n", beam_decoded_char_sequences);
+
+        assert_eq!(beam_decoded_id_sequences[0], vec![19, 7, 4]); // expected "the"
+    }
+
+    #[test]
+    fn test_lm_overrules_vsrm_logits() {
+        const V: usize = VOCAB_SIZE;
+        const N: usize = 1;
+        const T: usize = 6;
+
+        const HI: f32 = 8.0; // big logit for target symbol
+        const LO: f32 = 0.0; // baseline for rest
+
+        let token_map = TokenMap::new(VOCAB);
+        let device = Default::default();
+
+        let (b_id, e_id, m_id, o_id, r_id, y_id, blank_id) = (1, 4, 12, 14, 17, 24, BLANK_ID);
+
+        let logits: [[[f32; V]; T]; N] = [[
+            one_hot_logits(m_id, HI, LO),                            // t = 0: "m"
+            one_hot_logits(e_id, HI, LO),                            // t = 1: "e"
+            one_hot_logits(m_id, HI, LO),                            // t = 2: "m"
+            multi_hot_logits(&[o_id, b_id], &[6.0, 7.0], LO),   // t = 3: "o"/"b" tie
+            one_hot_logits(r_id, HI, LO),                            // t = 4: "r"
+            one_hot_logits(y_id, HI, LO),                            // t = 5: "y"
+        ]];
+        let logits = Tensor::<B, 3>::from_data(logits, &device);
+
+        let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+        let ngram_lm_path = Path::new(&rust_root)
+            .join("models")
+            .join("ngram_lm.bin");
+
+        let ngram_lm = NgramLMConfig::new()
+            .with_n(3)
+            .with_vocab_size(VOCAB_SIZE)
+            .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
+
+        let lm = LanguageModelConfig::NgramLM(ngram_lm); // lm wrapper
+
+        // native beam search decoder without LM
+        let native_beam_decoder = CtcDecoderConfig::new()
+            .with_search_type(CtcDecodeType::BeamSearch)
+            .with_beam_width(10)
+            .with_blank_id(blank_id)
+            .init();
+
+        // hybrid beam search decoder with LM
+        let hybrid_beam_decoder = CtcDecoderConfig::new()
+            .with_search_type(CtcDecodeType::BeamSearch)
+            .with_beam_width(10)
+            .with_blank_id(blank_id)
+            .with_lm(Some(lm))
+            .with_lm_alpha(2.0)
+            .with_lm_beta(2.0)
+            .init();
+
+        let native_beam_decoded_id_sequences = native_beam_decoder.forward(logits.clone());
+        let hybrid_beam_decoded_id_sequences = hybrid_beam_decoder.forward(logits.clone());
+
+        let native_beam_decoded_char_sequences = native_beam_decoded_id_sequences
+            .iter()
+            .map(|seq| {
+                token_map
+                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<char>>>();
+        let hybrid_beam_decoded_char_sequences = hybrid_beam_decoded_id_sequences
+            .iter()
+            .map(|seq| {
+                token_map
+                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
+                    .unwrap()
+            })
+            .collect::<Vec<Vec<char>>>();
+
+        // with LM, "memory" should be preferred over "membry"
+        println!("\nNative Beam decoded id sequences: {:?}", native_beam_decoded_id_sequences);
+        println!("Native Beam decoded char sequences: {:?}", native_beam_decoded_char_sequences);
+
+        println!("\nHybrid decoded id sequences: {:?}", hybrid_beam_decoded_id_sequences);
+        println!("Hybrid decoded char sequences: {:?}\n", hybrid_beam_decoded_char_sequences);
+
+        assert_eq!(hybrid_beam_decoded_id_sequences[0], vec![12, 4, 12, 14, 17, 24]); // expected "memory"
     }
 }
