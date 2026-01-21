@@ -18,7 +18,10 @@
 
 
 
-use burn::module::Module;
+use burn::{
+    module::Module,
+    data::dataloader::DataLoaderBuilder,
+};
 // imports
 use lrm_rust::{ctc::lm::{self, LanguageModel}, prelude::*};
 use clap::Parser;
@@ -93,48 +96,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Vocabulary size: {}", VOCAB_SIZE);
     println!("Blank token ID: {}", BLANK_ID);
 
-    // -------------------------------------- Load data for VSRM model --------------------------------------
-
-    // let data_path = root_path.join("data/grid-lr-dataset");
-
-    // height and width of cropped ROI (mouth region)
-    // TODO: make this region adaptively tracking based on face detection
-    let width: u32 = 150;
-    let height: u32 = 50;
-    let dim = (width * height) as usize;
-
-    let test_input = "bbal6n";
-    let (test_frames, test_alignments) = load_data(&rust_root, test_input, &token_map)?;
-
-    // debugging
-    let norm_min = test_frames.iter().cloned().fold(f32::INFINITY, f32::min);
-    let norm_max = test_frames
-        .iter()
-        .cloned()
-        .fold(f32::NEG_INFINITY, f32::max);
-    // println!("Normalized range: min = {:.3}, max = {:.3}", norm_min, norm_max);
-
-    // extract an arbitrary frame (f32) and rescale to [0, 255] range for u8
-    let frame: Vec<u8> = test_frames[0..dim]
-        .iter()
-        .map(|x| {
-            ((x - norm_min) / (norm_max - norm_min) * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8
-        })
-        .collect::<Vec<u8>>();
-
-    // debugging
-    // println!("test_frames.len(): {}", test_frames.len());
-    // println!("frame.len(): {}", frame.len());
-    // println!("Expected per-frame size: {}", width * height);
-    // assert_eq!(frame.len(), dim, "Frame length doesn't match image dimensions!");
-
-    let img_buffer: GrayImage = GrayImage::from_vec(width, height, frame).expect("Failed to create image buffer");
-    img_buffer
-        .save("test_frame.png")
-        .expect("Failed to save image");
-
     // ------------------------------------- Load data for N-gram model -------------------------------------
 
     let corpus_path = data_path
@@ -144,7 +105,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let corpus = corpus_path.to_string_lossy().to_string();
 
     // using extract_slr_dataset function in data_handler.rs to download + extract N-Gram corpus if needed
-    extract_slr_dataset(rust_root.as_str());
+    extract_slr_corpus(rust_root.as_str());
 
     // --------------------------------- N-Gram Model training/evaluation -----------------------------------
 
@@ -194,11 +155,67 @@ fn main() -> Result<(), Box<dyn Error>> {
     let perplexity = lm.perplexity(Box::new(eval_sequences));
     println!("N-gram LM perplexity on eval set: {:.3}", perplexity);
 
+    // ----------------------------------------- Load data for VSRM -----------------------------------------
+
+    // let data_path = root_path.join("data/grid-lr-dataset");
+
+    // height and width of cropped ROI (mouth region)
+    // TODO: make this region adaptively tracking based on face detection
+    let width: u32 = 150;
+    let height: u32 = 50;
+    let dim = (width * height) as usize;
+
+    let test_input = "bbal6n";
+    let (test_frames, test_alignments) = load_grid_corpus(&rust_root, test_input, &token_map)?;
+
+    // debugging
+    let norm_min = test_frames.iter().cloned().fold(f32::INFINITY, f32::min);
+    let norm_max = test_frames
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    // println!("Normalized range: min = {:.3}, max = {:.3}", norm_min, norm_max);
+
+    // extract an arbitrary frame (f32) and rescale to [0, 255] range for u8
+    let frame: Vec<u8> = test_frames[0..dim]
+        .iter()
+        .map(|x| {
+            ((x - norm_min) / (norm_max - norm_min) * 255.0)
+                .round()
+                .clamp(0.0, 255.0) as u8
+        })
+        .collect::<Vec<u8>>();
+
+    // debugging
+    // println!("test_frames.len(): {}", test_frames.len());
+    // println!("frame.len(): {}", frame.len());
+    // println!("Expected per-frame size: {}", width * height);
+    // assert_eq!(frame.len(), dim, "Frame length doesn't match image dimensions!");
+
+    let img_buffer: GrayImage = GrayImage::from_vec(width, height, frame).expect("Failed to create image buffer");
+    img_buffer
+        .save("test_frame.png")
+        .expect("Failed to save image");
+
     // --------------------------------------- LipNet Model training ----------------------------------------
 
-    // let loader_factory = || dataloader::DataLoader::new("/path/to/data").iter();
-    // let model = LRModel::<train::AD>::new(c, out_channels, (h, w), vocab_size, &device);
-    // let (_model, losses) = train::train_loop(model, epochs, learning_rate, loader_factory, blank_index);
+    // define hyperparameters
+    let epochs = 100;
+    let learning_rate = 0.0001;
+    let batch_size = 8;
+    let num_workers = 4;
+    let seed = 42;
+
+    // let batcher = 
+
+    let loader_factory = || DataLoaderBuilder::new(batcher)
+        .batch_size(batch_size)
+        .num_workers(num_workers)
+        .shuffle(seed)
+        .build(dataset);
+
+    let model = LRModel::<train::AD>::new(c, out_channels, (h, w), VOCAB_SIZE, &device);
+    let (_model, losses) = train_loop(model, epochs, learning_rate, loader_factory, BLANK_ID);
 
     Ok(())
 }

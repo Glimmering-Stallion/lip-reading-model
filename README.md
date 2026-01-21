@@ -12,14 +12,15 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - Decodes video files frame by frame.
 - Converts frames to grayscale.
 - Crops a fixed mouth region of interest (ROI).
+- In future, might consider using pre-trained Haar Cascade or a DNN-based Face Detector to find face, then estimate mouth region.
 - Flattens pixel data into contiguous Vec<f32> tensors.
 - Applies per-sample Z-score normalization (zero mean, unit variance).
 - Built dataset utilities that:
   - Infer file name stems automatically.
   - Pair videos with alignment annotations.
   - Download and extract compressed datasets when missing.
-- For now, using [GRID](https://zenodo.org/records/3625687) S1 dataset as proof of concept that the VSRM can converge (make sure to unzip, place "s1" and "alignments" files under "grid-lr-dataset", and place under project's dedicated "data" dir).
-- In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) dataset in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
+- For now, using [GRID](https://zenodo.org/records/3625687) S1 corpus as proof of concept that the VSRM can converge (make sure to unzip, place "s1" and "alignments" files under "grid-lr-corpus", and place under project's dedicated "data" dir).
+- In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
 
 ### Alignment & Vocabulary Handling
 - Implemented parsing of .align files.
@@ -37,7 +38,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Is removed during decoding.
 
 ### Model Architecture (Rust, Burn)
-- Implemented a full spatiotemporal VSLM in Rust.
+- Implemented a full spatiotemporal VSRM in Rust.
 - Uses a 3D convolutional (Conv3D) front-end for joint spatial–temporal feature extraction.
 - Gave strided convolutions to Conv3D layers (over 3D maxpooling) for learned rather than naive downsampling.
 - Uses GroupNorm following Conv3D layers for mitigating internal covariance shift during forward/backward passes. GroupNorm chosen over:
@@ -87,10 +88,11 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - Supports configurable:
   - Language model weight (alpha): controls influence of LM over base VSRM's predictions (lower alpha means trusting VSRM over LM more and vice versa for higher alpha).
   - Insertion bonus (beta): counteracts LM's bias toward shorter sequences (adding more tokens makes log-prob score more negative, where beta adds a small positive bonus).
-- Currently implementing an N-gram lm to improve decoding coherence.
+- Currently implementing an N-gram LM to improve decoding coherence.
 - Training on the [OpenSLR LibriSpeech LM Norm](https://www.openslr.org/11) corpus.
-- For now, just using the pre-trained [3-gram ARPA LM](https://www.openslr.org/11) word-level N-gram model.
-- In future, will consider using a tiny neural LM (char/BPE GRU or small Transformer) with prefix-state caching per beam (running it only on top-K acoustic symbols each step to bound cost; or use it as an N-best reranker after beam, which mitigates per-frame latency).
+- For now, just using self-trained char-level trigram model.
+- In future, will consider using pre-trained [trigram ARPA LM](https://www.openslr.org/11) word-level model.
+- In future, will also consider using a tiny neural LM (char/BPE GRU or small Transformer) with prefix-state caching per beam (running it only on top-K acoustic symbols each step to bound cost; or use it as an N-best reranker after beam, which mitigates per-frame latency).
 
 ### System Design & Engineering Decisions
 - Entire pipeline implemented in Rust.

@@ -18,11 +18,11 @@ The Fix: CTC Loss is a math trick that calculates all possible ways "hello" coul
 
 During evaluation (inference), the model emits those Logits (scores) for a new video it has never seen.
 
-Frame 1: 90% chance of 'h'
-Frame 15: 85% chance of 'h'
-Frame 40: 70% chance of 'blank'
-Frame 75: 92% chance of 'e'
-...and so on.
+- Frame 1: 90% chance of 'h'
+- Frame 15: 85% chance of 'h'
+- Frame 40: 70% chance of 'blank'
+- Frame 75: 92% chance of 'e'
+- ...and so on.
 
 ## 4. The Smart Filter (CTC Decoder + N-gram LM)
 

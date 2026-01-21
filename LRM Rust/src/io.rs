@@ -1,4 +1,4 @@
-// Data handler for loading, streaming, preprocessing
+// I/O handler for high-level fs and networking tasks (loading, streaming, preprocessing)
 
 
 
@@ -112,10 +112,6 @@ pub fn stream_corpus_lines(file_path: String, sample_rate: f64) -> impl Iterator
 
 
 
-/* -------------------------------------------------- Old Data Loading/Processing Functions -------------------------------------------------- */
-
-
-
 /// extract zip file to a given path
 pub fn extract_zip(zip_path: &str, extract_to: &str) {
     let input_file = File::open(zip_path).expect("Failed to open zip file.");
@@ -162,15 +158,15 @@ pub fn extract_gzip(gzip_path: &str, extract_to: &str) {
 
 
 
-/// extract GRID corpus data externally to a given path
-pub fn extract_grid_data(root_path: &str) {
+/// extract GRID corpus externally to a given path
+pub fn extract_grid_corpus(root_path: &str) {
     let root_path = Path::new(root_path);
     let data_dir = root_path.join("data");
-    let grid_dir = data_dir.join("grid-lr-dataset");
+    let grid_dir = data_dir.join("grid-lr-corpus");
 
-    // check if the GRID dataset exists at the given path
+    // check if the GRID corpus exists at the given path
     if !grid_dir.exists() {
-        println!("Grid data not found, downloading...");
+        println!("Grid corpus not found, downloading...");
 
         // use client with NO timeout for large files
         let client = reqwest::blocking::Client::builder()
@@ -192,14 +188,14 @@ pub fn extract_grid_data(root_path: &str) {
                     // extract zip file
                     extract_zip(&output.to_string_lossy(), &root_path.to_string_lossy());
 
-                    // rename extracted subdir to grid-lr-dataset
+                    // rename extracted subdir to grid-lr-corpus
                     let nested_dir = data_dir.join("data");
                     if nested_dir.exists() { fs::rename(&nested_dir, &grid_dir).expect("Failed to rename extracted directory."); }
 
                     // clean up zip file
                     fs::remove_file(&output).expect("Failed to delete zip file.");
                 } else {
-                    eprintln!("Failed to download GRID dataset: {}", response.status());
+                    eprintln!("Failed to download GRID corpus: {}", response.status());
                     return;
                 }
             }
@@ -209,22 +205,22 @@ pub fn extract_grid_data(root_path: &str) {
             }
         }
     } else {
-        println!("GRID dataset already exists, downloading skipped");
+        println!("GRID corpus already exists, downloading skipped");
     }
 }
 
 
 
-/// extract SLR corpus dataset externally to a given path
-pub fn extract_slr_dataset(root_path: &str) {
+/// extract SLR corpus externally to a given path
+pub fn extract_slr_corpus(root_path: &str) {
     let root_path = Path::new(root_path);
     let data_dir = root_path.join("data");
     let slr_dir = data_dir.join("librispeech-lm-norm");
     let final_path = slr_dir.join("librispeech-lm-norm.txt");
 
-    // check if the SLR dataset exists at the given path
+    // check if the SLR corpus exists at the given path
     if !final_path.exists() {
-        println!("SLR dataset not found, downloading...");
+        println!("SLR corpus not found, downloading...");
 
         fs::create_dir_all(&slr_dir).expect("Failed to create SLR directory");
 
@@ -243,7 +239,7 @@ pub fn extract_slr_dataset(root_path: &str) {
                 if response.status().is_success() {
                     let mut file = File::create(&output).expect("Failed to create file.");
                     response.copy_to(&mut file).expect("Failed to write to file.");
-                    println!("SLR dataset downloaded successfully to {}", slr_dir.to_string_lossy());
+                    println!("SLR corpus downloaded successfully to {}", slr_dir.to_string_lossy());
 
                     // extract gzip file
                     extract_gzip(&output.to_string_lossy(), &final_path.to_string_lossy());
@@ -251,7 +247,7 @@ pub fn extract_slr_dataset(root_path: &str) {
                     // clean up gzip file
                     fs::remove_file(&output).expect("Failed to delete gzip file.");
                 } else {
-                    eprintln!("Failed to download SLR dataset: {}", response.status());
+                    eprintln!("Failed to download SLR corpus: {}", response.status());
                     return;
                 }
             }
@@ -261,14 +257,14 @@ pub fn extract_slr_dataset(root_path: &str) {
             }
         }
     } else {
-        println!("SLR dataset already exists, downloading skipped");
+        println!("SLR corpus already exists, downloading skipped");
     }
 }
 
 
 
 /// takes in a video path and outputs a list of floats
-pub fn load_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+pub fn load_grid_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     match opencv::videoio::VideoCapture::from_file(path, opencv::videoio::CAP_ANY) {
         Ok(mut cap) => {
             let mut frames: Vec<f32> = vec![];
@@ -328,7 +324,7 @@ pub fn load_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
 
 
 /// takes in an alignments path (as well as TokenMap struct) and outputs a list of char indices
-pub fn load_alignments(
+pub fn load_grid_alignments(
     path: &str,
     token_map: &TokenMap,
 ) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
@@ -359,8 +355,8 @@ pub fn load_alignments(
 
 
 
-/// function to load data (takes in a data path and outputs frames and alignments)
-pub fn load_data(
+/// function to load GRID data (takes in a data path and outputs frames and alignments)
+pub fn load_grid_corpus(
     root_path: &str,
     video_name: &str,
     token_map: &TokenMap,
@@ -371,7 +367,7 @@ pub fn load_data(
     }
 
     // join project root with LR data path for an absolute path
-    let grid_dataset_path = Path::new(root_path).join("data/grid-lr-dataset");
+    let grid_dataset_path = Path::new(root_path).join("data/grid-lr-corpus");
 
     let video_path = grid_dataset_path
         .join("s1")
@@ -384,8 +380,8 @@ pub fn load_data(
         .join(video_name)
         .with_extension("align");
 
-    let frames = load_video(&video_path.to_string_lossy())?;
-    let alignments = load_alignments(&alignments_path.to_string_lossy(), token_map)?;
+    let frames = load_grid_video(&video_path.to_string_lossy())?;
+    let alignments = load_grid_alignments(&alignments_path.to_string_lossy(), token_map)?;
 
     Ok((frames, alignments))
 }

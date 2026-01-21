@@ -4,7 +4,7 @@
 
 // custom imports
 use crate::ctc::ctc_loss::CtcLossConfig;
-// use crate::ctc::ctc_decode::{greedy_decode /*, beam_search*/};
+use crate::ctc::ctc_decode::CtcDecoderConfig;
 
 // imports
 use crate::model::LRModel;

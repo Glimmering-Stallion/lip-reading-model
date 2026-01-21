@@ -863,12 +863,12 @@ mod tests {
             .join("models")
             .join("ngram_lm.bin");
 
-        let ngram_lm = NgramLMConfig::new()
+        let ngram_lm = NgramConfig::new()
             .with_n(3)
             .with_vocab_size(VOCAB_SIZE)
             .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
 
-        let lm = LanguageModelConfig::NgramLM(ngram_lm); // lm wrapper
+        let lm = LanguageModelConfig::Ngram(ngram_lm); // lm wrapper
 
         let beam_decoder = CtcDecoderConfig::new()
             .with_search_type(CtcDecodeType::BeamSearch)
@@ -923,12 +923,12 @@ mod tests {
             .join("models")
             .join("ngram_lm.bin");
 
-        let ngram_lm = NgramLMConfig::new()
+        let ngram_lm = NgramConfig::new()
             .with_n(3)
             .with_vocab_size(VOCAB_SIZE)
             .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
 
-        let lm = LanguageModelConfig::NgramLM(ngram_lm); // lm wrapper
+        let lm = LanguageModelConfig::Ngram(ngram_lm); // lm wrapper
 
         // native beam search decoder without LM
         let native_beam_decoder = CtcDecoderConfig::new()

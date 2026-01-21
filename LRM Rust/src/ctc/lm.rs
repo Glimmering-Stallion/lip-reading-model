@@ -26,7 +26,7 @@ use serde::{
 
 #[derive(Config, Debug)]
 pub enum LanguageModelConfig {
-    NgramLM(NgramLMConfig),
+    Ngram(NgramConfig),
     // maybe add later: NeuralLM(NeuralLMConfig),
 }
 
@@ -35,7 +35,7 @@ pub enum LanguageModelConfig {
 impl LanguageModelConfig {
     pub fn init(&self) -> Box<dyn LanguageModel + Send + Sync> {
         match self {
-            Self::NgramLM(cfg) => Box::new(cfg.init()),
+            Self::Ngram(cfg) => Box::new(cfg.init()),
             // Self::NeuralLM(NeuralLMConfig) => Box::new(cfg.init()), // placeholder for future neural LM
         }
     }
@@ -52,7 +52,7 @@ pub trait LanguageModel: Debug {
 
 
 #[derive(Config, Debug)]
-pub struct NgramLMConfig {
+pub struct NgramConfig {
     #[config(default = 3)]
     n: usize, // n-gram size
 
@@ -65,12 +65,12 @@ pub struct NgramLMConfig {
 
 
 
-impl NgramLMConfig {
-    pub fn init(&self) -> NgramLM {
+impl NgramConfig {
+    pub fn init(&self) -> Ngram {
         if let Some(path) = &self.path {
-            NgramLM::load(path).unwrap()
+            Ngram::load(path).unwrap()
         } else {
-            NgramLM {
+            Ngram {
                 n: self.n,
                 vocab_size: self.vocab_size,
                 n_gram_counts: HashMap::new(),
@@ -84,7 +84,7 @@ impl NgramLMConfig {
 
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NgramLM {
+pub struct Ngram {
     n: usize,   // n-gram size
     vocab_size: usize, // total vocab size
 
@@ -96,7 +96,7 @@ pub struct NgramLM {
 
 
 
-impl LanguageModel for NgramLM {
+impl LanguageModel for Ngram {
     fn score(&self, sequence: &[usize]) -> f32 {
         if sequence.is_empty() { return 0.0; } // log-prob of empty sequence is 0
 
@@ -156,7 +156,7 @@ impl LanguageModel for NgramLM {
 
 
 
-impl NgramLM {
+impl Ngram {
     pub fn save(&self, path: &str) -> Result<(), Box<dyn Error>> {
         let mut f = File::create(path)?;
         bincode::serde::encode_into_std_write(self, &mut f, config::standard())?;
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn test_ngram_lm_score_with_known_counts() {
          // a tri-gram with vocab: a, b, c,  , _
-        let mut ngram_lm = NgramLMConfig::new()
+        let mut ngram_lm = NgramConfig::new()
             .with_n(3)
             .with_vocab_size(5)
             .init();
@@ -274,7 +274,7 @@ mod tests {
             .join("models")
             .join("ngram_lm.bin");
 
-        let ngram_lm = NgramLMConfig::new()
+        let ngram_lm = NgramConfig::new()
             .with_n(3)
             .with_vocab_size(VOCAB_SIZE)
             .with_path(ngram_lm_path.to_str().map(|s| s.to_string()))
