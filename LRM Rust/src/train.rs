@@ -3,11 +3,12 @@
 
 
 // custom imports
-use crate::ctc::ctc_loss::CtcLossConfig;
-use crate::ctc::ctc_decode::CtcDecoderConfig;
-
+use crate::{
+    ctc::{ctc_decode::CtcDecoderConfig, ctc_loss::CtcLossConfig},
+    batcher::Batch,
+    model::VsrModel,
+};
 // imports
-use crate::model::LRModel;
 use burn::{
     backend::ndarray::NdArray,
     grad_clipping::GradientClippingConfig,
@@ -21,29 +22,18 @@ use burn_autodiff::Autodiff;
 
 
 
-pub type B0 = NdArray<f32>; // backend type
-pub type AD = Autodiff<B0>; // autodiff backend
-
-
-
-#[derive(Clone)]
-pub struct Batch<B: Backend> {
-    inputs: Tensor<B, 5>,       // [N, C, T, H, W]
-    targets: Tensor<B, 2, Int>, // [N, L] (L padded to max target length in batch)
-
-    input_lengths: Tensor<B, 1, Int>,  // [N]
-    target_lengths: Tensor<B, 1, Int>, // [N]
-}
+pub type B = NdArray<f32>; // backend type
+pub type AD = Autodiff<B>; // autodiff backend
 
 
 
 pub fn train_epoch<S: LrScheduler>(
-    mut model: LRModel<AD>,
-    optimizer: &mut impl Optimizer<LRModel<AD>, AD>,
+    mut model: VsrModel<AD>,
+    optimizer: &mut impl Optimizer<VsrModel<AD>, AD>,
     loader: &mut impl Iterator<Item = Batch<AD>>,
     scheduler: &mut S,
     blank_id: usize,
-) -> (LRModel<AD>, f64) {
+) -> (VsrModel<AD>, f64) {
     let mut total_loss = 0.0f64;
     let mut steps = 0usize;
     let reduction = Reduction::Mean;
@@ -98,13 +88,13 @@ pub fn train_epoch<S: LrScheduler>(
 
 
 pub fn train_loop<S, F, L>(
-    mut model: LRModel<AD>,
+    mut model: VsrModel<AD>,
     epochs: usize,
     // learning_rate: f64,
     scheduler: &mut S,
     mut make_loader: F,
     blank_id: usize,
-) -> (LRModel<AD>, Vec<f64>)
+) -> (VsrModel<AD>, Vec<f64>)
 where
     S: LrScheduler,
     L: Iterator<Item = Batch<AD>>,
@@ -134,7 +124,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{model::TrainEval, utils::mean};
+    use crate::{utils::mean};
     use burn::{
         backend::ndarray::NdArray,
         lr_scheduler::noam::NoamLrSchedulerConfig,
@@ -184,8 +174,7 @@ mod tests {
         // dummy model
         let device = Default::default();
         let mut model =
-            LRModel::<AD>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
-        model.eval(); // disable TCN dropout for more determinism in this unit test
+            VsrModel::<AD>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
 
         // debugging: inspect model's layers' shapes
         println!("\nModel layer shapes:");

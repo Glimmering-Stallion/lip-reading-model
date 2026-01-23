@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .filter_map(move |line| train_token_map.chars_to_ids(line.chars().collect()));
 
         // init, train, and save n-gram LM
-        let mut lm = NgramLMConfig::new()
+        let mut lm = NgramConfig::new()
             .with_n(args.n)
             .with_vocab_size(VOCAB_SIZE)
             .init();
@@ -140,7 +140,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("N-gram LM model already exists at {}, skipping corpus streaming and training", output_path.to_string_lossy());
 
         // load existing n-gram LM
-        let lm = NgramLM::load(&output_path.to_str().unwrap()).unwrap();
+        let lm = Ngram::load(&output_path.to_str().unwrap()).unwrap();
         println!("Loaded N-gram LM from {}", output_path.to_string_lossy());
 
         lm
@@ -165,8 +165,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let height: u32 = 50;
     let dim = (width * height) as usize;
 
-    let test_input = "bbal6n";
+    let test_input = "s1/bbal6n";
     let (test_frames, test_alignments) = load_grid_corpus(&rust_root, test_input, &token_map)?;
+    println!("Loaded {} frames for {}", test_frames.len() / dim, test_input);
 
     // debugging
     let norm_min = test_frames.iter().cloned().fold(f32::INFINITY, f32::min);
@@ -205,17 +206,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let batch_size = 8;
     let num_workers = 4;
     let seed = 42;
+    // let device = 
 
-    // let batcher = 
+    // let grid_data = GridDataset::new();
 
-    let loader_factory = || DataLoaderBuilder::new(batcher)
-        .batch_size(batch_size)
-        .num_workers(num_workers)
-        .shuffle(seed)
-        .build(dataset);
+    // let batcher = VsrmBatcher::new(device);
 
-    let model = LRModel::<train::AD>::new(c, out_channels, (h, w), VOCAB_SIZE, &device);
-    let (_model, losses) = train_loop(model, epochs, learning_rate, loader_factory, BLANK_ID);
+    // let loader_factory = || DataLoaderBuilder::new(batcher)
+    //     .batch_size(batch_size)
+    //     .num_workers(num_workers)
+    //     .shuffle(seed)
+    //     .build(grid_data);
+
+    // let model = VsrModel::<train::AD>::new(c, out_channels, (h, w), VOCAB_SIZE, &device);
+    // let (_model, losses) = train_loop(model, epochs, learning_rate, loader_factory, BLANK_ID);
 
     Ok(())
 }

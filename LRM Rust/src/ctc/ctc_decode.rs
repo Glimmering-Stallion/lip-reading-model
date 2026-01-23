@@ -6,8 +6,16 @@
 
 
 // custom imports
-use crate::ctc::lm::{LanguageModel, LanguageModelConfig};
-use crate::utils::{log_sum_exp_2_scalar, log_sum_exp_3_scalar};
+use crate::{
+    ctc::lm::{
+        LanguageModel,
+        LanguageModelConfig,
+    },
+    utils::{
+        log_sum_exp_2_scalar,
+        log_sum_exp_3_scalar,
+    },
+};
 
 // imports
 use burn::{

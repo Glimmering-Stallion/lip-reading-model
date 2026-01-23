@@ -15,7 +15,6 @@ use std::{
     fmt::Debug,
     error::Error,
 };
-
 use bincode::{self, config};
 use serde::{
     Deserialize,
@@ -97,12 +96,18 @@ pub struct Ngram {
 
 
 impl LanguageModel for Ngram {
+    /// score a complete sequence using probability chain rule
+    /// sums log-probabilities of each character given its history
+    /// reminder: in log space for numerical stability
+    /// params:
+    /// - sequence: list of token IDs to evaluate
+    /// returns: total log-probability of the sequence
     fn score(&self, sequence: &[usize]) -> f32 {
         if sequence.is_empty() { return 0.0; } // log-prob of empty sequence is 0
 
         let mut total_log_prob = 0.0;
 
-        // compute log-prob of entire sequence with chain rule
+        // compute log-prob of entire sequence with probability chain rule
         for i in 0..sequence.len() {
             let start = i.saturating_sub(self.n - 1);      // i - (n - 1)
             let prefix = &sequence[start..i];           // (n - 1) history
@@ -113,6 +118,13 @@ impl LanguageModel for Ngram {
         total_log_prob
     }
 
+    /// calculate perplexity of LM on a dataset
+    /// by finding average neg log-prob and exponentiates it
+    /// metric for how well the probability distribution predicts a sample
+    /// params:
+    /// - data: iterator over validation sequences
+    /// returns: perplexity score (lower means more confidence in unseen data)
+    /// note: confidence ≠ accuracy
     fn perplexity(&self, data: Box<dyn Iterator<Item = Vec<usize>>>) -> f32 {
         let mut total_log_prob = 0.0;
         let mut total_tokens = 0;
@@ -133,7 +145,13 @@ impl LanguageModel for Ngram {
         (-avg_log_prob).exp()
     }
 
-    /// return a log-prob bonus for extending a given prefix with a next char
+    /// compute smoothed log-probability of a token given a prefix
+    /// uses Witten-Bell smoothing to interpolate between MLE and backoff probs
+    /// note: mutually recursive with "prob_backoff" to walk down n-gram orders
+    /// params:
+    /// - prefix: sequence of preceding token IDs
+    /// - next: candidate next token ID
+    /// returns: log-probability of 'next' following 'prefix'
     fn next_log_prob(&self, prefix: &[usize], next: usize) -> f32 {
         // get n-gram (prefix + next)
         let mut n_gram = prefix.to_vec();
@@ -169,6 +187,11 @@ impl Ngram {
         Ok(lm)
     }
 
+    /// train N-gram model on some corpus of text
+    /// accumulates counts for all n-grams, prefixes, and unique followers
+    /// params:
+    /// - data: iterator over training sequences
+    /// returns: none (updates internal state)
     pub fn train(&mut self, data: Box<dyn Iterator<Item = Vec<usize>>>) {
         // map of prefix keys and unique follower sets
         let mut uf_container: HashMap<Vec<usize>, HashSet<usize>> = HashMap::new();
@@ -198,6 +221,14 @@ impl Ngram {
             .collect();
     }
 
+    /// calculate backoff probability for a token
+    /// used when a higher-order n-gram has insufficient data or to smooth MLE
+    /// provides "fallback" probability by calling "next_log_prob" with a reduced prefix
+    /// falls back from n-gram -> (n-1)-gram -> ... -> uniform unigram distribution
+    /// params:
+    /// - prefix: the current context being reduced
+    /// - next: the target token to score
+    /// returns: probability (f32) in linear space (0.0 to 1.0)
     fn prob_backoff(&self, prefix: &[usize], next: usize) -> f32 {
         if prefix.is_empty() {
             // unigram base case

@@ -9,7 +9,11 @@ use burn::{
         conv::{Conv1d, Conv1dConfig},
         Dropout, DropoutConfig,
     },
-    tensor::{activation, activation::log_softmax, backend::Backend, Tensor},
+    tensor::{
+        activation,
+        activation::log_softmax,
+        backend::Backend, Tensor
+    },
 };
 
 
@@ -21,7 +25,6 @@ pub struct TcnBlock<B: Backend> {
     padding: usize,
     dropout: Dropout,
     proj: Option<Conv1d<B>>,
-    is_train: bool,
 }
 
 
@@ -59,12 +62,14 @@ impl<B: Backend> TcnBlock<B> {
             padding,
             dropout,
             proj,
-            is_train: true,
         }
     }
 
-    pub fn set_train(&mut self, on: bool) { self.is_train = on; }
-
+    /// forward pass of single TCN block
+    /// applies dilated causal convolution with residual connection/dropout
+    /// params:
+    /// - input: [N, C, T] feature sequence
+    /// returns: [N, C, T] processed sequence with preserved temporal length
     pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         // manually apply causal left padding to time dimension of input
         // default case:    (left, right, top, bottom) = (dim -1, dim -2)
@@ -73,11 +78,11 @@ impl<B: Backend> TcnBlock<B> {
 
         let x = input.clone().pad((self.padding, 0, 0, 0), 0.0); // first left-padding
         let x = activation::relu(self.conv1.forward(x));
-        let x = if self.is_train { self.dropout.forward(x) } else { x };
+        let x = self.dropout.forward(x);
 
         let x = x.pad((self.padding, 0, 0, 0), 0.0); // second left-padding
         let x = activation::relu(self.conv2.forward(x));
-        let x = if self.is_train { self.dropout.forward(x) } else { x };
+        let x = self.dropout.forward(x);
 
         let residual = match &self.proj {
             Some(p) => p.forward(input),
@@ -134,10 +139,6 @@ impl<B: Backend> TemporalConvNet<B> {
         }
 
         Self { tcn_blocks }
-    }
-
-    pub fn set_train(&mut self, on: bool) {
-        for tcn_block in &mut self.tcn_blocks { tcn_block.set_train(on); }
     }
 
     pub fn forward(&self, mut x: Tensor<B, 3>) -> Tensor<B, 3> {
@@ -199,8 +200,8 @@ mod tests {
         let c_out = 32;
 
         let block = TcnBlock::<B>::new(
-            c_in, c_out, 3, // kernel
-            2, // dilation
+            c_in, c_out, 3,   // kernel
+            2,   // dilation
             0.1, // dropout
             &device,
         );

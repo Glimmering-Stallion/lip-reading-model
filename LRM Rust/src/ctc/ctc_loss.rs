@@ -5,13 +5,15 @@
 
 
 // custom imports
-use crate::utils::{log_sum_exp_2_tensor, log_sum_exp_3_tensor};
-
+use crate::utils::{
+    log_sum_exp_2_tensor,
+    log_sum_exp_3_tensor,
+};
 // imports
 use burn::{
     config::Config,
     module::Ignored,
-    nn::loss::{Reduction, CosineEmbeddingLoss},
+    nn::loss::{CosineEmbeddingLoss, Reduction},
     prelude::Int,
     tensor::{activation::log_softmax, backend::Backend, Shape, Tensor},
 };
@@ -50,8 +52,8 @@ pub struct CtcLoss {
 
 impl CtcLoss {
     /// compute CTC loss for batch of samples
-    /// needs separate input/target lengths for true lengths,
-    /// as inputs/targets are assumed to be padded to max lengths in batch
+    /// since inputs/targets are padded to max length found in batch,
+    /// needs separate input/target lengths info for true lengths
     /// params:
     /// - inputs: [N, T_max, Vocab] (logits from model)
     /// - targets: [N, T_max] (target sequences)
@@ -59,7 +61,7 @@ impl CtcLoss {
     /// - target_lengths: [N] (non-padded lengths of targets)
     pub fn forward<B: Backend>(
         &self,
-        inputs: Tensor<B, 3>, // [N, T_max, Vocab] (logits from model)
+        inputs: Tensor<B, 3>,       // [N, T_max, Vocab] (logits from model)
         targets: Tensor<B, 2, Int>, // [N, T_max] (target sequences)
         input_lengths: Tensor<B, 1, Int>, // [N]
         target_lengths: Tensor<B, 1, Int>, // [N]
@@ -73,8 +75,8 @@ impl CtcLoss {
     }
 
     /// like `forward`, but without reduction
-    /// needs separate input/target lengths for true lengths,
-    /// as inputs/targets are assumed to be padded to max lengths in batch
+    /// since inputs/targets are padded to max length found in batch,
+    /// needs separate input/target lengths info for true lengths
     /// params:
     /// - inputs: [N, T_max, Vocab] (logits from model)
     /// - targets: [N, T_max] (target sequences)
@@ -90,7 +92,7 @@ impl CtcLoss {
     ) -> Tensor<B, 1> {
         let device = inputs.device();
         let [n, _, vocab_size] = inputs.dims();
-        let log_probs = log_softmax(inputs, 2);
+        let log_probs = log_softmax(inputs, 2); // turn logits into log-probs
         let mut losses: Vec<Tensor<B, 1>> = Vec::with_capacity(n);
 
         let input_lengths_to_host = input_lengths
@@ -167,7 +169,9 @@ impl CtcLoss {
         // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-interleaved targets)
         let intr_ids = {
             let blank_label_pairs = Tensor::stack::<2>(vec![blanks, labels], 1);
-            blank_label_pairs.reshape([2 * (l_orig + 1)]).slice([0..l_intr])
+            blank_label_pairs
+                .reshape([2 * (l_orig + 1)])
+                .slice([0..l_intr])
         };
 
         // can-skip-by-1 & can-skip-by-2 validity masks
@@ -264,12 +268,7 @@ impl CtcLoss {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::{
-        backend::ndarray::NdArray,
-        nn::loss::Reduction,
-        prelude::Int,
-        tensor::Tensor
-    };
+    use burn::{backend::ndarray::NdArray, nn::loss::Reduction, prelude::Int, tensor::Tensor};
 
     type B = NdArray<f32>;
 

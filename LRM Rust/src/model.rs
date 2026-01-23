@@ -5,6 +5,7 @@
 // imports
 mod tcn;
 use burn::{
+    config::Config,
     module::{Module, Param, ParamId},
     nn::{
         conv::{Conv3d, Conv3dConfig},
@@ -14,7 +15,6 @@ use burn::{
     tensor::{activation, backend::Backend, Shape, Tensor},
 };
 use burn_autodiff::Autodiff;
-use opencv::photo::fast_nl_means_denoising_vec_def;
 
 
 
@@ -27,9 +27,44 @@ static PRINT_ONCE: Once = Once::new();
 
 
 
+#[derive(Config, Debug)]
+pub struct VsrModelConfig {
+    #[config(default = 1)]
+    pub in_channels: usize,
+
+    #[config(default = 128)]
+    pub out_channels: usize,
+
+    // #[config(default = (50, 150))] // default should be (50, 150)
+    pub frame_dims: (usize, usize),
+    
+    #[config(default = 8)]
+    pub norm_groups: usize,
+    
+    #[config(default = 26)]
+    pub vocab_size: usize,
+}
+
+
+
+impl VsrModelConfig {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> VsrModel<B> {
+        VsrModel::new(
+            self.in_channels,
+            self.out_channels,
+            self.frame_dims,
+            self.norm_groups,
+            self.vocab_size,
+            device,
+        )
+    }
+}
+
+
+
 // define model architecture
 #[derive(Module, Debug)]
-pub struct LRModel<B: Backend> {
+pub struct VsrModel<B: Backend> {
     conv1: Conv3d<B>, gn1: GroupNorm<B>,
     conv2: Conv3d<B>, gn2: GroupNorm<B>,
     conv3: Conv3d<B>, gn3: GroupNorm<B>,
@@ -115,7 +150,7 @@ fn print_grad_stats<B: Backend>(label: &str, t: &Tensor<B, 1>) {
 
 
 // default input parameters: input_channels = 1, output_channels = 128, frame_dims = (50, 150), vocab_size = 41
-impl<B: Backend> LRModel<B> {
+impl<B: Backend> VsrModel<B> {
     pub fn new(
         in_channels: usize,
         out_channels: usize,
@@ -200,6 +235,11 @@ impl<B: Backend> LRModel<B> {
         }
     }
 
+    /// forward pass of VSRM architecture
+    /// processes raw video frames into raw unnormalized character scores (logits)
+    /// params:
+    /// - input: [N, C, T, H, W] batch of video frames
+    /// returns: [N, T, Vocab] logits for each timestep
     pub fn forward(&self, input: Tensor<B, 5>) -> Tensor<B, 3> {
         // note: N is samples per batch (batch size), C is channels, T is timesteps (number of frames), H is height (frame dim), W is width (frame dim)
 
@@ -238,27 +278,6 @@ impl<B: Backend> LRModel<B> {
 
 
 
-pub trait TrainEval {
-    fn set_train(&mut self, on: bool);
-    fn train(&mut self) {
-        self.set_train(true);
-    }
-    fn eval(&mut self) {
-        self.set_train(false);
-    }
-}
-
-
-
-impl<B: Backend> TrainEval for LRModel<B> {
-    fn set_train(&mut self, on: bool) {
-        self.tcn1.set_train(on);
-        self.tcn2.set_train(on);
-    }
-}
-
-
-
 #[cfg(test)]
 pub struct ParamIds {
     pub conv1_w: ParamId,
@@ -270,7 +289,7 @@ pub struct ParamIds {
 
 
 #[cfg(test)]
-impl<B0: Backend> LRModel<Autodiff<B0>> {
+impl<B0: Backend> VsrModel<Autodiff<B0>> {
     pub fn param_ids(&self) -> ParamIds {
         ParamIds {
             conv1_w: self.conv1.weight.id,
@@ -381,7 +400,7 @@ mod tests {
         let norm_groups = 5;
 
         let device = Default::default();
-        let model = LRModel::<B>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
+        let model = VsrModel::<B>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
 
         let input = Tensor::<B, 5>::zeros([n, c, t, h, w], &device);
         let output = model.forward(input);

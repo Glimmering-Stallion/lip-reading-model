@@ -4,6 +4,14 @@
 
 use crate::prelude::*;
 use flate2::read::GzDecoder;
+use indicatif::{ProgressBar, ProgressStyle};
+use opencv::{
+    self,
+    // core::{MatTrait, Size},
+    prelude::*,
+    videoio::VideoCaptureTrait, // for CV tasks
+    photo::fast_nl_means_denoising_vec_def,
+};
 use rand::Rng;
 use reqwest::blocking::{get, Client};
 // use serde_json::Value;
@@ -14,14 +22,7 @@ use std::{
     path::Path,
     sync::{atomic, Arc},
 };
-use opencv::{
-    self,
-    // core::{MatTrait, Size},
-    prelude::*,
-    videoio::VideoCaptureTrait, // for CV tasks
-};
 use tar::Archive;
-use indicatif::{ProgressBar, ProgressStyle};
 
 
 
@@ -33,7 +34,9 @@ pub fn stream_txt_lines<P: AsRef<Path>>(path: P) -> Result<Vec<String>, Box<dyn 
     let mut out = Vec::new();
     for line in reader.lines().flatten() {
         let text = line.trim().to_string();
-        if !text.is_empty() { out.push(text); }
+        if !text.is_empty() {
+            out.push(text);
+        }
     }
 
     Ok(out)
@@ -52,7 +55,9 @@ pub fn stream_jsonl_gz(url: String) -> Result<Vec<String>, Box<dyn Error>> {
     for line in reader.lines().flatten() {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
             if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
-                if !text.is_empty() { out.push(text.to_string()); }
+                if !text.is_empty() {
+                    out.push(text.to_string());
+                }
             }
         }
     }
@@ -85,13 +90,15 @@ pub fn stream_corpus_lines(file_path: String, sample_rate: f64) -> impl Iterator
     let reader = BufReader::new(file);
     let mut rng = rand::rng();
 
-    reader.lines()
+    reader
+        .lines()
         .filter_map(|line| line.ok())
         .inspect(move |line| pb_inspect.inc(line.len() as u64 + 1)) // update bar per line read
         .filter(move |_| rng.random::<f64>() < sample_rate) // keep line with certain prob
         .inspect(move |_| {
             let count = count_filter.fetch_add(1, atomic::Ordering::SeqCst);
-            if count % 1000 == 0 { // update message every 1000 lines to save CPU
+            if count % 1000 == 0 {
+                // update message every 1000 lines to save CPU
                 pb_filter.set_message(format!("{} lines kept", count));
             }
         })
@@ -143,7 +150,7 @@ pub fn extract_zip(zip_path: &str, extract_to: &str) {
 pub fn extract_gzip(gzip_path: &str, extract_to: &str) {
     let input_file = File::open(gzip_path).expect("Failed to open gzip file.");
     let mut decoder = GzDecoder::new(input_file);
-    
+
     // get folder path from the 'extract_to' string and create it
     let path = Path::new(extract_to);
     if let Some(parent) = path.parent() {
@@ -182,15 +189,23 @@ pub fn extract_grid_corpus(root_path: &str) {
             Ok(mut response) => {
                 if response.status().is_success() {
                     let mut file = File::create(&output).expect("Failed to create file.");
-                    response.copy_to(&mut file).expect("Failed to write to file.");
-                    println!("File downloaded successfully to {}", grid_dir.to_string_lossy());
+                    response
+                        .copy_to(&mut file)
+                        .expect("Failed to write to file.");
+                    println!(
+                        "File downloaded successfully to {}",
+                        grid_dir.to_string_lossy()
+                    );
 
                     // extract zip file
                     extract_zip(&output.to_string_lossy(), &root_path.to_string_lossy());
 
                     // rename extracted subdir to grid-lr-corpus
                     let nested_dir = data_dir.join("data");
-                    if nested_dir.exists() { fs::rename(&nested_dir, &grid_dir).expect("Failed to rename extracted directory."); }
+                    if nested_dir.exists() {
+                        fs::rename(&nested_dir, &grid_dir)
+                            .expect("Failed to rename extracted directory.");
+                    }
 
                     // clean up zip file
                     fs::remove_file(&output).expect("Failed to delete zip file.");
@@ -238,8 +253,13 @@ pub fn extract_slr_corpus(root_path: &str) {
             Ok(mut response) => {
                 if response.status().is_success() {
                     let mut file = File::create(&output).expect("Failed to create file.");
-                    response.copy_to(&mut file).expect("Failed to write to file.");
-                    println!("SLR corpus downloaded successfully to {}", slr_dir.to_string_lossy());
+                    response
+                        .copy_to(&mut file)
+                        .expect("Failed to write to file.");
+                    println!(
+                        "SLR corpus downloaded successfully to {}",
+                        slr_dir.to_string_lossy()
+                    );
 
                     // extract gzip file
                     extract_gzip(&output.to_string_lossy(), &final_path.to_string_lossy());
@@ -358,26 +378,25 @@ pub fn load_grid_alignments(
 /// function to load GRID data (takes in a data path and outputs frames and alignments)
 pub fn load_grid_corpus(
     root_path: &str,
-    video_name: &str,
+    entry_name: &str,
     token_map: &TokenMap,
 ) -> Result<(Vec<f32>, Vec<usize>), Box<dyn std::error::Error>> {
-    if video_name.trim().is_empty() {
-        eprintln!("Error: Provided video_name is empty.");
-        return Err("Failed to extract filename: video_name was empty.".into());
+     // entry_name in the form of "s1/bbaf2n"
+    if entry_name.trim().is_empty() {
+        eprintln!("Error: Provided entry_name is empty.");
+        return Err("Failed to extract filename: entry_name was empty.".into());
     }
 
     // join project root with LR data path for an absolute path
     let grid_dataset_path = Path::new(root_path).join("data/grid-lr-corpus");
 
     let video_path = grid_dataset_path
-        .join("s1")
-        .join(video_name)
+        .join(entry_name)
         .with_extension("mpg");
 
     let alignments_path = grid_dataset_path
         .join("alignments")
-        .join("s1")
-        .join(video_name)
+        .join(entry_name)
         .with_extension("align");
 
     let frames = load_grid_video(&video_path.to_string_lossy())?;
