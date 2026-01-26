@@ -1,4 +1,4 @@
-// Model training loop
+// VSRM manual training loop for low-level control (like custom gradient inspection, and debugging CTC-specific edge cases)
 
 
 
@@ -8,17 +8,27 @@ use crate::{
     batcher::Batch,
     model::VsrModel,
 };
+
 // imports
 use burn::{
-    backend::ndarray::NdArray,
+    backend::{
+        Autodiff,
+        ndarray::NdArray,
+    },
     grad_clipping::GradientClippingConfig,
     lr_scheduler::LrScheduler,
     nn::loss::Reduction,
-    optim::{AdamConfig, GradientsParams, Optimizer},
+    optim::{
+        AdamConfig,
+        GradientsParams,
+        Optimizer,
+    },
     prelude::Int,
-    tensor::{backend::Backend, Tensor},
+    tensor::{
+        backend::Backend,
+        Tensor,
+    },
 };
-use burn_autodiff::Autodiff;
 
 
 
@@ -124,14 +134,22 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{utils::mean};
+    use crate::{
+        vocab::{
+            VOCAB_SIZE,
+            BLANK_ID,
+        },
+        utils::mean,
+    };
     use burn::{
-        backend::ndarray::NdArray,
+            backend::{
+                Autodiff,
+                ndarray::NdArray,
+            },
         lr_scheduler::noam::NoamLrSchedulerConfig,
         prelude::Int,
         tensor::{backend::Backend, Distribution, Tensor},
     };
-    use burn_autodiff::Autodiff;
 
     // backends
     type B = NdArray<f32>;
@@ -149,14 +167,13 @@ mod tests {
         // (batch size, channels, timesteps, height, width, sequence length), where t ≥ 2l - 1
         let (n, c, t, h, w, l) = (1, 1, 6, 16, 16, 3);
         let out_channels = 10;
-        let vocab_size = 41;
-        let blank_id = vocab_size - 1; // last index is blank token
         let epochs = 25;
         let batches = 2; // num batches per epoch
         let norm_groups = 5;
         let in_dist = Distribution::Uniform(-0.5, 0.5);
-        let tgt_dist = Distribution::Uniform(0.0, (vocab_size - 2) as f64);
-        B::seed(69);
+        let tgt_dist = Distribution::Uniform(0.0, (VOCAB_SIZE - 2) as f64);
+        let device = Default::default();
+        B::seed(&device, 69);
 
         let total_steps = epochs * batches; // batch-wise steps
         let scale_factor = 3e-3;
@@ -172,9 +189,8 @@ mod tests {
             .unwrap();
 
         // dummy model
-        let device = Default::default();
         let mut model =
-            VsrModel::<AD>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
+            VsrModel::<AD>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
 
         // debugging: inspect model's layers' shapes
         println!("\nModel layer shapes:");
@@ -211,7 +227,7 @@ mod tests {
 
         // run training loop
         println!("\nRunning training loop with {} epochs\n", epochs);
-        let (_, losses) = train_loop(model, epochs, &mut noam_lr, make_loader, blank_id);
+        let (_, losses) = train_loop(model, epochs, &mut noam_lr, make_loader, BLANK_ID);
 
         let n = 5;
         let first_n = losses[0..n].to_vec();

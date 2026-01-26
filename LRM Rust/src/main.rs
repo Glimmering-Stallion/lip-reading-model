@@ -18,11 +18,11 @@
 
 
 
+// imports
 use burn::{
     module::Module,
     data::dataloader::DataLoaderBuilder,
 };
-// imports
 use lrm_rust::{ctc::lm::{self, LanguageModel}, prelude::*};
 use clap::Parser;
 use image::{GrayImage, Luma};
@@ -56,6 +56,7 @@ struct Args {
 
     /// path to output model file
     #[arg(long, default_value = "ngram_lm.bin")]
+    
     output: String,
 
     /// N-gram size
@@ -122,7 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let train_sequences = stream_corpus_lines(corpus.clone(), 0.05)
             .filter_map(move |line| train_token_map.chars_to_ids(line.chars().collect()));
 
-        // init, train, and save n-gram LM
+        // init, train, and save N-gram LM
         let mut lm = NgramConfig::new()
             .with_n(args.n)
             .with_vocab_size(VOCAB_SIZE)
@@ -139,14 +140,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     } else {
         println!("N-gram LM model already exists at {}, skipping corpus streaming and training", output_path.to_string_lossy());
 
-        // load existing n-gram LM
+        // load existing N-gram LM
         let lm = Ngram::load(&output_path.to_str().unwrap()).unwrap();
         println!("Loaded N-gram LM from {}", output_path.to_string_lossy());
 
         lm
     };
 
-    // evaluate n-gram LM on held-out eval set (0.1% sampling rate)
+    // evaluate N-gram LM on held-out eval set (0.1% sampling rate)
     let eval_token_map = Arc::clone(&token_map);
     let eval_sequences = stream_corpus_lines(corpus.clone(), 0.05)
         .filter_map(move |line| eval_token_map.chars_to_ids(line.chars().collect()))

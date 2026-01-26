@@ -68,9 +68,14 @@ pub fn stream_jsonl_gz(url: String) -> Result<Vec<String>, Box<dyn Error>> {
 
 
 /// stream all text lines under a corpus line by line while applying sampling and basic preprocessing (takes in a file path as String for ownership)
-pub fn stream_corpus_lines(file_path: String, sample_rate: f64) -> impl Iterator<Item = String> {
-    println!("Streaming corpus lines from: {}", file_path);
-    let file = File::open(&file_path).expect("Failed to open corpus file");
+pub fn stream_corpus_lines<P: AsRef<Path>>(
+    file_path: P,
+    sample_rate: f64
+) -> impl Iterator<Item = String> {
+    let file_path = file_path.as_ref();
+    println!("Streaming corpus lines from: {}", file_path.to_string_lossy());
+
+    let file = File::open(file_path).expect("Failed to open corpus file");
     let metadata = file.metadata().expect("Failed to get file metadata");
     let file_size = metadata.len();
 
@@ -120,14 +125,17 @@ pub fn stream_corpus_lines(file_path: String, sample_rate: f64) -> impl Iterator
 
 
 /// extract zip file to a given path
-pub fn extract_zip(zip_path: &str, extract_to: &str) {
+pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
+    let zip_path = zip_path.as_ref();
+    let extract_to = extract_to.as_ref();
+
     let input_file = File::open(zip_path).expect("Failed to open zip file.");
     let mut archive = zip::ZipArchive::new(input_file).expect("Failed to read zip file.");
 
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("Failed to read file from zip.");
         let out_path = match file.enclosed_name() {
-            Some(path) => Path::new(extract_to).join(path),
+            Some(path) => extract_to.join(path),
             None => continue, // skip files with invalid names if need be
         };
 
@@ -141,33 +149,35 @@ pub fn extract_zip(zip_path: &str, extract_to: &str) {
             io::copy(&mut file, &mut outfile).expect("Failed to write file.");
         }
     }
-    println!("Extracted zip file to {}", extract_to);
+    println!("Extracted zip file to {}", extract_to.to_string_lossy());
 }
 
 
 
 /// extract gzip file to a given path
-pub fn extract_gzip(gzip_path: &str, extract_to: &str) {
+pub fn extract_gzip<P: AsRef<Path>, Q: AsRef<Path>>(gzip_path: P, extract_to: Q) {
+    let zip_path = gzip_path.as_ref();
+    let extract_to = extract_to.as_ref();
+
     let input_file = File::open(gzip_path).expect("Failed to open gzip file.");
     let mut decoder = GzDecoder::new(input_file);
 
     // get folder path from the 'extract_to' string and create it
-    let path = Path::new(extract_to);
-    if let Some(parent) = path.parent() {
+    if let Some(parent) = extract_to.parent() {
         fs::create_dir_all(parent).expect("Failed to create parent directory for extraction.");
     }
 
-    let mut out_file = File::create(path).expect("Failed to create output file.");
+    let mut out_file = File::create(extract_to).expect("Failed to create output file.");
 
     io::copy(&mut decoder, &mut out_file).expect("Failed to decompress gzip content.");
-    println!("Extracted gzip file to {}", extract_to);
+    println!("Extracted gzip file to {}", extract_to.to_string_lossy());
 }
 
 
 
 /// extract GRID corpus externally to a given path
-pub fn extract_grid_corpus(root_path: &str) {
-    let root_path = Path::new(root_path);
+pub fn extract_grid_corpus<P: AsRef<Path>>(root_path: P) {
+    let root_path = root_path.as_ref();
     let data_dir = root_path.join("data");
     let grid_dir = data_dir.join("grid-lr-corpus");
 
@@ -198,7 +208,7 @@ pub fn extract_grid_corpus(root_path: &str) {
                     );
 
                     // extract zip file
-                    extract_zip(&output.to_string_lossy(), &root_path.to_string_lossy());
+                    extract_zip(&output, &root_path);
 
                     // rename extracted subdir to grid-lr-corpus
                     let nested_dir = data_dir.join("data");
@@ -227,8 +237,8 @@ pub fn extract_grid_corpus(root_path: &str) {
 
 
 /// extract SLR corpus externally to a given path
-pub fn extract_slr_corpus(root_path: &str) {
-    let root_path = Path::new(root_path);
+pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
+    let root_path = root_path.as_ref();
     let data_dir = root_path.join("data");
     let slr_dir = data_dir.join("librispeech-lm-norm");
     let final_path = slr_dir.join("librispeech-lm-norm.txt");
@@ -262,7 +272,7 @@ pub fn extract_slr_corpus(root_path: &str) {
                     );
 
                     // extract gzip file
-                    extract_gzip(&output.to_string_lossy(), &final_path.to_string_lossy());
+                    extract_gzip(&output, &final_path);
 
                     // clean up gzip file
                     fs::remove_file(&output).expect("Failed to delete gzip file.");
@@ -284,7 +294,9 @@ pub fn extract_slr_corpus(root_path: &str) {
 
 
 /// takes in a video path and outputs a list of floats
-pub fn load_grid_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+    let path = path.as_ref().to_str().ok_or("Non-UTF8 path")?;
+
     match opencv::videoio::VideoCapture::from_file(path, opencv::videoio::CAP_ANY) {
         Ok(mut cap) => {
             let mut frames: Vec<f32> = vec![];
@@ -319,8 +331,8 @@ pub fn load_grid_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error
                     .data_bytes()
                     .expect("Failed to get frame data")
                     .iter()
-                    .map(|&pixel| pixel as f32)
-                    .collect();
+                    .map(|&pixel: &u8| pixel as f32)
+                    .collect::<Vec<f32>>();
                 frames.extend(flattened_frame);
             }
             // standardize frames (by centering to zero mean and scaling to unit variance)
@@ -329,7 +341,7 @@ pub fn load_grid_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error
 
             frames = frames
                 .iter()
-                .map(|&x| (x - mean) / std_dev)
+                .map(|&x: &f32| (x - mean) / std_dev)
                 .collect::<Vec<f32>>(); // frames as a vector of pixels as floats
 
             Ok(frames)
@@ -344,10 +356,12 @@ pub fn load_grid_video(path: &str) -> Result<Vec<f32>, Box<dyn std::error::Error
 
 
 /// takes in an alignments path (as well as TokenMap struct) and outputs a list of char indices
-pub fn load_grid_alignments(
-    path: &str,
+pub fn load_grid_alignments<P: AsRef<Path>>(
+    path: P,
     token_map: &TokenMap,
 ) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+    let path = path.as_ref();
+
     match std::fs::File::open(&path) {
         Ok(file) => {
             let mut tokens: Vec<String> = vec![];
@@ -376,11 +390,13 @@ pub fn load_grid_alignments(
 
 
 /// function to load GRID data (takes in a data path and outputs frames and alignments)
-pub fn load_grid_corpus(
-    root_path: &str,
+pub fn load_grid_corpus<P: AsRef<Path>>(
+    root_path: P,
     entry_name: &str,
     token_map: &TokenMap,
 ) -> Result<(Vec<f32>, Vec<usize>), Box<dyn std::error::Error>> {
+    let root_path = root_path.as_ref();
+
      // entry_name in the form of "s1/bbaf2n"
     if entry_name.trim().is_empty() {
         eprintln!("Error: Provided entry_name is empty.");
@@ -388,7 +404,7 @@ pub fn load_grid_corpus(
     }
 
     // join project root with LR data path for an absolute path
-    let grid_dataset_path = Path::new(root_path).join("data/grid-lr-corpus");
+    let grid_dataset_path = root_path.join("data/grid-lr-corpus");
 
     let video_path = grid_dataset_path
         .join(entry_name)
@@ -399,8 +415,8 @@ pub fn load_grid_corpus(
         .join(entry_name)
         .with_extension("align");
 
-    let frames = load_grid_video(&video_path.to_string_lossy())?;
-    let alignments = load_grid_alignments(&alignments_path.to_string_lossy(), token_map)?;
+    let frames = load_grid_video(&video_path)?;
+    let alignments = load_grid_alignments(&alignments_path, token_map)?;
 
     Ok((frames, alignments))
 }

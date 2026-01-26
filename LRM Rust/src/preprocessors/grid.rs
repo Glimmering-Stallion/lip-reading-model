@@ -1,4 +1,4 @@
-// Data standardization for GRID audio-visual sentence corpus
+// Data preprocessing/standardization for GRID audio-visual sentence corpus
 
 
 
@@ -28,7 +28,7 @@ use std::{
 
 
 pub struct GridDataset {
-    root_path: String,
+    root_path: PathBuf,
     entries: Vec<String>,
     token_map: TokenMap,
 }
@@ -36,13 +36,15 @@ pub struct GridDataset {
 
 
 impl GridDataset {
-    pub fn new(
-        root_path: &str,
+    pub fn new<P: AsRef<Path>>(
+        root_path: P,
         split: DatasetSplit,
         split_thresholds: (f32, f32),
         token_map: TokenMap
     ) -> Self {
-        let grid_dir = Path::new(root_path)
+        let root_path = root_path.as_ref();
+
+        let grid_dir = root_path
             .join("data")
             .join("grid-lr-corpus");
 
@@ -96,7 +98,7 @@ impl GridDataset {
         println!("Initialized GridDataset ({:?}) with {} samples from {:?}", split, entries.len(), selected_speakers);
 
         Self {
-            root_path: root_path.to_string(),
+            root_path: root_path.to_path_buf(),
             entries,
             token_map,
         }

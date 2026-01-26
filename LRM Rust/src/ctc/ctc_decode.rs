@@ -20,7 +20,11 @@ use crate::{
 // imports
 use burn::{
     config::Config,
-    tensor::{activation::log_softmax, backend::Backend, Tensor},
+    tensor::{
+        activation::log_softmax,
+        backend::Backend,
+        Tensor,
+    },
 };
 use std::{
     collections::HashMap,
@@ -159,12 +163,12 @@ impl CtcDecoder {
         inputs: Tensor<B, 3>
     ) -> Vec<Vec<i64>> {
         let log_probs = log_softmax(inputs, 2); // [N, T, V]
-        let (n, t, vocab_size) = (log_probs.clone().dims()[0], log_probs.clone().dims()[1], log_probs.clone().dims()[2]);
+        let [n, t, vocab_size] = log_probs.clone().dims();
         let mut top_seq_ids = Vec::with_capacity(n);
 
         // loop over samples in batch
         for sample in 0..n {
-            let sample_log_probs = log_probs.clone().slice([sample..(sample + 1), 0..t, 0..vocab_size]).squeeze(0);
+            let sample_log_probs = log_probs.clone().slice([sample..(sample + 1), 0..t, 0..vocab_size]).squeeze::<2>(); // [T, V]
             top_seq_ids.push(self.per_sample_decode(sample_log_probs));
         }
 
@@ -204,7 +208,7 @@ impl CtcDecoder {
 
             // grab chunk of log-probs of each symbol at current timestep (given by model)
             let log_probs_t: Vec<f32> = log_probs.clone().slice([t..(t + 1), 0..vocab_size])
-                .squeeze::<1>(0)
+                .squeeze::<1>()
                 .to_data().convert::<f32>().to_vec().unwrap();
 
             for prefix in prefixes.into_iter() {

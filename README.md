@@ -1,15 +1,15 @@
 # Project: End-to-End Visual Speech Recognition Model (VSRM) in Rust (Audioless)
 
 Objective:
-Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering data ingestion, model architecture, training, and decoding, with a long-term goal of live camera inference using a dynamically tracking mouth-cropped ROI.
+Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering data ingestion, model architecture, training, loss computation, decoding, and language model integration, with a long-term goal of live camera inference using a dynamically tracking mouth-cropped ROI.
 
 ---
 
 ## Accomplishments to Date
 
-### Data Ingestion & Preprocessing
+### Data Ingestion & Preprocessing (```io.rs``` and ```preprocessors/grid.rs```)
 
-- For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (make sure to unzip, place speaker ("s1", "s2", ..., "s34") and "alignments" files under a self created "grid-lr-corpus", and place under project's dedicated "data" dir).
+- For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") and "alignments" directories placed under a self created "data/grid-lr-corpus").
 - In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
 - Built dataset utilities that:
   - Infer file name stems automatically.
@@ -24,14 +24,15 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Flattens pixel data into contiguous ```Vec<f32>``` tensors.
   - Scales pixel values to within $[0, 1]$ for normalization.
 
-### Data Batching
+### Data Batching (```batcher.rs```)
 
 - Developed a custom ```VsrmBatcher``` that handles padding by:
-  - Padding all video sequences in a batch to the maximum found sequence length (timesteps) within that batch with zeros.
-  - Synchronizing variable-length transcript sequences by padding with ```BLANK_ID```.
+  - Finding longest video/transcript sequences among a batch of sequences (as ```max_t```/```max_l```).
+  - Padding variable-length video sequences in that batch to ```max_t``` with $0$.
+  - Padding variable-length transcript sequences in that batch to ```max_l``` with ```BLANK_ID```.
 - This batcher uses a CPU-to-GPU staging strategy, where tensors are collated on the ```NdArray``` CPU backend before a single-shot move to the compute device for minimizing PCIe bus latency.
 
-### Alignment & Vocabulary Handling
+### Alignment & Vocabulary Handling (```vocab.rs```)
 
 - Implemented parsing of .align files.
 - Filters out silence tokens ("sil").
@@ -47,7 +48,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Never appears in training targets.
   - Is removed during decoding.
 
-### Model Architecture (Rust, Burn)
+### Model Architecture (```model.rs``` and ```model/tcn.rs```)
 
 - Implemented a full spatiotemporal VSRM in Rust.
 - Uses a 3D convolutional (Conv3D) front-end for joint spatial–temporal feature extraction.
@@ -65,36 +66,39 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Dropout and non-linear activations
 - Added a projection head mapping features to per-time-step character logits.
 
-### Training Pipeline
+### Training Pipeline (```learner.rs``` and ```train.rs```)
 
-- Implemented a complete training loop in Rust.
-- Supports batching and epoch-based training.
+- Keeping a legacy ```train.rs``` file implementing a manual training loop to test model convergence on dummy data.
+- Implemented a complete training and validation pipeline using Burn's ```Learner``` API in Rust as ```learner.rs```.
+- Supports:
+  - Batching
+  - Epoch-based training
+  - Auto-checkpointing
+  - Metric logging
+  - Train/validation dataste splitting
 - Handles dynamic train/eval mode switching implicitly with Burn's ```Autodiff``` and ```Module``` traits (which allows gradient tracking).
 - Integrated the Adam optimizer with configurable learning rates.
 - Implemented Noam-style learning rate warmup and scheduling.
 - Added numerical utility functions (mean, standard deviation, normalization).
 
-### Custom CTC Loss
+### Custom CTC Loss (```ctc/ctc_loss.rs```)
 
 - Implemented Connectionist Temporal Classification (CTC) loss from scratch.
 - Uses forward-backward dynamic programming.
 - Performs all computations in log-space for numerical stability.
-- Correctly handles:
-  - Blank symbols
-  - Repeated labels
-  - Variable-length input and target sequences
+- Correctly handles blank symbols, repeated labels, and variable-length input/target sequences
 - Designed to be framework-agnostic within Burn.
 
-### Custom CTC Decoding & Inference
+### Custom CTC Decoding & Inference (```ctc/ctc_decoder.rs```)
 
-- Implemented greedy CTC decoding from scratch.
-- Implemented prefix beam search decoding, including:
+- Implemented CTC decoding (greedy and prefix beam search methods) from scratch.
+- Prefix beam search decoding has:
   - Separate blank and non-blank probability tracking
   - Log-probability accumulation
   - Beam pruning and prefix merging
-- Decoder architecture designed to support incremental and streaming inference.
+- Decoder architecture designed to support incremental/streaming inference.
 
-### Language Model Integration (In Progress)
+### Language Model Integration (```ctc/lm.rs```)
 
 - Incorporated a dedicated language model interface for CTC decoder's prefix beam search.
 - Designed for character-level N-gram scoring.
@@ -125,9 +129,13 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Current Status
 
-- Offline lip-reading inference and language model integration is functionally complete, pending VSRM train/eval.
-- Real-time inference pipeline is architecturally planned but not yet implemented.
+- I/O and data aqcuisition helper functions are finished.
+- Data preprocessing and batching pipeline is officially done.
+- Offline lip-reading inference and language model integration is functionally complete.
 - Greedy decoding and Beam Search decoding with a char-level N-gram language model both work end-to-end.
+- Training and validation pipeline is implemented and wired into Burn's learner framework.
+- Pending VSRM train/eval.
+- Dynamic mouth tracking planned but not implemented yet.
 
 ---
 

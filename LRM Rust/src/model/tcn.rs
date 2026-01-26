@@ -11,8 +11,8 @@ use burn::{
     },
     tensor::{
         activation,
-        activation::log_softmax,
-        backend::Backend, Tensor
+        backend::Backend,
+        Tensor,
     },
 };
 
@@ -188,8 +188,13 @@ impl TemporalConvNetConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::{backend::ndarray::NdArray, tensor::Tensor};
-    use burn_ndarray::NdArrayDevice;
+    use burn::{
+        backend::ndarray::{
+            NdArray,
+            NdArrayDevice,
+        },
+        tensor::Tensor
+    };
 
     type B = NdArray<f32>;
 

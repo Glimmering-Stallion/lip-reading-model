@@ -24,7 +24,7 @@ pub type CpuB = NdArray<f32>; // CPU backend for data staging area
 
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Batch<B: Backend> {
     pub inputs: Tensor<B, 5>,               // [N, C, T, H, W]
     pub targets: Tensor<B, 2, Int>,         // [N, L] (L padded to max target length in batch)
@@ -45,9 +45,17 @@ pub struct VsrmItem {
 
 
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct VsrmBatcher<B: Backend> {
     pub device: B::Device,
+}
+
+
+
+impl<B: Backend> VsrmBatcher<B> {
+    pub fn new(device: B::Device) -> Self {
+        Self { device }
+    }
 }
 
 
@@ -82,7 +90,7 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
         let mut target_lengths: Vec<i32> = Vec::with_capacity(items.len());
 
         // part A: pad frames
-        // part B: pad targets
+        // part B: pad sequences
         // part C: one shot stack
         for item in items {
             // isolate curr frame's dims

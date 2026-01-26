@@ -15,6 +15,7 @@ pub const BLANK_ID: usize = VOCAB_SIZE - 1;
 
 
 
+#[derive(Clone)]
 pub struct TokenMap {
     id_of: HashMap<char, usize>,
     char_of: Vec<char>,

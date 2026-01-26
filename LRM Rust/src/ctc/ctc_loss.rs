@@ -13,9 +13,14 @@ use crate::utils::{
 use burn::{
     config::Config,
     module::Ignored,
-    nn::loss::{CosineEmbeddingLoss, Reduction},
+    nn::loss::Reduction,
     prelude::Int,
-    tensor::{activation::log_softmax, backend::Backend, Shape, Tensor},
+    tensor::{
+        activation::log_softmax,
+        backend::Backend,
+        Shape,
+        Tensor,
+    },
 };
 
 

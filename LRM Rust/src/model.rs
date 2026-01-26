@@ -5,16 +5,29 @@
 // imports
 mod tcn;
 use burn::{
+    backend::Autodiff,
     config::Config,
     module::{Module, Param, ParamId},
     nn::{
-        conv::{Conv3d, Conv3dConfig},
-        GroupNorm, GroupNormConfig, Initializer, Linear, LinearConfig, PaddingConfig3d,
+        conv::{
+            Conv3d,
+            Conv3dConfig,
+        },
+        GroupNorm,
+        GroupNormConfig,
+        Initializer,
+        Linear,
+        LinearConfig,
+        PaddingConfig3d,
     },
     optim::GradientsParams,
-    tensor::{activation, backend::Backend, Shape, Tensor},
+    tensor::{
+        activation,
+        backend::Backend,
+        Shape,
+        Tensor,
+    },
 };
-use burn_autodiff::Autodiff;
 
 
 
@@ -223,12 +236,9 @@ impl<B: Backend> VsrModel<B> {
             .init(device);
 
         Self {
-            conv1,
-            gn1,
-            conv2,
-            gn2,
-            conv3,
-            gn3,
+            conv1, gn1,
+            conv2, gn2,
+            conv3, gn3,
             tcn1,
             tcn2,
             fc,
@@ -387,7 +397,14 @@ impl<B0: Backend> VsrModel<Autodiff<B0>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::{backend::ndarray::NdArray, tensor::Tensor};
+    use crate::vocab::{
+        VOCAB_SIZE,
+        BLANK_ID,
+    };
+    use burn::{
+        backend::ndarray::NdArray,
+        tensor::Tensor,
+    };
 
     // choosing backend for testing
     type B = NdArray<f32>;
@@ -396,15 +413,14 @@ mod tests {
     fn model_input_shapes_data_flow_small() {
         let (n, c, t, h, w) = (1, 1, 8, 16, 16);
         let out_channels = 10;
-        let vocab_size = 41;
         let norm_groups = 5;
 
         let device = Default::default();
-        let model = VsrModel::<B>::new(c, out_channels, (h, w), norm_groups, vocab_size, &device);
+        let model = VsrModel::<B>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
 
         let input = Tensor::<B, 5>::zeros([n, c, t, h, w], &device);
         let output = model.forward(input);
 
-        assert_eq!(output.dims(), [n, t, vocab_size]); // expected output shape
+        assert_eq!(output.dims(), [n, t, VOCAB_SIZE]); // expected output shape
     }
 }

@@ -4,6 +4,7 @@ pub mod io;
 pub mod batcher;
 pub mod preprocessors;
 pub mod train;
+pub mod learner;
 pub mod model;
 pub mod ctc;
 pub mod utils;

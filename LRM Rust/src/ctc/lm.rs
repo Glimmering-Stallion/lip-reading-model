@@ -1,6 +1,6 @@
 // Language Model (LM) for CTC decoding with beam search
 
-// implement n-gram LM with backoff (e.g. Kneser-Ney smoothing)
+// implement N-gram LM with backoff (e.g. Kneser-Ney smoothing)
 // allow a configurable n
 
 
@@ -53,7 +53,7 @@ pub trait LanguageModel: Debug {
 #[derive(Config, Debug)]
 pub struct NgramConfig {
     #[config(default = 3)]
-    n: usize, // n-gram size
+    n: usize, // N-gram size
 
     #[config(default = 0)]
     vocab_size: usize,
@@ -84,11 +84,11 @@ impl NgramConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Ngram {
-    n: usize,   // n-gram size
+    n: usize,   // N-gram size
     vocab_size: usize, // total vocab size
 
     // <sequence: count> maps
-    n_gram_counts: HashMap<Vec<usize>, usize>,    // frequency counts of n-gram sequences                   (e.g. count of "the")
+    n_gram_counts: HashMap<Vec<usize>, usize>,    // frequency counts of N-gram sequences                   (e.g. count of "the")
     prefix_counts: HashMap<Vec<usize>, usize>,    // frequency counts of (n-1)-gram prefixes                (e.g. count of "th")
     unique_followers: HashMap<Vec<usize>, usize>, // frequency counts of distinct followers after prefixes  (e.g. count of distinct followers after "th")
 }
@@ -147,13 +147,13 @@ impl LanguageModel for Ngram {
 
     /// compute smoothed log-probability of a token given a prefix
     /// uses Witten-Bell smoothing to interpolate between MLE and backoff probs
-    /// note: mutually recursive with "prob_backoff" to walk down n-gram orders
+    /// note: mutually recursive with "prob_backoff" to walk down N-gram orders
     /// params:
     /// - prefix: sequence of preceding token IDs
     /// - next: candidate next token ID
     /// returns: log-probability of 'next' following 'prefix'
     fn next_log_prob(&self, prefix: &[usize], next: usize) -> f32 {
-        // get n-gram (prefix + next)
+        // get N-gram (prefix + next)
         let mut n_gram = prefix.to_vec();
         n_gram.push(next);
 
@@ -162,9 +162,9 @@ impl LanguageModel for Ngram {
         let n = *self.prefix_counts.get(prefix).unwrap_or(&0) as f32;
         let t = *self.unique_followers.get(prefix).unwrap_or(&0) as f32;
         
-        // apply Witten-Bell smoothing (to handle unseen n-grams for robustness)
+        // apply Witten-Bell smoothing (to handle unseen N-grams for robustness)
         let lambda = if n > 0.0 { t / (t + n) } else { 1.0 };       // backoff weight (based on num unique followers)
-        let prob_mle = if n > 0.0 { c as f32 / n } else { 0.0 };    // MLE prob from current n-gram
+        let prob_mle = if n > 0.0 { c as f32 / n } else { 0.0 };    // MLE prob from current N-gram
         let prob_bo = self.prob_backoff(prefix, next);              // backoff prob from (n-1)-gram
 
         // final prob for current window: convert to log space (with max(1e-12) here to avoid log(0) situations)
@@ -188,7 +188,7 @@ impl Ngram {
     }
 
     /// train N-gram model on some corpus of text
-    /// accumulates counts for all n-grams, prefixes, and unique followers
+    /// accumulates counts for all N-grams, prefixes, and unique followers
     /// params:
     /// - data: iterator over training sequences
     /// returns: none (updates internal state)
@@ -196,10 +196,10 @@ impl Ngram {
         // map of prefix keys and unique follower sets
         let mut uf_container: HashMap<Vec<usize>, HashSet<usize>> = HashMap::new();
 
-        // count all n-grams in training data
+        // count all N-grams in training data
         for sequence in data {       // loop through each training sequence (text lines)
             for i in 0..sequence.len() {  // loop through each position in sequence (chars)
-                for j in 1..=self.n {     // loop through each n-gram size (1 to n)
+                for j in 1..=self.n {     // loop through each N-gram size (1 to n)
                     if i + j <= sequence.len() { // out of bounds check
                         let n_gram = &sequence[i..(i + j)];
                         *self.n_gram_counts.entry(n_gram.to_vec()).or_insert(0) += 1;
@@ -222,9 +222,9 @@ impl Ngram {
     }
 
     /// calculate backoff probability for a token
-    /// used when a higher-order n-gram has insufficient data or to smooth MLE
+    /// used when a higher-order N-gram has insufficient data or to smooth MLE
     /// provides "fallback" probability by calling "next_log_prob" with a reduced prefix
-    /// falls back from n-gram -> (n-1)-gram -> ... -> uniform unigram distribution
+    /// falls back from N-gram -> (n-1)-gram -> ... -> uniform unigram distribution
     /// params:
     /// - prefix: the current context being reduced
     /// - next: the target token to score
@@ -248,7 +248,11 @@ impl Ngram {
 mod tests {
     use std::{env, path::Path};
 
-    use crate::vocab::{TokenMap, VOCAB, VOCAB_SIZE, BLANK_ID};
+    use crate::vocab::{
+        TokenMap,
+        VOCAB,
+        VOCAB_SIZE,
+    };
     use super::*;
 
     #[test]
@@ -260,8 +264,8 @@ mod tests {
             .init();
 
         // example counts for testing:
-        // n-gram counts arbitraryly chosen
-        // prefix and unique follower counts consistent with chosen n-gram counts
+        // N-gram counts arbitraryly chosen
+        // prefix and unique follower counts consistent with chosen N-gram counts
         ngram_lm.n_gram_counts.insert(vec![0], 10);       // 'a'
         ngram_lm.n_gram_counts.insert(vec![1], 5);        // 'b'
         ngram_lm.n_gram_counts.insert(vec![0, 0], 6);     // 'aa'
@@ -329,7 +333,7 @@ mod tests {
         let test_seq_5 = token_map.chars_to_ids(string_5.chars().collect()).unwrap(); // high prob sequence
         let test_seq_6 = token_map.chars_to_ids(string_6.chars().collect()).unwrap(); // low prob sequence
 
-        // pretrained n-gram scores
+        // pretrained N-gram scores
         let score_1 = ngram_lm.score(&test_seq_1);
         let score_2 = ngram_lm.score(&test_seq_2);
         let score_3 = ngram_lm.score(&test_seq_3);
