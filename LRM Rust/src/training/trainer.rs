@@ -4,9 +4,9 @@
 
 // custom imports
 use crate::{
-    ctc::{ctc_decode::CtcDecoderConfig, ctc_loss::CtcLossConfig},
-    batcher::Batch,
-    model::VsrModel,
+    ctc::ctc_loss::CtcLossConfig,
+    pipeline::batcher::Batch,
+    vsrm::VsrModel,
 };
 
 // imports
@@ -22,11 +22,6 @@ use burn::{
         AdamConfig,
         GradientsParams,
         Optimizer,
-    },
-    prelude::Int,
-    tensor::{
-        backend::Backend,
-        Tensor,
     },
 };
 
@@ -189,7 +184,7 @@ mod tests {
             .unwrap();
 
         // dummy model
-        let mut model =
+        let model =
             VsrModel::<AD>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
 
         // debugging: inspect model's layers' shapes

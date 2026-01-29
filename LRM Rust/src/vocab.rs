@@ -1,4 +1,4 @@
-// Define vocabulary and bidirectional token-id mapping
+// Define vocabulary and bidirectional token-ID mapping
 
 
 
@@ -42,6 +42,6 @@ impl TokenMap {
     // chars_to_ids()/ids_to_chars():   converts between sequences of symbols
     pub fn id_of(&self, ch: char) -> Option<usize> { self.id_of.get(&ch).copied() }
     pub fn char_of(&self, id: usize) -> Option<char> { self.char_of.get(id).copied() }
-    pub fn chars_to_ids(&self, seq: Vec<char>) -> Option<Vec<usize>> { seq.iter().map(|&ch| self.id_of(ch)).collect() }
-    pub fn ids_to_chars(&self, seq: Vec<usize>) -> Option<Vec<char>> { seq.iter().map(|&id| self.char_of(id)).collect() }
+    pub fn chars_to_ids(&self, seq: &[char]) -> Option<Vec<usize>> { seq.iter().map(|&ch| self.id_of(ch)).collect() }
+    pub fn ids_to_chars(&self, seq: &[usize]) -> Option<Vec<char>> { seq.iter().map(|&id| self.char_of(id)).collect() }
 }

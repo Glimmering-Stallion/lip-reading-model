@@ -26,7 +26,7 @@ use serde::{
 #[derive(Config, Debug)]
 pub enum LanguageModelConfig {
     Ngram(NgramConfig),
-    // maybe add later: NeuralLM(NeuralLMConfig),
+    // NeuralLM(NeuralLMConfig), // maybe add later
 }
 
 
@@ -42,10 +42,11 @@ impl LanguageModelConfig {
 
 
 
-pub trait LanguageModel: Debug {
+pub trait LanguageModel: Debug + Send + Sync {
     fn score(&self, sequence: &[usize]) -> f32;
     fn perplexity(&self, data: Box<dyn Iterator<Item = Vec<usize>>>) -> f32;
     fn next_log_prob(&self, prefix: &[usize], next: usize) -> f32;
+    fn clone_box(&self) -> Box<dyn LanguageModel + Send + Sync>;
 }
 
 
@@ -82,7 +83,7 @@ impl NgramConfig {
 
 
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ngram {
     n: usize,   // N-gram size
     vocab_size: usize, // total vocab size
@@ -164,11 +165,15 @@ impl LanguageModel for Ngram {
         
         // apply Witten-Bell smoothing (to handle unseen N-grams for robustness)
         let lambda = if n > 0.0 { t / (t + n) } else { 1.0 };       // backoff weight (based on num unique followers)
-        let prob_mle = if n > 0.0 { c as f32 / n } else { 0.0 };    // MLE prob from current N-gram
+        let prob_mle = if n > 0.0 { c / n } else { 0.0 };           // MLE prob from current N-gram
         let prob_bo = self.prob_backoff(prefix, next);              // backoff prob from (n-1)-gram
 
         // final prob for current window: convert to log space (with max(1e-12) here to avoid log(0) situations)
         ((1.0 - lambda) * prob_mle + lambda * prob_bo).max(1e-12).ln()
+    }
+
+    fn clone_box(&self) -> Box<dyn LanguageModel + Send + Sync> {
+        Box::new(self.clone())
     }
 }
 
@@ -317,21 +322,21 @@ mod tests {
 
         let token_map = TokenMap::new(VOCAB);
 
-        // test strings
-        let string_1 = "";
-        let string_2 = "the";
-        let string_3 = "xyz";
-        let string_4 = "happ";
-        let string_5 = "happy";
-        let string_6 = "happz";
+        // test strings (that are converted to char vecs)
+        let string_1 = "".chars().collect::<Vec<char>>();
+        let string_2 = "the".chars().collect::<Vec<char>>();
+        let string_3 = "xyz".chars().collect::<Vec<char>>();
+        let string_4 = "happ".chars().collect::<Vec<char>>();
+        let string_5 = "happy".chars().collect::<Vec<char>>();
+        let string_6 = "happz".chars().collect::<Vec<char>>();
 
-        // convert to numerical id vec sequences
-        let test_seq_1 = token_map.chars_to_ids(string_1.chars().collect()).unwrap(); // empty sequence
-        let test_seq_2 = token_map.chars_to_ids(string_2.chars().collect()).unwrap(); // common word
-        let test_seq_3 = token_map.chars_to_ids(string_3.chars().collect()).unwrap(); // gibberish sequence
-        let test_seq_4 = token_map.chars_to_ids(string_4.chars().collect()).unwrap(); // base prefix sequence
-        let test_seq_5 = token_map.chars_to_ids(string_5.chars().collect()).unwrap(); // high prob sequence
-        let test_seq_6 = token_map.chars_to_ids(string_6.chars().collect()).unwrap(); // low prob sequence
+        // convert to numerical ID vec sequences
+        let test_seq_1 = token_map.chars_to_ids(&string_1).unwrap(); // empty sequence
+        let test_seq_2 = token_map.chars_to_ids(&string_2).unwrap(); // common word
+        let test_seq_3 = token_map.chars_to_ids(&string_3).unwrap(); // gibberish sequence
+        let test_seq_4 = token_map.chars_to_ids(&string_4).unwrap(); // base prefix sequence
+        let test_seq_5 = token_map.chars_to_ids(&string_5).unwrap(); // high prob sequence
+        let test_seq_6 = token_map.chars_to_ids(&string_6).unwrap(); // low prob sequence
 
         // pretrained N-gram scores
         let score_1 = ngram_lm.score(&test_seq_1);
@@ -342,12 +347,12 @@ mod tests {
         let score_6 = ngram_lm.score(&test_seq_6);
 
         // sanity checks
-        println!("N-gram score for \'{}\': {}", string_1, score_1);
-        println!("N-gram score for \'{}\': {}", string_2, score_2);
-        println!("N-gram score for \'{}\': {}", string_3, score_3);
-        println!("N-gram baseline score for \'{}\': {}", string_4, score_4);
-        println!("N-gram score for \'{}\' following \'{}\': {}", string_5.chars().last().unwrap(), string_4, (score_5 - score_4));
-        println!("N-gram score for \'{}\' following \'{}\': {}", string_6.chars().last().unwrap(), string_4, (score_6 - score_4));
+        println!("N-gram score for \'{:?}\': {}", string_1, score_1);
+        println!("N-gram score for \'{:?}\': {}", string_2, score_2);
+        println!("N-gram score for \'{:?}\': {}", string_3, score_3);
+        println!("N-gram baseline score for \'{:?}\': {}", string_4, score_4);
+        println!("N-gram score for \'{:?}\' following \'{:?}\': {}", string_5.last().unwrap(), string_4, (score_5 - score_4));
+        println!("N-gram score for \'{:?}\' following \'{:?}\': {}", string_6.last().unwrap(), string_4, (score_6 - score_4));
 
         assert_eq!(score_1, 0.0);   // empty sequence should have log-prob of zero
         assert!(score_2 > score_3); // common word should have higher score than gibberish

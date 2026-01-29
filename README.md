@@ -7,7 +7,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Accomplishments to Date
 
-### Data Ingestion & Preprocessing (```io.rs``` and ```preprocessors/grid.rs```)
+### Data Ingestion & Preprocessing (```pipeline/io.rs``` and ```pipeline/preprocessors/grid.rs```)
 
 - For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") and "alignments" directories placed under a self created "data/grid-lr-corpus").
 - In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
@@ -24,7 +24,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Flattens pixel data into contiguous ```Vec<f32>``` tensors.
   - Scales pixel values to within $[0, 1]$ for normalization.
 
-### Data Batching (```batcher.rs```)
+### Data Batching (```pipeline/batcher.rs```)
 
 - Developed a custom ```VsrmBatcher``` that handles padding by:
   - Finding longest video/transcript sequences among a batch of sequences (as ```max_t```/```max_l```).
@@ -48,7 +48,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Never appears in training targets.
   - Is removed during decoding.
 
-### Model Architecture (```model.rs``` and ```model/tcn.rs```)
+### VSR Model Architecture (```vsrm/vsrm.rs``` and ```vsrm/tcn.rs```)
 
 - Implemented a full spatiotemporal VSRM in Rust.
 - Uses a 3D convolutional (Conv3D) front-end for joint spatial–temporal feature extraction.
@@ -66,16 +66,16 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Dropout and non-linear activations
 - Added a projection head mapping features to per-time-step character logits.
 
-### Training Pipeline (```learner.rs``` and ```train.rs```)
+### Training Pipeline (```training/learner.rs``` and ```training/trainer.rs```)
 
-- Keeping a legacy ```train.rs``` file implementing a manual training loop to test model convergence on dummy data.
+- Keeping a legacy ```trainer.rs``` file implementing a manual training loop to test model convergence on dummy data.
 - Implemented a complete training and validation pipeline using Burn's ```Learner``` API in Rust as ```learner.rs```.
 - Supports:
   - Batching
   - Epoch-based training
   - Auto-checkpointing
   - Metric logging
-  - Train/validation dataste splitting
+  - Train/validation dataset splitting
 - Handles dynamic train/eval mode switching implicitly with Burn's ```Autodiff``` and ```Module``` traits (which allows gradient tracking).
 - Integrated the Adam optimizer with configurable learning rates.
 - Implemented Noam-style learning rate warmup and scheduling.
@@ -117,6 +117,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 - Entire pipeline implemented in Rust (no Python, PyTorch, or TensorFlow dependencies) for emphasis on:
   - Determinism
+  - Parallelism
   - Memory safety
   - Low-latency inference
 - Architecture explicitly designed to support future extensions:
@@ -142,3 +143,66 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 ## Summary
 
 This project represents a full end-to-end implementation of a VSRM lip-reading system in Rust, covering data processing, model architecture, training, loss computation, and decoding. The system is designed with real-time deployment in mind and avoids reliance on Python-based ML frameworks, emphasizing performance, safety, and extensibility.
+
+## Project Tree
+
+```
+Lip Reading Model
+├─ LICENSE
+├─ LRM Python
+│  ├─ application
+│  │  ├─ animation.gif
+│  │  ├─ general_utils.py
+│  │  ├─ lipread.py
+│  │  ├─ model_utils.py
+│  │  └─ test_video.mp4
+│  ├─ lipread.ipynb
+│  ├─ main.py
+│  └─ requirements.txt
+├─ LRM Rust
+│  ├─ Cargo.lock
+│  ├─ Cargo.toml
+│  ├─ rust-toolchain.toml
+│  ├─ rustfmt.toml
+│  ├─ src
+│  │  ├─ ctc
+│  │  │  ├─ ctc_decode.rs
+│  │  │  ├─ ctc_loss.rs
+│  │  │  ├─ lm.rs
+│  │  │  └─ mod.rs
+│  │  ├─ inference
+│  │  │  ├─ mod.rs
+│  │  │  └─ predictor.rs
+│  │  ├─ lib.rs
+│  │  ├─ main.rs
+│  │  ├─ pipeline
+│  │  │  ├─ batcher.rs
+│  │  │  ├─ dataset.rs
+│  │  │  ├─ io.rs
+│  │  │  ├─ mod.rs
+│  │  │  └─ preprocessors
+│  │  │     ├─ grid.rs
+│  │  │     └─ mod.rs
+│  │  ├─ training
+│  │  │  ├─ learner.rs
+│  │  │  ├─ metrics.rs
+│  │  │  ├─ mod.rs
+│  │  │  └─ trainer.rs
+│  │  ├─ utils.rs
+│  │  ├─ vocab.rs
+│  │  └─ vsrm
+│  │     ├─ mod.rs
+│  │     ├─ tcn.rs
+│  │     └─ vsrm.rs
+│  └─ target
+│     ├─ .rustc_info.json
+│     ├─ debug
+│     └─ flycheck0
+│        ├─ stderr
+│        └─ stdout
+├─ NOTES.md
+├─ README.md
+└─ papers
+   ├─ 2006-Graves-CTC.pdf
+   └─ 2016-Assael-LipNet.pdf
+```

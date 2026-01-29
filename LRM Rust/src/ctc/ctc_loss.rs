@@ -22,13 +22,14 @@ use burn::{
         Tensor,
     },
 };
+use core::mem::swap;
 
 
 
 #[derive(Debug, Config)]
 pub struct CtcLossConfig {
     #[config(default = "0")]
-    pub blank_id: usize, // id of blank token in vocab
+    pub blank_id: usize, // ID of blank token in vocab
 
     #[config(default = "Reduction::Mean")]
     pub reduction: Reduction, // Burn's reduction method (mean, sum, auto)
@@ -47,7 +48,7 @@ impl CtcLossConfig {
 
 
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CtcLoss {
     pub blank_id: usize,
     pub reduction: Ignored<Reduction>,
@@ -239,7 +240,7 @@ impl CtcLoss {
                     prev_2_probs.clone().slice([pos..(pos + 1)]),
                 );
 
-                // compute accumulated log-prob for current path (in time-vocab grid) from all possible actions
+                // compute accumulated log-prob for current path (in time-sequence grid) from all possible actions
                 let path_log_prob = log_sum_exp_3_tensor(stay, adv_1, adv_2);
 
                 // grab symbol log-prob at current position in interleaved target sequence given by model
@@ -251,7 +252,7 @@ impl CtcLoss {
                 next_fwd = next_fwd.slice_assign([pos..(pos + 1)], path_log_prob.add(sym_log_prob));
             }
 
-            core::mem::swap(&mut curr_fwd, &mut next_fwd);
+            swap(&mut curr_fwd, &mut next_fwd);
         }
 
         // end at last blank or symbol before it
@@ -319,7 +320,7 @@ mod tests {
             [0..1, 0..1, 0..1],
             Tensor::<B, 3>::from_floats([[[5.0]]], &device),
         );
-        // t = 1 strongly 'A' (id = 1)
+        // t = 1 strongly 'A' (ID = 1)
         logits = logits.slice_assign(
             [0..1, 1..2, 1..2],
             Tensor::<B, 3>::from_floats([[[5.0]]], &device),

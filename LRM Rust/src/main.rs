@@ -90,7 +90,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !models_path.exists() { fs::create_dir(&models_path).expect("Failed to create output directory for models") }
     if !data_path.exists() { fs::create_dir(&data_path).expect("Failed to create output directory for data") }
 
-    let token_map = Arc::new(TokenMap::new(VOCAB)); // bidirectional char-id mapping
+    let token_map = Arc::new(TokenMap::new(VOCAB)); // bidirectional char to ID mapping
 
     // debugging
     println!("Vocabulary: {:?}", VOCAB);
@@ -118,10 +118,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         
         // now stream lines from local files (5% sampling rate, which is ~200MG of the 4GB corpus)
-        // convert lines -> ids -> feed LM.train(...)
+        // convert lines -> IDs -> feed LM.train(...)
         let train_token_map = Arc::clone(&token_map);
         let train_sequences = stream_corpus_lines(corpus.clone(), 0.05)
-            .filter_map(move |line| train_token_map.chars_to_ids(line.chars().collect()));
+            .filter_map(move |line| {
+                let chars = line.chars().collect::<Vec<char>>();
+                train_token_map.chars_to_ids(&chars)
+            });
 
         // init, train, and save N-gram LM
         let mut lm = NgramConfig::new()
@@ -133,7 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(parent) = output_path.parent() { fs::create_dir_all(parent).ok(); }
 
         lm.train(Box::new(train_sequences));
-        lm.save(&output_path.to_str().unwrap())?;
+        lm.save(output_path.to_str().unwrap())?;
         println!("Saved N-gram LM to {}", output_path.to_string_lossy());
 
         lm
@@ -141,7 +144,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("N-gram LM model already exists at {}, skipping corpus streaming and training", output_path.to_string_lossy());
 
         // load existing N-gram LM
-        let lm = Ngram::load(&output_path.to_str().unwrap()).unwrap();
+        let lm = Ngram::load(output_path.to_str().unwrap()).unwrap();
         println!("Loaded N-gram LM from {}", output_path.to_string_lossy());
 
         lm
@@ -150,7 +153,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // evaluate N-gram LM on held-out eval set (0.1% sampling rate)
     let eval_token_map = Arc::clone(&token_map);
     let eval_sequences = stream_corpus_lines(corpus.clone(), 0.05)
-        .filter_map(move |line| eval_token_map.chars_to_ids(line.chars().collect()))
+        .filter_map(move |line| {
+            let chars = line.chars().collect::<Vec<char>>();
+            eval_token_map.chars_to_ids(&chars)
+        })
         .take(100000);
 
     let perplexity = lm.perplexity(Box::new(eval_sequences));

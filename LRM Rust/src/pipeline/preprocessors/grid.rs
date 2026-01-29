@@ -4,12 +4,14 @@
 
 // custom imports
 use crate::{
-    batcher::VsrmItem,
-    io::{
-        load_grid_corpus,
-    },
     vocab::TokenMap,
-    DatasetSplit,
+    pipeline::{
+        batcher::VsrmItem,
+        io::{
+            load_grid_corpus,
+        },
+        DatasetSplit,
+    },
 };
 
 // imports

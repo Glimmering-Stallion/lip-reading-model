@@ -9,16 +9,15 @@ use opencv::{
     self,
     // core::{MatTrait, Size},
     prelude::*,
-    videoio::VideoCaptureTrait, // for CV tasks
-    photo::fast_nl_means_denoising_vec_def,
+    videoio::VideoCaptureTrait,
 };
 use rand::Rng;
-use reqwest::blocking::{get, Client};
+use reqwest::blocking::Client;
 // use serde_json::Value;
 use std::{
     error::Error,
     fs::{self, File},
-    io::{self, BufRead, BufReader, Cursor},
+    io::{self, BufRead, BufReader},
     path::Path,
     sync::{atomic, Arc},
 };
@@ -102,7 +101,7 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
         .filter(move |_| rng.random::<f64>() < sample_rate) // keep line with certain prob
         .inspect(move |_| {
             let count = count_filter.fetch_add(1, atomic::Ordering::SeqCst);
-            if count % 1000 == 0 {
+            if count.is_multiple_of(1000) {
                 // update message every 1000 lines to save CPU
                 pb_filter.set_message(format!("{} lines kept", count));
             }

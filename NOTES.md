@@ -36,9 +36,22 @@ The result: You get a clean, character-level prediction like "hello" from a vide
 
 
 
+# Why Rust?
+
+- Rust's compile-time checks and direct machine code compilation should allow for much greater determinism in forward passing and data transformations across runs.
+
+- Direct machine code running should also allow for super-low latency model inferencing and zero runtime overhead.
+
+- Rust's ownership/borrow system eliminates entire groups of runtime errors, classically encountered in C++ (like dangling pointers, double-frees, null dereferences, etc.), and a Garbage Collector with Python.
+
+- Unlike Python with its Global Interpreter Lock, Rust's fearlessly concurrent nature allows us to harness multi-core parallelism (in our case, Burn's ```DataLoader``` spawning multi-worker threads to fetch/process frames, or concurrently collating data on CPU before moving to GPU in ```VsrmBatcher```).
+
+- Rust compiles projects into one single, static, lightweight binary which completely avoids container bloat problems (like with Python + CUDA + PyTorch payloads as an example), such as to reduce deployment sizes from the Gb range down to a few Mb.
+
+
 # Char-level vs. Word-level N-Gram LM
 
-In a CTC (Connectionist Temporal Classification) beam search where the decoder operates on characters but uses a word-level \(n\)-gram language model (LM), a word boundary is a specific character—typically a space (" ") or a dedicated separator symbol (like "|")—that signals the completion of a word.
+In a CTC (Connectionist Temporal Classification) beam search where the decoder operates on characters but uses a word-level N-gram language model (LM), a word boundary is a specific character—typically a space (" ") or a dedicated separator symbol (like "|")—that signals the completion of a word.
 
 This boundary is critical because it tells the decoder when to query the word-level LM for a score.
 
@@ -97,3 +110,55 @@ Integrating a word-level LM and lexicon typically provides a significant boost i
 - Out-of-Vocabulary (OOV) Risk: The primary downside is that a lexicon-based decoder cannot predict words it hasn't seen before. If the speaker says a name not in your dictionary, the model will be forced to pick the closest sounding "valid" word.
 
 - Character Error Rate (CER): CER may stay similar or slightly increase if the LM "corrects" a single letter into a completely different (but linguistically likely) word.
+
+# How CTC Loss Forward Works
+
+Purpose: To calculate the total probability of all valid ways a frame-by-frame prediction sequence can be condensed into a specific text sequence target such as to allow the model to learn without pre-aligned timing info.
+
+1. Sequence Augmentation: It expands the target sequence by interleaving blank tokens (e.g., "CAT" becomes "\_C_A_T_"). With a base target sequence of $L$, this creates a blank-extended target sequence of length $2L+1$, so that distinguishing between intentional and unintentional symbol repeats becomes possible (e.g. "good" vs. "god").
+
+2. Dynamic Programming (DP): It maintains a forward variable buffer that stores the total log-probability of all paths reaching a specific symbol in the augmented target sequence at time $t$.
+
+3. State Transitions: Per frame/timestep and per symbol in the blank-extended target sequence (time-sequence grid), it calculates the probability of being at the current symbol by looking at three possible previous states:
+    - Stay: Remaining on the same symbol (accounting for repeated predictions).
+    - Advance by 1: Moving from the immediate previous symbol (blank or non-blank) to the current symbol.
+    - Advance by 2 (Skip): Moving from two symbols back to the current symbol. This is only allowed if the symbol two positions back was a character and that character is different from the current character (effectively skipping a blank).
+
+4. Log-Domain Stability: It uses LogSumExp (or LSE) to perform additions in the log-probability space, which avoids numerical underflow that occurs when multiplying many small probabilities over long sequences.
+
+5. Final Aggregation: The loss is the negative log-probability of the sum of the last two possible states (the final character or the final blank) at the last frame/timestep $T$.
+
+# How CTC Decode Forward Works
+
+Purpose: To transform frame-by-frame logits made by the model into a final text sequence prediction. There are two common methods for CTC Decoding: Greedy Search and Prefix Beam Search.
+
+## Greedy Search
+
+Greedy decoding uses a best-path approach that assumes the most probable sequence can be found by picking the most likely token at every single frame independently of all other frames.
+
+1. Frame-wise Argmax: Per frame/timestep $T$ and per symbol in the vocabulary, the algorithm looks at the logit distribution and picks the ID with the highest probability. It ignores all other candidates at this stage.
+
+2. Best-Path Construction: It stitches these individual winners together into a single raw sequence (the path) of length $T$.
+
+3. Deduplication: Since the model might predict the same character over multiple frames (e.g., AAA), a path collapse function merges consecutive identical tokens into one (e.g., A).
+
+4. Blank Removal: Finally, it strips out the blank tokens. Because blanks were inserted between repeats during training, this step makes sure that a sequence like A_AA (where _ is blank) collapses to AA, while AAA collapses to A.
+
+## Prefix Beam Search
+
+Prefix Beam decoding manages a collection of prefixes and sums the probabilities of all paths that could produce them.
+
+1. Dual-State Tracking: Instead of tracking raw paths, it maintains a beam of collapsed prefixes. For each prefix, it tracks two separate log-probabilities: one where the path ends in a blank and one where it ends in a non-blank character, which is the core idea here for handling character repetitions correctly.
+
+2. Successive Expansion: Per frame/timestep and per symbol in the vocabulary (time-vocabulary grid), the algorithm attempts to extend every prefix in the beam with every possible character in that vocabulary, while accounting for three possible cases:
+    - Blank Extension: Moves the total probability of the prefix into the "ending in blank" state.
+    - Repeated Character: If the new character matches the prefix's last character, it only extends the sequence if the previous path ended in a blank (Case B). If it ended in a non-blank, it is treated as a "stretch" of the existing character (Case A).
+    - New Character: If the character is different, it appends it to the prefix regardless of the previous state (Case C).
+
+3. Path Merging (Consolidation): It uses a hash map to group different paths that collapse into the same text prefix. By summing these probabilities (via log_sum_exp), it finds the total probability of a label rather than just a single path.
+
+4. Language Model (LM) Fusion: During expansion, the algorithm integrates an external Language Model. It adds a "reward" to prefixes that are linguistically likely, helping the decoder choose correct words when the acoustic model is uncertain.
+
+5. Pruning and Scoring: To keep the search efficient, the algorithm sorts the prefixes by a combined score—incorporating acoustic probability, LM score, and a length bonus—and keeps only the top \(N\) candidates (the beam_width) for the next frame/timestep.
+
+6. Final Selection: After processing all frames, it selects the prefix with the highest overall score as the final prediction. 

@@ -12,7 +12,6 @@ use burn::{
     data::dataloader::batcher::Batcher,
     tensor::{
         backend::Backend,
-        ElementConversion,
         Tensor,
         TensorData,
     },
@@ -39,7 +38,7 @@ pub struct Batch<B: Backend> {
 pub struct VsrmItem {
     // frames: [C, T, H, W]
     pub frames: TensorData, // frames of the video (as TensorData to avoid Backend binding)
-    pub transcript_ids: Vec<usize>, // sequence ids corresponding to speech in video
+    pub transcript_ids: Vec<usize>, // sequence IDs corresponding to speech in video
     pub item_id: String,  // ID of data sample (perhaps useful for debugging failed samples)
 }
 

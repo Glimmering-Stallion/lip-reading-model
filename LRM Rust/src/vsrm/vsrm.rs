@@ -3,11 +3,10 @@
 
 
 // imports
-mod tcn;
 use burn::{
     backend::Autodiff,
     config::Config,
-    module::{Module, Param, ParamId},
+    module::{Module, ParamId},
     nn::{
         conv::{
             Conv3d,
@@ -33,7 +32,7 @@ use burn::{
 
 #[cfg(test)]
 use std::sync::Once;
-use tcn::{TemporalConvNet, TemporalConvNetConfig};
+use crate::vsrm::tcn::{TemporalConvNet, TemporalConvNetConfig};
 
 #[cfg(test)]
 static PRINT_ONCE: Once = Once::new();
@@ -174,8 +173,8 @@ impl<B: Backend> VsrModel<B> {
     ) -> Self {
         let (height, width) = frame_dims;
 
-        let conv1_out = out_channels; // 8
-        let conv2_out = out_channels * 2; // 16
+        let conv1_out = out_channels;       // 8
+        let conv2_out = out_channels * 2;   // 16
         let conv3_out = 75;
 
         let conv1 = Conv3dConfig::new([in_channels, conv1_out], [3, 3, 3])
@@ -397,10 +396,7 @@ impl<B0: Backend> VsrModel<Autodiff<B0>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vocab::{
-        VOCAB_SIZE,
-        BLANK_ID,
-    };
+    use crate::vocab::VOCAB_SIZE;
     use burn::{
         backend::ndarray::NdArray,
         tensor::Tensor,

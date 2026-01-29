@@ -11,10 +11,7 @@ use crate::{
         LanguageModel,
         LanguageModelConfig,
     },
-    utils::{
-        log_sum_exp_2_scalar,
-        log_sum_exp_3_scalar,
-    },
+    utils::log_sum_exp_2_scalar,
 };
 
 // imports
@@ -26,14 +23,12 @@ use burn::{
         Tensor,
     },
 };
-use std::{
-    collections::HashMap,
-};
+use std::collections::HashMap;
 
 
 
 struct BeamPrefix {
-    sequence: Vec<usize>,       // sequence of symbol ids in vocab
+    sequence: Vec<usize>,       // sequence of symbol IDs in vocab
     log_prob_blank: f32,        // log-prob of prefix ending in blank
     log_prob_non_blank: f32,    // log-prob of prefix ending in non-blank
     log_prob_lm: f32,           // log-prob from language model (for LM fusion)
@@ -55,7 +50,7 @@ impl BeamPrefix {
 
 
 
-#[derive(Config, Debug)]
+#[derive(Config, Debug, Copy)]
 pub enum CtcDecodeType {
     GreedySearch,
     BeamSearch,
@@ -66,7 +61,7 @@ pub enum CtcDecodeType {
 #[derive(Config, Debug)]
 pub struct CtcDecoderConfig {
     #[config(default = "0")]
-    pub blank_id: usize, // id of blank token in vocab
+    pub blank_id: usize, // ID of blank token in vocab
 
     #[config(default = "CtcDecodeType::GreedySearch")]
     pub search_type: CtcDecodeType, // search type to use within CTC decoder (greedy/beam)
@@ -92,7 +87,7 @@ impl CtcDecoderConfig {
     pub fn init(&self) -> CtcDecoder {
         CtcDecoder {
             blank_id: self.blank_id,
-            search_type: self.search_type.clone(),
+            search_type: self.search_type,
             beam_width: self.beam_width,
             lm: self.lm.as_ref().map(|lm| lm.init()),
             lm_alpha: self.lm_alpha,
@@ -115,12 +110,27 @@ pub struct CtcDecoder {
 
 
 
+impl Clone for CtcDecoder {
+    fn clone(&self) -> Self {
+        Self {
+            blank_id: self.blank_id,
+            search_type: self.search_type,
+            beam_width: self.beam_width,
+            lm: self.lm.as_ref().map(|lm| lm.clone_box()), 
+            lm_alpha: self.lm_alpha,
+            lm_beta: self.lm_beta,
+        }
+    }
+}
+
+
+
 impl CtcDecoder {
     /// apply CTC decode for batch of samples
     /// inputs assumed to be padded to max length in batch
     /// params:
     /// - inputs: [N, T, Vocab] logits from model
-    /// returns: sequences of predicted symbol ids (collapsed paths) for each sample in batch [N, L]
+    /// returns: sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L]
     pub fn forward<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,
@@ -135,12 +145,12 @@ impl CtcDecoder {
     /// inputs assumed to be padded to max length in batch
     /// params:
     /// - inputs: [N, T, Vocab] logits from model
-    /// returns: sequences of predicted symbol ids (collapsed paths) for each sample in batch [N, L]
+    /// returns: sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L]
     fn greedy_search_decode<B: Backend>(
         &self,
         inputs: Tensor<B, 3>
     ) -> Vec<Vec<i64>> {
-        // grab most probable symbol id from vocab distribution (dim 2), per frame (dim 1), per sample (dim 0)
+        // grab most probable symbol ID from vocab distribution (dim 2), per frame (dim 1), per sample (dim 0)
         let argmax_ids = inputs.clone().argmax(2); // [N, T]
         let argmax_ids = argmax_ids.to_data().convert::<i64>().to_vec().unwrap();
         let (n, t) = (inputs.clone().dims()[0], inputs.dims()[1]);
@@ -157,7 +167,7 @@ impl CtcDecoder {
     /// inputs assumed to be padded to max length in batch
     /// params:
     /// - inputs: [N, T, Vocab] logits from model
-    /// returns: sequences of predicted symbol ids (collapsed paths) for each sample in batch [N, L]
+    /// returns: sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L]
     fn beam_search_decode<B: Backend>(
         &self,
         inputs: Tensor<B, 3>
@@ -179,7 +189,7 @@ impl CtcDecoder {
     /// decoding obtained via: logits --> log softmax --> prefix beam search
     /// params:
     /// - log_probs: log-probabilities for each vocab symbol per-timestep given by model [T, Vocab]
-    /// returns: sequence of predicted symbol ids (collapsed path) [L]
+    /// returns: sequence of predicted symbol IDs (collapsed path) [L]
     fn per_sample_decode<B: Backend>(
         &self,
         log_probs: Tensor<B, 2>,
@@ -203,7 +213,7 @@ impl CtcDecoder {
         // 0 ≤ t ≤ T - 1 (recurrence case)
         for t in 0..timesteps {
             // reset buffer
-            // maps sequence of symbol ids to (log_prob_blank, log_prob_non_blank, log_prob_lm)
+            // maps sequence of symbol IDs to (log_prob_blank, log_prob_non_blank, log_prob_lm)
             let mut next_prefixes: HashMap<Vec<usize>, (f32, f32, f32)> = HashMap::new();
 
             // grab chunk of log-probs of each symbol at current timestep (given by model)
@@ -229,7 +239,7 @@ impl CtcDecoder {
                     .or_insert((sentinel_value, sentinel_value, prefix.log_prob_lm));
                 entry.0 = log_sum_exp_2_scalar(entry.0, ext_log_prob);
 
-                // extend with non-blank characters (v is the candidate symbol id in vocab)
+                // extend with non-blank characters (v is the candidate symbol ID in vocab)
                 for v in 0..vocab_size {
                     if v == blank { continue; }
 
@@ -346,7 +356,7 @@ impl CtcDecoder {
             )
             .unwrap();
 
-        // convert usize ids to i64 ids
+        // convert usize IDs to i64 IDs
         best_prefix.sequence.into_iter().map(|u| u as i64).collect()
     }
 }
@@ -423,10 +433,10 @@ mod tests {
         let path = vec![7, 4, 4, blank_id, 11, blank_id, 11, 11, 14, 14, 28];
         let collapsed_path = collapse_path(&path, blank_id);
 
-        println!("\nOriginal path ids: {:?}", path);
-        println!("Collapsed path ids: {:?}", collapsed_path);
-        println!("Original path chars: {:?}", token_map.ids_to_chars(path.clone()));
-        println!("Collapsed path chars: {:?}\n", token_map.ids_to_chars(collapsed_path.clone()));
+        println!("\nOriginal path IDs: {:?}", path);
+        println!("Collapsed path IDs: {:?}", collapsed_path);
+        println!("Original path chars: {:?}", token_map.ids_to_chars(&path.clone()));
+        println!("Collapsed path chars: {:?}\n", token_map.ids_to_chars(&collapsed_path.clone()));
         assert_eq!(collapsed_path, vec![7, 4, 11, 11, 14, 28]);
     }
 
@@ -451,13 +461,12 @@ mod tests {
         let decoded_char_sequences = decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
         
-        println!("Decoded id sequences: {:?}", decoded_id_sequences);
+        println!("Decoded ID sequences: {:?}", decoded_id_sequences);
         println!("Decoded char sequences: {:?}", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
@@ -467,9 +476,9 @@ mod tests {
 
     #[test]
     fn test_greedy_search_decode_fixed() {
-        const V: usize = VOCAB_SIZE;
         const N: usize = 2;
         const T: usize = 11;
+        const V: usize = VOCAB_SIZE;
 
         const HI: f32 = 8.0; // big logit for target symbol
         const LO: f32 = 0.0; // baseline for rest
@@ -481,8 +490,8 @@ mod tests {
         let ids_1 = [7, 4, 4, 40, 11, 40, 11, 11, 14, 14, 28]; // "h e e _ l _ l l o o !"
         let ids_2 = [22, 22, 14, 40, 17, 17, 40, 11, 11, 3, 28]; // "w w o _ r r _ l l d !"
 
-        let chars_1 = token_map.ids_to_chars(ids_1.to_vec()).unwrap();
-        let chars_2 = token_map.ids_to_chars(ids_2.to_vec()).unwrap();
+        let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
+        let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
         // dummy logits for 2 samples, 11 timesteps, 41 vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
@@ -500,16 +509,15 @@ mod tests {
         let decoded_char_sequences = decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
 
-        println!("\nOriginal sample id sequences: {:?}, {:?}", ids_1, ids_2);
+        println!("\nOriginal sample ID sequences: {:?}, {:?}", ids_1, ids_2);
         println!("Original sample char sequences: {:?}, {:?}\n", chars_1, chars_2);
         
-        println!("Decoded id sequences: {:?}", decoded_id_sequences);
+        println!("Decoded ID sequences: {:?}", decoded_id_sequences);
         println!("Decoded char sequences: {:?}", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
@@ -539,9 +547,8 @@ mod tests {
         let decoded_char_sequences = decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
         
@@ -555,9 +562,9 @@ mod tests {
 
     #[test]
     fn test_beam_search_decode_fixed() {
-        const V: usize = VOCAB_SIZE;
         const N: usize = 2;
         const T: usize = 11;
+        const V: usize = VOCAB_SIZE;
 
         const HI: f32 = 8.0; // big logit for target symbol
         const LO: f32 = 0.0; // baseline for rest
@@ -569,8 +576,8 @@ mod tests {
         let ids_1 = [7, 4, 4, 40, 11, 40, 11, 11, 14, 14, 28];    // "h e e _ l _ l l o o !"
         let ids_2 = [22, 22, 14, 40, 17, 17, 40, 11, 11, 3, 28];  // "w w o _ r r _ l l d !"
 
-        let chars_1 = token_map.ids_to_chars(ids_1.to_vec()).unwrap();
-        let chars_2 = token_map.ids_to_chars(ids_2.to_vec()).unwrap();
+        let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
+        let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
         // dummy logits for 2 samples, 11 timesteps, 41 vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
@@ -589,16 +596,15 @@ mod tests {
         let decoded_char_sequences = decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
 
-        println!("\nOriginal sample id sequences: {:?}, {:?}", ids_1, ids_2);
+        println!("\nOriginal sample ID sequences: {:?}, {:?}", ids_1, ids_2);
         println!("Original sample char sequences: {:?}, {:?}\n", chars_1, chars_2);
         
-        println!("Decoded id sequences: {:?}", decoded_id_sequences);
+        println!("Decoded ID sequences: {:?}", decoded_id_sequences);
         println!("Decoded char sequences: {:?}", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
@@ -608,9 +614,9 @@ mod tests {
 
     #[test]
     fn test_beam_eq_greedy_when_beam_width_1() {
-        const V: usize = VOCAB_SIZE;
         const N: usize = 2;
         const T: usize = 11;
+        const V: usize = VOCAB_SIZE;
 
         const HI: f32 = 8.0; // big logit for target symbol
         const LO: f32 = 0.0; // baseline for rest
@@ -622,8 +628,8 @@ mod tests {
         let ids_1 = [12, 0, 0, 40, 40, 19, 2, 2, 7, 7, 7];     // "m a a _ _ t c c h h h "
         let ids_2 = [18, 20, 2, 40, 2, 4, 4, 18, 40, 18, 18];  // "s u c _ c e e s _ s s"
 
-        let chars_1 = token_map.ids_to_chars(ids_1.to_vec()).unwrap();
-        let chars_2 = token_map.ids_to_chars(ids_2.to_vec()).unwrap();
+        let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
+        let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
         // dummy logits for 2 samples, 11 timesteps, 41 vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
@@ -651,27 +657,25 @@ mod tests {
         let beam_decoded_char_sequences = beam_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
         let greedy_decoded_char_sequences = greedy_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
 
-        println!("\nOriginal sample id sequences: {:?}, {:?}", ids_1, ids_2);
+        println!("\nOriginal sample ID sequences: {:?}, {:?}", ids_1, ids_2);
         println!("Original sample char sequences: {:?}, {:?}\n", chars_1, chars_2);
 
-        println!("\nBeam decoded id sequences: {:?}", beam_decoded_id_sequences);
+        println!("\nBeam decoded ID sequences: {:?}", beam_decoded_id_sequences);
         println!("Beam decoded char sequences: {:?}\n", beam_decoded_char_sequences);
 
-        println!("\nGreedy decoded id sequences: {:?}", greedy_decoded_id_sequences);
+        println!("\nGreedy decoded ID sequences: {:?}", greedy_decoded_id_sequences);
         println!("Greedy decoded char sequences: {:?}\n", greedy_decoded_char_sequences);
 
         // with beam width 1, no LM, with logits high-contrast and unambiguous, beam output should match greedy
@@ -680,9 +684,9 @@ mod tests {
 
     #[test]
     fn test_decode_preserves_duplicates_when_blanks_present() {
-        const V: usize = VOCAB_SIZE;
         const N: usize = 5;
         const T: usize = 14;
+        const V: usize = VOCAB_SIZE;
 
         const HI: f32 = 8.0; // big logit for target symbol
         const LO: f32 = 0.0; // baseline for rest
@@ -697,11 +701,11 @@ mod tests {
         let ids_4 = [18, 20, 15, 40, 15, 4, 17, 39, 18, 20, 15, 15, 4, 17];     // "s u p _ p e r   s u p p e r"
         let ids_5 = [7, 14, 15, 40, 15, 4, 3, 39, 7, 14, 15, 15, 4, 3];         // "h o p _ p e d   h o p p e d"
 
-        let chars_1 = token_map.ids_to_chars(ids_1.to_vec()).unwrap();
-        let chars_2 = token_map.ids_to_chars(ids_2.to_vec()).unwrap();
-        let chars_3 = token_map.ids_to_chars(ids_3.to_vec()).unwrap();
-        let chars_4 = token_map.ids_to_chars(ids_4.to_vec()).unwrap();
-        let chars_5 = token_map.ids_to_chars(ids_5.to_vec()).unwrap();
+        let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
+        let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
+        let chars_3 = token_map.ids_to_chars(&ids_3).unwrap();
+        let chars_4 = token_map.ids_to_chars(&ids_4).unwrap();
+        let chars_5 = token_map.ids_to_chars(&ids_5).unwrap();
 
         let expected_outputs = [
             vec![6, 14, 14, 3, 39, 6, 14, 3],                     // "g o o d   g o d"
@@ -741,17 +745,15 @@ mod tests {
         let beam_decoded_char_sequences = beam_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
         let greedy_decoded_char_sequences = greedy_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
 
@@ -783,9 +785,9 @@ mod tests {
     
     #[test]
     fn test_beam_outperforms_greedy_on_global_optimum() {
-        const V: usize = 3;
         const N: usize = 1;
         const T: usize = 5;
+        const V: usize = 3;
 
         let vocab = "ab_";
         let blank_id = 2;
@@ -821,24 +823,22 @@ mod tests {
         let beam_decoded_char_sequences = beam_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
         let greedy_decoded_char_sequences = greedy_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
 
-        println!("\nBeam decoded id sequences: {:?}", beam_decoded_id_sequences);
+        println!("\nBeam decoded ID sequences: {:?}", beam_decoded_id_sequences);
         println!("Beam decoded char sequences: {:?}\n", beam_decoded_char_sequences);
 
-        println!("\nGreedy decoded id sequences: {:?}", greedy_decoded_id_sequences);
+        println!("\nGreedy decoded ID sequences: {:?}", greedy_decoded_id_sequences);
         println!("Greedy decoded char sequences: {:?}\n", greedy_decoded_char_sequences);
 
         // beam sums log-probs across alignments
@@ -849,9 +849,9 @@ mod tests {
 
     #[test]
     fn test_beam_lm_integration() {
-        const V: usize = VOCAB_SIZE;
         const N: usize = 1;
         const T: usize = 4;
+        const V: usize = VOCAB_SIZE;
 
         const HI: f32 = 8.0; // big logit for target symbol
         const LO: f32 = 0.0; // baseline for rest
@@ -880,7 +880,7 @@ mod tests {
             .with_vocab_size(VOCAB_SIZE)
             .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
 
-        let lm = LanguageModelConfig::Ngram(ngram_lm); // lm wrapper
+        let lm = LanguageModelConfig::Ngram(ngram_lm); // LM wrapper
 
         let beam_decoder = CtcDecoderConfig::new()
             .with_search_type(CtcDecodeType::BeamSearch)
@@ -894,9 +894,8 @@ mod tests {
         let beam_decoded_char_sequences = beam_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
 
@@ -908,9 +907,9 @@ mod tests {
 
     #[test]
     fn test_lm_overrules_vsrm_logits() {
-        const V: usize = VOCAB_SIZE;
         const N: usize = 1;
         const T: usize = 6;
+        const V: usize = VOCAB_SIZE;
 
         const HI: f32 = 8.0; // big logit for target symbol
         const LO: f32 = 0.0; // baseline for rest
@@ -940,7 +939,7 @@ mod tests {
             .with_vocab_size(VOCAB_SIZE)
             .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
 
-        let lm = LanguageModelConfig::Ngram(ngram_lm); // lm wrapper
+        let lm = LanguageModelConfig::Ngram(ngram_lm); // LM wrapper
 
         // native beam search decoder without LM
         let native_beam_decoder = CtcDecoderConfig::new()
@@ -965,25 +964,23 @@ mod tests {
         let native_beam_decoded_char_sequences = native_beam_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
         let hybrid_beam_decoded_char_sequences = hybrid_beam_decoded_id_sequences
             .iter()
             .map(|seq| {
-                token_map
-                    .ids_to_chars(seq.iter().map(|&id| id as usize).collect())
-                    .unwrap()
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
             })
             .collect::<Vec<Vec<char>>>();
 
         // with LM, "memory" should be preferred over "membry"
-        println!("\nNative Beam decoded id sequences: {:?}", native_beam_decoded_id_sequences);
+        println!("\nNative Beam decoded ID sequences: {:?}", native_beam_decoded_id_sequences);
         println!("Native Beam decoded char sequences: {:?}", native_beam_decoded_char_sequences);
 
-        println!("\nHybrid decoded id sequences: {:?}", hybrid_beam_decoded_id_sequences);
+        println!("\nHybrid decoded ID sequences: {:?}", hybrid_beam_decoded_id_sequences);
         println!("Hybrid decoded char sequences: {:?}\n", hybrid_beam_decoded_char_sequences);
 
         assert_eq!(hybrid_beam_decoded_id_sequences[0], vec![12, 4, 12, 14, 17, 24]); // expected "memory"
