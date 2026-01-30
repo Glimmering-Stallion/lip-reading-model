@@ -48,7 +48,7 @@ pub struct VsrModelConfig {
     pub out_channels: usize,
 
     // #[config(default = (50, 150))] // default should be (50, 150)
-    pub frame_dims: (usize, usize),
+    pub frame_dims: (usize, usize), // (height, width)
     
     #[config(default = 8)]
     pub norm_groups: usize,
@@ -171,11 +171,15 @@ impl<B: Backend> VsrModel<B> {
         vocab_size: usize,
         device: &B::Device,
     ) -> Self {
-        let (height, width) = frame_dims;
-
-        let conv1_out = out_channels;       // 8
-        let conv2_out = out_channels * 2;   // 16
-        let conv3_out = 75;
+        
+        let conv1_out = out_channels;       // 128 (default)
+        let conv2_out = out_channels * 2;   // 256 (default)
+        let conv3_out = out_channels / 2;   // 64  (default)
+        
+        let (h0, w0) = frame_dims;
+        let (h1, w1) = ((h0 + 2 - 3) / 2 + 1, (w0 + 2 - 3) / 2 + 1);
+        let (h2, w2) = ((h1 + 2 - 3) / 2 + 1, (w1 + 2 - 3) / 2 + 1);
+        let (h3, w3) = ((h2 + 2 - 3) / 2 + 1, (w2 + 2 - 3) / 2 + 1);
 
         let conv1 = Conv3dConfig::new([in_channels, conv1_out], [3, 3, 3])
             .with_stride([1, 2, 2])
@@ -216,7 +220,7 @@ impl<B: Backend> VsrModel<B> {
             .with_affine(true)
             .init(device);
 
-        let tcn1 = TemporalConvNetConfig::new([75 * (height / 8) * (width / 8), out_channels], 3)
+        let tcn1 = TemporalConvNetConfig::new([(conv3_out * h3 * w3), out_channels], 3)
             .with_layers(6)
             .with_dropout(0.5)
             .init(device);
@@ -407,11 +411,16 @@ mod tests {
 
     #[test]
     fn model_input_shapes_data_flow_small() {
-        let (n, c, t, h, w) = (1, 1, 8, 16, 16);
-        let out_channels = 10;
-        let norm_groups = 5;
+        // let (n, c, t, h, w) = (1, 1, 8, 16, 16);
+        // let out_channels = 10;
+        // let norm_groups = 5;
+
+        let (n, c, t, h, w) = (1, 1, 75, 50, 150); // Real GRID dimensions
+        let out_channels = 128;
+        let norm_groups = 8;
 
         let device = Default::default();
+        // let model = VsrModel::<B>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
         let model = VsrModel::<B>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
 
         let input = Tensor::<B, 5>::zeros([n, c, t, h, w], &device);

@@ -10,5 +10,5 @@ pub mod learner;
 pub mod metrics;
 pub mod trainer;
 
-pub use learner::{LearnerConfig, train};
+pub use learner::{VsrmLearnerConfig, train};
 pub use metrics::{CtcCharErrorRate, CtcWordErrorRate};

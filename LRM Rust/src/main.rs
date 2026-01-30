@@ -20,10 +20,19 @@
 
 // imports
 use burn::{
-    module::Module,
     data::dataloader::DataLoaderBuilder,
+    module::Module,
+    optim::AdamConfig,
+    backend::{
+        {Autodiff, Wgpu},
+        wgpu::WgpuDevice::DefaultDevice,
+    },
 };
-use lrm_rust::{ctc::lm::{self, LanguageModel}, prelude::*};
+use lrm_rust::{
+    ctc::lm::{self, LanguageModel},
+    pipeline::DatasetSource,
+    prelude::*,
+};
 use clap::Parser;
 use image::{GrayImage, Luma};
 // use opencv::{
@@ -39,6 +48,10 @@ use std::{
     fs,
     // io::{self, BufRead},
 };
+
+
+
+type MyBackend = Autodiff<Wgpu>;
 
 
 
@@ -91,6 +104,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !data_path.exists() { fs::create_dir(&data_path).expect("Failed to create output directory for data") }
 
     let token_map = Arc::new(TokenMap::new(VOCAB)); // bidirectional char to ID mapping
+    // let token_map = TokenMap::new(VOCAB); // bidirectional char to ID mapping
 
     // debugging
     println!("Vocabulary: {:?}", VOCAB);
@@ -112,18 +126,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let output_path = models_path.join(&args.output); // output path for where LM model resides
     
-    // does an LM model already exist?
+    // does an LM already exist?
     let lm = if !output_path.exists() {
-        println!("N-gram LM model not found at {}, proceeding to train fresh model", output_path.to_string_lossy());
+        println!("N-gram LM not found at {}, proceeding to train fresh model", output_path.to_string_lossy());
 
-        
         // now stream lines from local files (5% sampling rate, which is ~200MG of the 4GB corpus)
         // convert lines -> IDs -> feed LM.train(...)
         let train_token_map = Arc::clone(&token_map);
         let train_sequences = stream_corpus_lines(corpus.clone(), 0.05)
             .filter_map(move |line| {
                 let chars = line.chars().collect::<Vec<char>>();
-                train_token_map.chars_to_ids(&chars)
+                train_token_map.clone().chars_to_ids(&chars)
             });
 
         // init, train, and save N-gram LM
@@ -141,7 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         lm
     } else {
-        println!("N-gram LM model already exists at {}, skipping corpus streaming and training", output_path.to_string_lossy());
+        println!("N-gram LM already exists at {}, skipping corpus streaming and training", output_path.to_string_lossy());
 
         // load existing N-gram LM
         let lm = Ngram::load(output_path.to_str().unwrap()).unwrap();
@@ -155,9 +168,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let eval_sequences = stream_corpus_lines(corpus.clone(), 0.05)
         .filter_map(move |line| {
             let chars = line.chars().collect::<Vec<char>>();
-            eval_token_map.chars_to_ids(&chars)
+            eval_token_map.clone().chars_to_ids(&chars)
         })
-        .take(100000);
+        .take(10000);
 
     let perplexity = lm.perplexity(Box::new(eval_sequences));
     println!("N-gram LM perplexity on eval set: {:.3}", perplexity);
@@ -205,28 +218,47 @@ fn main() -> Result<(), Box<dyn Error>> {
         .save("test_frame.png")
         .expect("Failed to save image");
 
-    // --------------------------------------- LipNet Model training ----------------------------------------
+    // ------------------------------------------- VSRM training --------------------------------------------
 
     // define hyperparameters
-    let epochs = 100;
-    let learning_rate = 0.0001;
+    let frame_dims = (50, 150); // height width
+    let num_epochs = 100;
     let batch_size = 8;
+    let learning_rate = 0.0001;
     let num_workers = 4;
     let seed = 42;
-    // let device = 
+    let device = DefaultDevice;
+    let root_path = rust_root;
+    let output_path = models_path;
 
-    // let grid_data = GridDataset::new();
+    let dataset_src = DatasetSource::Grid;
 
-    // let batcher = VsrmBatcher::new(device);
+    let optimizer_config = AdamConfig::new()
+        .with_beta_1(0.9)
+        .with_beta_2(0.999)
+        .with_epsilon(1e-8);
 
-    // let loader_factory = || DataLoaderBuilder::new(batcher)
-    //     .batch_size(batch_size)
-    //     .num_workers(num_workers)
-    //     .shuffle(seed)
-    //     .build(grid_data);
+    let model_config = VsrModelConfig::new(frame_dims)
+        .with_vocab_size(VOCAB_SIZE);
 
-    // let model = VsrModel::<train::AD>::new(c, out_channels, (h, w), VOCAB_SIZE, &device);
-    // let (_model, losses) = train_loop(model, epochs, learning_rate, loader_factory, BLANK_ID);
+    let learner_config = VsrmLearnerConfig {
+        num_epochs,
+        batch_size,
+        learning_rate,
+        optimizer: optimizer_config,
+        num_workers,
+        seed,
+    };
+
+    train::<MyBackend, _, _>(
+        device,
+        dataset_src,
+        model_config,
+        learner_config,
+        (*token_map).clone(),
+        root_path,
+        output_path,
+    );
 
     Ok(())
 }

@@ -30,7 +30,7 @@ pub mod prelude {
         },
         training::{
             learner::{
-                LearnerConfig,
+                VsrmLearnerConfig,
                 train,
             },
             trainer,

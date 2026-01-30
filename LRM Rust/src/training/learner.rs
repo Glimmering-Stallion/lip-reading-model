@@ -80,6 +80,28 @@ type ValidLoader<B> = Arc<dyn DataLoader<<B as AutodiffBackend>::InnerBackend, B
 
 
 
+#[derive(Config, Debug)]
+pub struct VsrmLearnerConfig  {
+    #[config(default = 50)]
+    pub num_epochs: usize,
+
+    #[config(default = 4)]
+    pub batch_size: usize,
+
+    #[config(default = 1e-4)]
+    pub learning_rate: f64,
+
+    pub optimizer: AdamConfig,
+
+    #[config(default = 8)]
+    pub num_workers: usize,
+
+    #[config(default = 42)]
+    pub seed: u64,
+}
+
+
+
 impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
     type Input = Batch<B>;
     type Output = VsrmStepOutput<B>;
@@ -142,33 +164,11 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
 
 
 
-#[derive(Config, Debug)]
-pub struct LearnerConfig {
-    #[config(default = 50)]
-    pub num_epochs: usize,
-
-    #[config(default = 4)]
-    pub batch_size: usize,
-
-    #[config(default = 8)]
-    pub num_workers: usize,
-
-    #[config(default = 42)]
-    pub seed: u64,
-
-    #[config(default = 1e-4)]
-    pub learning_rate: f64,
-
-    pub optimizer: AdamConfig,
-}
-
-
-
 pub fn train<B, PR, PO>(
     device: B::Device,
     dataset_src: DatasetSource,
     model_config: VsrModelConfig,
-    learner_config: LearnerConfig,
+    learner_config: VsrmLearnerConfig ,
     token_map: TokenMap,
     root_path: PR,
     output_path: PO,
@@ -187,6 +187,9 @@ where
     let model_dir = format!("vsrm_{}", dataset_src.tag());
     let model_path = output_path.join(&model_dir);
     create_dir_all(&model_path).expect("Failed to create trained vsrm artifacts directory");
+
+    // save hyperparams
+    learner_config.save(&model_path.join("learner_config.json")).expect("Failed to save config");
 
     // ------------------------------------ Dataset batching and loading ------------------------------------
 
@@ -285,7 +288,7 @@ where
 fn create_dataloaders<B, P>(
     device: &B::Device,
     dataset_src: DatasetSource,
-    learner_config: &LearnerConfig,
+    learner_config: &VsrmLearnerConfig ,
     token_map: TokenMap,
     root_path: &P,
 ) -> (
