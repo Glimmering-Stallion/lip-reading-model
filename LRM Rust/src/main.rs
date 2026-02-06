@@ -20,8 +20,6 @@
 
 // imports
 use burn::{
-    data::dataloader::DataLoaderBuilder,
-    module::Module,
     optim::AdamConfig,
     backend::{
         {Autodiff, Wgpu},
@@ -34,19 +32,12 @@ use lrm_rust::{
     prelude::*,
 };
 use clap::Parser;
-use image::{GrayImage, Luma};
-// use opencv::{
-//     self,
-//     core::{MatTrait, Size},
-//     videoio::VideoCaptureTrait,
-// };
 use std::{
-    sync::{atomic, Arc},
+    sync::Arc,
     error::Error,
     path::Path,
     env,
     fs,
-    // io::{self, BufRead},
 };
 
 
@@ -82,13 +73,6 @@ struct Args {
 fn main() -> Result<(), Box<dyn Error>> {
 
     // ------------------------------------------- Initial setup --------------------------------------------
-
-    // debugging
-    // let vector = vec![1.0, 2.0, 3.0, 4.0, 5.0];
-    // println!("Input: {:?}, Mean: {}, Std Dev: {}", vector, mean(&vector), std_dev(&vector));
-
-    // obtain data (if data isn't already loaded)
-    // extract_data("../data");
     
     let args = Args::parse();
 
@@ -110,6 +94,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Vocabulary: {:?}", VOCAB);
     println!("Vocabulary size: {}", VOCAB_SIZE);
     println!("Blank token ID: {}", BLANK_ID);
+    assert!(BLANK_ID < VOCAB_SIZE, "Blank ID ({}) is out of vocabulary size bounds ({})", BLANK_ID, VOCAB_SIZE);
+    assert!(args.n > 0, "N-gram order ({}) must be greater than one", args.n);
 
     // ------------------------------------- Load data for N-gram model -------------------------------------
 
@@ -122,13 +108,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     // using extract_slr_dataset function in data_handler.rs to download + extract N-Gram corpus if needed
     extract_slr_corpus(rust_root.as_str());
 
-    // --------------------------------- N-Gram Model training/evaluation -----------------------------------
+    // --------------------------------- N-Gram model training/evaluation -----------------------------------
 
-    let output_path = models_path.join(&args.output); // output path for where LM model resides
+    let lm_output_path = models_path.join(&args.output); // output path for where LM resides
     
     // does an LM already exist?
-    let lm = if !output_path.exists() {
-        println!("N-gram LM not found at {}, proceeding to train fresh model", output_path.to_string_lossy());
+    let lm = if !lm_output_path.exists() {
+        println!("N-gram LM not found at {}, proceeding to train fresh model", lm_output_path.to_string_lossy());
 
         // now stream lines from local files (5% sampling rate, which is ~200MG of the 4GB corpus)
         // convert lines -> IDs -> feed LM.train(...)
@@ -146,19 +132,19 @@ fn main() -> Result<(), Box<dyn Error>> {
             .init();
 
         // safety check: make sure parent dir exists one more time just in case
-        if let Some(parent) = output_path.parent() { fs::create_dir_all(parent).ok(); }
+        if let Some(parent) = lm_output_path.parent() { fs::create_dir_all(parent).ok(); }
 
         lm.train(Box::new(train_sequences));
-        lm.save(output_path.to_str().unwrap())?;
-        println!("Saved N-gram LM to {}", output_path.to_string_lossy());
+        lm.save(lm_output_path.to_str().unwrap())?;
+        println!("Saved N-gram LM to {}", lm_output_path.to_string_lossy());
 
         lm
     } else {
-        println!("N-gram LM already exists at {}, skipping corpus streaming and training", output_path.to_string_lossy());
+        println!("N-gram LM already exists at {}, skipping corpus streaming and training", lm_output_path.to_string_lossy());
 
         // load existing N-gram LM
-        let lm = Ngram::load(output_path.to_str().unwrap()).unwrap();
-        println!("Loaded N-gram LM from {}", output_path.to_string_lossy());
+        let lm = Ngram::load(lm_output_path.to_str().unwrap()).unwrap();
+        println!("Loaded N-gram LM from {}", lm_output_path.to_string_lossy());
 
         lm
     };
@@ -174,49 +160,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let perplexity = lm.perplexity(Box::new(eval_sequences));
     println!("N-gram LM perplexity on eval set: {:.3}", perplexity);
-
-    // ----------------------------------------- Load data for VSRM -----------------------------------------
-
-    // let data_path = root_path.join("data/grid-lr-dataset");
-
-    // height and width of cropped ROI (mouth region)
-    // TODO: make this region adaptively tracking based on face detection
-    let width: u32 = 150;
-    let height: u32 = 50;
-    let dim = (width * height) as usize;
-
-    let test_input = "s1/bbal6n";
-    let (test_frames, test_alignments) = load_grid_corpus(&rust_root, test_input, &token_map)?;
-    println!("Loaded {} frames for {}", test_frames.len() / dim, test_input);
-
-    // debugging
-    let norm_min = test_frames.iter().cloned().fold(f32::INFINITY, f32::min);
-    let norm_max = test_frames
-        .iter()
-        .cloned()
-        .fold(f32::NEG_INFINITY, f32::max);
-    // println!("Normalized range: min = {:.3}, max = {:.3}", norm_min, norm_max);
-
-    // extract an arbitrary frame (f32) and rescale to [0, 255] range for u8
-    let frame: Vec<u8> = test_frames[0..dim]
-        .iter()
-        .map(|x| {
-            ((x - norm_min) / (norm_max - norm_min) * 255.0)
-                .round()
-                .clamp(0.0, 255.0) as u8
-        })
-        .collect::<Vec<u8>>();
-
-    // debugging
-    // println!("test_frames.len(): {}", test_frames.len());
-    // println!("frame.len(): {}", frame.len());
-    // println!("Expected per-frame size: {}", width * height);
-    // assert_eq!(frame.len(), dim, "Frame length doesn't match image dimensions!");
-
-    let img_buffer: GrayImage = GrayImage::from_vec(width, height, frame).expect("Failed to create image buffer");
-    img_buffer
-        .save("test_frame.png")
-        .expect("Failed to save image");
+    assert!(perplexity.is_finite(), "LM perplexity ({}) is non-finite", perplexity);
 
     // ------------------------------------------- VSRM training --------------------------------------------
 
@@ -229,7 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let seed = 42;
     let device = DefaultDevice;
     let root_path = rust_root;
-    let output_path = models_path;
+    let vsrm_output_path = models_path;
 
     let dataset_src = DatasetSource::Grid;
 
@@ -257,7 +201,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         learner_config,
         (*token_map).clone(),
         root_path,
-        output_path,
+        vsrm_output_path,
     );
 
     Ok(())

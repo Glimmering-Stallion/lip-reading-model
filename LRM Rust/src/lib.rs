@@ -45,7 +45,10 @@ pub mod prelude {
             VsrModel,
             VsrModelConfig,
         },
-        ctc::lm::{Ngram, NgramConfig},
+        ctc::lm::{
+            Ngram,
+            NgramConfig,
+        },
         utils::{
             log_sum_exp_2_scalar,
             log_sum_exp_2_tensor,

@@ -1,4 +1,4 @@
-// Data handler pipeline for VSRM data ingestion (dataset item, batching strategies, and tensor collation)
+// Source-agnostic data handler pipeline for VSRM data ingestion (dataset item, batching strategies, and tensor collation)
 
 
 
@@ -25,10 +25,10 @@ pub type CpuB = NdArray<f32>; // CPU backend for data staging area
 
 #[derive(Clone, Debug)]
 pub struct Batch<B: Backend> {
-    pub inputs: Tensor<B, 5>,               // [N, C, T, H, W]
-    pub targets: Tensor<B, 2, Int>,         // [N, L] (L padded to max target length in batch)
-    pub input_lengths: Tensor<B, 1, Int>,   // [N]
-    pub target_lengths: Tensor<B, 1, Int>,  // [N]
+    pub inputs: Tensor<B, 5>,               // [N, C, T_max, H, W]  padded frames
+    pub targets: Tensor<B, 2, Int>,         // [N, L_max]           padded sequences
+    pub input_lengths: Tensor<B, 1, Int>,   // [N]                  pre-padded frame lengths
+    pub target_lengths: Tensor<B, 1, Int>,  // [N]                  pre-padded sequence lengths
 }
 
 
@@ -36,10 +36,9 @@ pub struct Batch<B: Backend> {
 // standardized container for any VSRM dataset sample (GRID, LRW, etc...)
 #[derive(Clone, Debug)]
 pub struct VsrmItem {
-    // frames: [C, T, H, W]
-    pub frames: TensorData, // frames of the video (as TensorData to avoid Backend binding)
-    pub transcript_ids: Vec<usize>, // sequence IDs corresponding to speech in video
-    pub item_id: String,  // ID of data sample (perhaps useful for debugging failed samples)
+    pub frames: TensorData,          // [C, T, H, W]  frames of the video (as TensorData to avoid Backend binding)
+    pub transcript_ids: Vec<usize>,  // [L]           sequence IDs corresponding to speech in video
+    pub item_id: String,             // ID of data sample (perhaps useful for debugging failed samples)
 }
 
 
@@ -68,6 +67,8 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
     /// - device: backend device to load final tensors onto
     /// returns: batch containing padded inputs [N, C, max_T, H, W] and targets [N, max_L]
     fn batch(&self, items: Vec<VsrmItem>, device: &B::Device) -> Batch<B> {
+        assert!(!items.is_empty(), "VsrmBatcher received an empty batch");
+
         // analyze batch to find max video timesteps length and max transcript sequence length
         let max_t = items
             .iter()
@@ -79,6 +80,9 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
             .map(|item| item.transcript_ids.len())
             .max()
             .unwrap_or(0);
+
+        assert!(max_t > 0, "Max time dimension is zero");
+        assert!(max_l > 0, "Max transcript length is zero");
 
         // padded frames and sequence targets
         let mut padded_frames_container: Vec<Tensor<CpuB, 4>> = Vec::with_capacity(items.len());
@@ -93,12 +97,16 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
         // part C: one shot stack
         for item in items {
             // isolate curr frame's dims
-            let (c, t, h, w) = (
+            let (c, t, h, w, l) = (
                 item.frames.shape[0],
                 item.frames.shape[1],
                 item.frames.shape[2],
                 item.frames.shape[3],
+                item.transcript_ids.len(),
             );
+            assert!(c == 1, "VSRM assumes grayscale frame inputs: expected single-channel input, got {}", c);
+            assert!(t >= l, "CTC Constraint Violated: Video frames ({}) must be greater than transcript length ({})", t, l);
+            assert!(h > 0 && w > 0, "Invalid frame dimensions {}x{}", h, w);
 
             // --------------- (A) ---------------
 
@@ -111,20 +119,23 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
                 // init tensor of zeros of padding amount t, then concat with frames along dim T
                 let zeros: Tensor<CpuB, 4> = Tensor::zeros([c, pad_amount, h, w], &Default::default());
                 Tensor::cat(vec![frames, zeros], 1)
-            } else {
-                frames
-            };
+            } else { frames };
+            debug_assert!(padded_frames.shape()[1] == max_t, "Frame padding failed: expected T = {}, got {}", max_t, padded_frames.shape()[1]);
+
             padded_frames_container.push(padded_frames);
 
             // --------------- (B) ---------------
 
             let mut sequence = item.transcript_ids.clone();
+            assert!(item.transcript_ids.iter().all(|&id| id < BLANK_ID), "Sequence contains out-of-range token in item {}", item.item_id);
 
             // if curr item's sequence length is shorter than max length, pad it
             sequence.resize(max_l, BLANK_ID);
 
             // convert padded sequence from vec to tensor
             let padded_sequence: Tensor<CpuB, 1, Int> = Tensor::from_ints(&sequence[..], &Default::default());
+            debug_assert!(padded_sequence.shape()[0] == max_l, "Sequence padding failed: expected L = {}, got {}", max_l, padded_sequence.shape()[0]);
+
             padded_sequences_container.push(padded_sequence);
 
             // -----------------------------------
@@ -148,8 +159,16 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
             device
         );
 
+        // make sure stacking/padding worked for inputs/targets
+        debug_assert!(inputs.shape()[0] > 0 && inputs.shape()[1] == 1 && inputs.shape()[2] == max_t);
+        debug_assert!(targets.shape()[0] == inputs.shape()[0] && targets.shape()[1] == max_l);
+
         let input_lengths: Tensor<B, 1, Int> = Tensor::from_ints(&input_lengths[..], device);
         let target_lengths: Tensor<B, 1, Int> = Tensor::from_ints(&target_lengths[..], device);
+
+        // make sure batch sizes are aligned between inputs/targets and input/target lengths
+        assert_eq!(input_lengths.dims()[0], inputs.shape()[0], "Inputs/lengths batch size mismatch");
+        assert_eq!(target_lengths.dims()[0], targets.shape()[0], "Targets/lengths batch size mismatch");
 
         Batch {
             inputs,

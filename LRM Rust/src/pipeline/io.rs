@@ -7,9 +7,14 @@ use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
 use opencv::{
     self,
-    // core::{MatTrait, Size},
+    core::{Mat, AlgorithmHint, Rect},
+    imgproc,
     prelude::*,
-    videoio::VideoCaptureTrait,
+    videoio::{
+        VideoCapture,
+        VideoCaptureTrait,
+        CAP_ANY,
+    },
 };
 use rand::Rng;
 use reqwest::blocking::Client;
@@ -19,19 +24,28 @@ use std::{
     fs::{self, File},
     io::{self, BufRead, BufReader},
     path::Path,
-    sync::{atomic, Arc},
+    sync::{
+        atomic::{
+            AtomicU64,
+            Ordering,
+        },
+        Arc,
+    },
 };
+use zip::ZipArchive;
 use tar::Archive;
 
 
 
 /// stream plain .txt lines from disk
 pub fn stream_txt_lines<P: AsRef<Path>>(path: P) -> Result<Vec<String>, Box<dyn Error>> {
+    assert!(path.as_ref().exists(), "Text file {} does not exist", path.as_ref().to_string_lossy());
+
     let file = File::open(path)?;
     let reader = BufReader::new(file);
 
     let mut out = Vec::new();
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         let text = line.trim().to_string();
         if !text.is_empty() {
             out.push(text);
@@ -45,13 +59,15 @@ pub fn stream_txt_lines<P: AsRef<Path>>(path: P) -> Result<Vec<String>, Box<dyn 
 
 /// stream "text" field from remote JSONL.gz shard (e.g., C4)
 pub fn stream_jsonl_gz(url: String) -> Result<Vec<String>, Box<dyn Error>> {
+    assert!(!url.is_empty(), "URL is empty");
+
     let client = Client::new();
     let resp = client.get(&url).send()?.error_for_status()?;
     let decoder = GzDecoder::new(resp);
     let reader = BufReader::new(decoder);
 
     let mut out = Vec::new();
-    for line in reader.lines().flatten() {
+    for line in reader.lines().map_while(Result::ok) {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
             if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
                 if !text.is_empty() {
@@ -72,6 +88,8 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
     sample_rate: f64
 ) -> impl Iterator<Item = String> {
     let file_path = file_path.as_ref();
+    assert!(file_path.exists(), "Corpus file {:?} does not exist", file_path);
+    assert!(sample_rate > 0.0 && sample_rate <= 1.0, "sample_rate must be in (0, 1]");
     println!("Streaming corpus lines from: {}", file_path.to_string_lossy());
 
     let file = File::open(file_path).expect("Failed to open corpus file");
@@ -84,7 +102,7 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
             .unwrap()
             .progress_chars("#>-"),
     );
-    let kept_count = Arc::new(atomic::AtomicU64::new(0));
+    let kept_count = Arc::new(AtomicU64::new(0));
 
     let pb_inspect = prog_bar.clone();
     let pb_filter = prog_bar.clone();
@@ -100,7 +118,7 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
         .inspect(move |line| pb_inspect.inc(line.len() as u64 + 1)) // update bar per line read
         .filter(move |_| rng.random::<f64>() < sample_rate) // keep line with certain prob
         .inspect(move |_| {
-            let count = count_filter.fetch_add(1, atomic::Ordering::SeqCst);
+            let count = count_filter.fetch_add(1, Ordering::SeqCst);
             if count.is_multiple_of(1000) {
                 // update message every 1000 lines to save CPU
                 pb_filter.set_message(format!("{} lines kept", count));
@@ -127,17 +145,18 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
 pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
     let zip_path = zip_path.as_ref();
     let extract_to = extract_to.as_ref();
-
+    assert!(zip_path.exists(), "Zip file {:?} does not exist", zip_path);
+    
     let input_file = File::open(zip_path).expect("Failed to open zip file.");
-    let mut archive = zip::ZipArchive::new(input_file).expect("Failed to read zip file.");
-
+    let mut archive = ZipArchive::new(input_file).expect("Failed to read zip file.");
+    
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("Failed to read file from zip.");
         let out_path = match file.enclosed_name() {
             Some(path) => extract_to.join(path),
             None => continue, // skip files with invalid names if need be
         };
-
+        
         if file.name().ends_with('/') {
             fs::create_dir_all(&out_path).expect("Failed to create directory.");
         } else {
@@ -148,6 +167,7 @@ pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
             io::copy(&mut file, &mut outfile).expect("Failed to write file.");
         }
     }
+    assert!(extract_to.exists(), "Zip destination does not exist");
     println!("Extracted zip file to {}", extract_to.to_string_lossy());
 }
 
@@ -155,20 +175,22 @@ pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
 
 /// extract gzip file to a given path
 pub fn extract_gzip<P: AsRef<Path>, Q: AsRef<Path>>(gzip_path: P, extract_to: Q) {
-    let zip_path = gzip_path.as_ref();
+    let gzip_path = gzip_path.as_ref();
     let extract_to = extract_to.as_ref();
-
+    assert!(gzip_path.exists(), "GZip file {:?} does not exist", gzip_path);
+    
     let input_file = File::open(gzip_path).expect("Failed to open gzip file.");
     let mut decoder = GzDecoder::new(input_file);
-
+    
     // get folder path from the 'extract_to' string and create it
     if let Some(parent) = extract_to.parent() {
         fs::create_dir_all(parent).expect("Failed to create parent directory for extraction.");
     }
 
     let mut out_file = File::create(extract_to).expect("Failed to create output file.");
-
     io::copy(&mut decoder, &mut out_file).expect("Failed to decompress gzip content.");
+
+    assert!(extract_to.exists(), "GZip destination does not exist");
     println!("Extracted gzip file to {}", extract_to.to_string_lossy());
 }
 
@@ -179,13 +201,14 @@ pub fn extract_grid_corpus<P: AsRef<Path>>(root_path: P) {
     let root_path = root_path.as_ref();
     let data_dir = root_path.join("data");
     let grid_dir = data_dir.join("grid-lr-corpus");
+    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
 
     // check if the GRID corpus exists at the given path
     if !grid_dir.exists() {
         println!("Grid corpus not found, downloading...");
 
         // use client with NO timeout for large files
-        let client = reqwest::blocking::Client::builder()
+        let client = Client::builder()
             .timeout(None)
             .build()
             .expect("Failed to create HTTP client");
@@ -220,17 +243,11 @@ pub fn extract_grid_corpus<P: AsRef<Path>>(root_path: P) {
                     fs::remove_file(&output).expect("Failed to delete zip file.");
                 } else {
                     eprintln!("Failed to download GRID corpus: {}", response.status());
-                    return;
                 }
             }
-            Err(e) => {
-                eprintln!("Error parsing URL: {}", e);
-                return;
-            }
+            Err(e) => { eprintln!("Error parsing URL: {}", e); }
         }
-    } else {
-        println!("GRID corpus already exists, downloading skipped");
-    }
+    } else { println!("GRID corpus already exists, downloading skipped"); }
 }
 
 
@@ -241,6 +258,7 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
     let data_dir = root_path.join("data");
     let slr_dir = data_dir.join("librispeech-lm-norm");
     let final_path = slr_dir.join("librispeech-lm-norm.txt");
+    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
 
     // check if the SLR corpus exists at the given path
     if !final_path.exists() {
@@ -249,7 +267,7 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
         fs::create_dir_all(&slr_dir).expect("Failed to create SLR directory");
 
         // use client with NO timeout for large files
-        let client = reqwest::blocking::Client::builder()
+        let client = Client::builder()
             .timeout(None)
             .build()
             .expect("Failed to create HTTP client");
@@ -270,37 +288,30 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
                         slr_dir.to_string_lossy()
                     );
 
-                    // extract gzip file
+                    // extract/remove gzip file
                     extract_gzip(&output, &final_path);
-
-                    // clean up gzip file
                     fs::remove_file(&output).expect("Failed to delete gzip file.");
-                } else {
-                    eprintln!("Failed to download SLR corpus: {}", response.status());
-                    return;
-                }
+
+                    assert!(final_path.exists(), "SLR corpus file missing after extraction");
+                    assert!(final_path.metadata().unwrap().len() > 0, "SLR corpus file is empty");
+                } else { eprintln!("Failed to download SLR corpus: {}", response.status()); }
             }
-            Err(e) => {
-                eprintln!("Error parsing URL: {}", e);
-                return;
-            }
+            Err(e) => { eprintln!("Error parsing URL: {}", e); }
         }
-    } else {
-        println!("SLR corpus already exists, downloading skipped");
-    }
+    } else { println!("SLR corpus already exists, downloading skipped"); }
 }
 
 
 
 /// takes in a video path and outputs a list of floats
-pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn Error>> {
     let path = path.as_ref().to_str().ok_or("Non-UTF8 path")?;
 
-    match opencv::videoio::VideoCapture::from_file(path, opencv::videoio::CAP_ANY) {
+    match VideoCapture::from_file(path, CAP_ANY) {
         Ok(mut cap) => {
             let mut frames: Vec<f32> = vec![];
 
-            let mut frame = opencv::core::Mat::default();
+            let mut frame = Mat::default();
             while cap.read(&mut frame).expect("Error reading frame") {
                 let size = frame.size().expect("Failed to get frame size");
                 if size.width == 0 || size.height == 0 {
@@ -308,20 +319,20 @@ pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn std:
                 }
 
                 // convert frame to grayscale
-                let mut gray_frame = opencv::core::Mat::default();
-                opencv::imgproc::cvt_color(
+                let mut gray_frame = Mat::default();
+                imgproc::cvt_color(
                     &frame,
                     &mut gray_frame,
-                    opencv::imgproc::COLOR_BGR2GRAY,
+                    imgproc::COLOR_BGR2GRAY,
                     0,
-                    opencv::core::AlgorithmHint::ALGO_HINT_DEFAULT,
+                    AlgorithmHint::ALGO_HINT_DEFAULT,
                 )
                 .expect("Failed to convert frame to grayscale");
 
                 // crop frame to isolate region of interest (where the mouth is)
-                let roi = opencv::core::Rect::new(80, 190, 150, 50);
-                let temp = opencv::core::Mat::roi(&gray_frame, roi).expect("Failed to crop frame");
-                let mut mouth_frame = opencv::core::Mat::default();
+                let roi = Rect::new(80, 190, 150, 50);
+                let temp = Mat::roi(&gray_frame, roi).expect("Failed to crop frame");
+                let mut mouth_frame = Mat::default();
                 temp.copy_to(&mut mouth_frame)
                     .expect("Failed to copy ROI to a continuous Mat");
 
@@ -334,13 +345,17 @@ pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn std:
                     .collect::<Vec<f32>>();
                 frames.extend(flattened_frame);
             }
-            // standardize frames (by centering to zero mean and scaling to unit variance)
+
+            assert!(!frames.is_empty(), "No frames read from video");
             let mean = mean(&frames);
             let std_dev = std_dev(&frames);
+            let eps = 1e-8; // small epsilon val for numerical stability
+            assert!(std_dev > 0.0, "Frame standard deviation is zero");
 
+            // standardize frames (by centering to zero mean and scaling to unit variance)
             frames = frames
                 .iter()
-                .map(|&x: &f32| (x - mean) / std_dev)
+                .map(|&x: &f32| (x - mean) / (std_dev + eps))
                 .collect::<Vec<f32>>(); // frames as a vector of pixels as floats
 
             Ok(frames)
@@ -354,24 +369,24 @@ pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn std:
 
 
 
-/// takes in an alignments path (as well as TokenMap struct) and outputs a list of char indices
+/// takes in an alignments path (as well as TokenMap struct) and outputs a list of char IDs (as indices)
 pub fn load_grid_alignments<P: AsRef<Path>>(
     path: P,
     token_map: &TokenMap,
-) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+) -> Result<Vec<usize>, Box<dyn Error>> {
     let path = path.as_ref();
 
-    match std::fs::File::open(&path) {
+    match File::open(path) {
         Ok(file) => {
             let mut tokens: Vec<String> = vec![];
-            let lines = io::BufReader::new(file).lines();
+            let lines = BufReader::new(file).lines();
 
-            for line in lines.flatten() {
+            for line in lines.map_while(Result::ok) {
                 let line_group = line.split_whitespace().collect::<Vec<_>>();
-                if line_group[2] != "sil" {
-                    tokens.push(line_group[2].to_string());
-                }
+                assert!(line_group.len() >= 3, "Malformed alignment line: {:?}", line_group);
+                if line_group[2] != "sil" { tokens.push(line_group[2].to_string()); }
             }
+            assert!(!tokens.is_empty(), "No non-silence tokens found in alignment file");
 
             Ok(tokens
                 .iter()
@@ -393,8 +408,9 @@ pub fn load_grid_corpus<P: AsRef<Path>>(
     root_path: P,
     entry_name: &str,
     token_map: &TokenMap,
-) -> Result<(Vec<f32>, Vec<usize>), Box<dyn std::error::Error>> {
+) -> Result<(Vec<f32>, Vec<usize>), Box<dyn Error>> {
     let root_path = root_path.as_ref();
+    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
 
      // entry_name in the form of "s1/bbaf2n"
     if entry_name.trim().is_empty() {
@@ -408,14 +424,17 @@ pub fn load_grid_corpus<P: AsRef<Path>>(
     let video_path = grid_dataset_path
         .join(entry_name)
         .with_extension("mpg");
+    assert!(video_path.exists(), "Video file not found: {}", video_path.to_string_lossy());
 
     let alignments_path = grid_dataset_path
         .join("alignments")
         .join(entry_name)
         .with_extension("align");
+    assert!(alignments_path.exists(), "Alignment file not found: {}", alignments_path.to_string_lossy());
 
     let frames = load_grid_video(&video_path)?;
     let alignments = load_grid_alignments(&alignments_path, token_map)?;
+    assert!(!frames.is_empty() && !alignments.is_empty(), "Loaded empty GRID sample");
 
     Ok((frames, alignments))
 }

@@ -19,6 +19,7 @@ use burn::{
     data::dataset::Dataset,
     tensor::TensorData,
 };
+use image::{GrayImage, Luma};
 use std::{
     path::{
         Path,
@@ -45,10 +46,10 @@ impl GridDataset {
         token_map: TokenMap
     ) -> Self {
         let root_path = root_path.as_ref();
-
         let grid_dir = root_path
             .join("data")
             .join("grid-lr-corpus");
+        assert!(grid_dir.exists(), "GRID corpus directory does not exist at {:?}", grid_dir);
 
         // identify all speakers available on disk (s1, s2, ..., s34)
         let mut avail_speakers = Vec::new();
@@ -60,6 +61,7 @@ impl GridDataset {
                 }
             }
         }
+        assert!(!avail_speakers.is_empty(), "No speaker directories found in {:?}", grid_dir);
 
         // sort s1, s2, ..., s34
         avail_speakers.sort_by_key(|s| s[1..].parse::<i32>().unwrap_or(1));
@@ -73,7 +75,9 @@ impl GridDataset {
             (total * val_test_threshold).round() as usize,
         );
 
-        assert!(train_test_threshold < val_test_threshold, "Train threshold must be before Val threshold");
+        assert!(total > 1.0, "Total number of speakers must be more than one");
+        assert!(train_test_threshold < val_test_threshold || train_end < val_end, "Train threshold must be before Val threshold");
+        assert!(train_test_threshold > 0.0 && val_test_threshold <= 1.0, "Split thresholds must be in (0, 1]");
 
         // partition speakers based on split points and select based on which split given
         let selected_speakers = match split {
@@ -97,6 +101,7 @@ impl GridDataset {
             }
         }
         entries.sort(); // sort for deterministic order
+        assert!(!entries.is_empty(), "Dataset split {:?} resulted in 0 samples\nCheck if path {:?} contains .mpg files", split, grid_dir);
         println!("Initialized GridDataset ({:?}) with {} samples from {:?}", split, entries.len(), selected_speakers);
 
         Self {
@@ -126,9 +131,14 @@ impl Dataset<VsrmItem> for GridDataset {
             &self.token_map,
         ).ok()?;
 
+        assert!(!frames.is_empty(), "No frames loaded");
+        assert!(!transcript_ids.is_empty(), "No transcripts loaded");
+
         // isolate dims
         let (c, h, w) = (1, 50, 150);
-        let t = frames.len() / (c * h * w);
+        let t: usize = frames.len() / (c * h * w);
+        assert!(frames.len().is_multiple_of(c * h * w), "Frame buffer size {} is not divisible by frame dimensions", frames.len());
+        assert!(t > 0, "Computed zero frames for item {}", entry_name);
         if t == 0 { return None; }
 
         // // obtain min and max pixel values (fold approach)
@@ -137,6 +147,7 @@ impl Dataset<VsrmItem> for GridDataset {
         //     .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &x| {
         //         (min.min(x), max.max(x))
         //     });
+        // assert!(norm_max.is_finite() && norm_min.is_finite(), "Non-finite pixel values detected");
 
         // obtain min and max pixel values (loop approach)
         let (mut norm_min, mut norm_max) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -144,6 +155,7 @@ impl Dataset<VsrmItem> for GridDataset {
             if x < norm_min { norm_min = x; }
             if x > norm_max { norm_max = x; }
         }
+        assert!(norm_max.is_finite() && norm_min.is_finite(), "Non-finite pixel values detected");
 
         // normalize pixel values to within [0, 1] (adaptive approach)
         let range = norm_max - norm_min;
@@ -154,6 +166,8 @@ impl Dataset<VsrmItem> for GridDataset {
         // for x in frames.iter_mut() {
         //     *x /= 255.0; 
         // }
+
+        assert!(frames.len() == (c * t * h * w), "Tensor shape mismatch: len={} expected={}", frames.len(), (c * t * h * w));
 
         // convert frames into 4D tensor
         let frames = TensorData::new(

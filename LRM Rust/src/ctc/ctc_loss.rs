@@ -65,6 +65,7 @@ impl CtcLoss {
     /// - targets: [N, T_max] (target sequences)
     /// - input_lengths: [N] (non-padded lengths of inputs)
     /// - target_lengths: [N] (non-padded lengths of targets)
+    /// returns: [N] (loss per sample in batch)
     pub fn forward<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,       // [N, T_max, Vocab] (logits from model)
@@ -96,10 +97,14 @@ impl CtcLoss {
         input_lengths: Tensor<B, 1, Int>,
         target_lengths: Tensor<B, 1, Int>,
     ) -> Tensor<B, 1> {
-        let device = inputs.device();
+        let device = inputs.clone().device();
         let [n, _, vocab_size] = inputs.dims();
-        let log_probs = log_softmax(inputs, 2); // turn logits into log-probs
+        let log_probs = log_softmax(inputs.clone(), 2); // turn logits into log-probs
         let mut losses: Vec<Tensor<B, 1>> = Vec::with_capacity(n);
+
+        assert_eq!(inputs.dims()[0], targets.dims()[0], "Inputs/targets batch size mismatch");
+        assert_eq!(input_lengths.dims()[0], inputs.shape()[0], "Inputs/lengths batch size mismatch");
+        assert_eq!(target_lengths.dims()[0], targets.shape()[0], "Targets/lengths batch size mismatch");
 
         let input_lengths_to_host = input_lengths
             .to_data()
@@ -118,6 +123,11 @@ impl CtcLoss {
         for sample in 0..n {
             let sample_input_length = input_lengths_to_host[sample] as usize;
             let sample_target_length = target_lengths_to_host[sample] as usize;
+
+            assert!(sample_input_length > 0, "Empty input sequence");
+            assert!(sample_target_length > 0, "Empty target sequence");
+            assert!(sample_input_length <= inputs.dims()[1], "Input length ({}) should be <= T padded {}", sample_input_length, inputs.dims()[1],);
+            assert!(sample_target_length <= targets.dims()[1], "Target length ({}) should be <= L padded {}", sample_target_length, targets.dims()[1],);
 
             let sample_log_probs = log_probs
                 .clone()
@@ -155,14 +165,16 @@ impl CtcLoss {
         let timesteps = log_probs.dims()[0];
         // let sentinel_value = f32::NEG_INFINITY; // causes NaNs
         let sentinel_value = -1e30; // numerically stable
-        let large_negs = Tensor::<B, 1>::full([1], sentinel_value, device);
+        assert!(timesteps > 0, "No timesteps in input");
+        assert!(blank >= 0 && (blank as usize) < vocab_size, "Blank ID ({}) is out of vocabulary size bounds ({})", blank, vocab_size);
 
         // original and blank-interleaved lengths of target sequence
-        let l_orig: usize = targets.dims()[0];
-        let l_intr = 2 * l_orig + 1;
+        let len_targ_orig: usize = targets.dims()[0];      // L
+        let len_targ_intr = 2 * len_targ_orig + 1;  // 2L + 1
 
-        // make [T + 1] blanks and take [T] labels, padded to [T + 1]
-        let blanks = Tensor::<B, 1, Int>::full([l_orig + 1], blank, device);
+        // make [L + 1] tensor of blank IDs
+        // make [L + 1] tensor of target IDs + single blank ID concatenated at end
+        let blanks = Tensor::<B, 1, Int>::full([len_targ_orig + 1], blank, device);
         let labels = Tensor::<B, 1, Int>::cat(
             vec![
                 targets.clone(),
@@ -172,96 +184,89 @@ impl CtcLoss {
         );
 
         // perform: stack --> transpose --> flatten
-        // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-interleaved targets)
-        let intr_ids = {
-            let blank_label_pairs = Tensor::stack::<2>(vec![blanks, labels], 1);
-            blank_label_pairs
-                .reshape([2 * (l_orig + 1)])
-                .slice([0..l_intr])
-        };
+        // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-interleaved targets of length 2L + 1)
+        let intr_targ_ids = Tensor::stack::<2>(vec![blanks, labels], 1)
+                .reshape([2 * (len_targ_orig + 1)])
+                .slice([0..len_targ_intr]);
+        assert_eq!(intr_targ_ids.dims()[0], len_targ_intr, "Interleaved targets/length mismatch");
 
         // can-skip-by-1 & can-skip-by-2 validity masks
-        // goal: (pos is odd) && (pos > 1) && (intr_ids[pos] != intr_ids[pos − 2]) && (intr_ids[pos] != blank)
-        let intr_pos = Tensor::<B, 1, Int>::arange(0..(l_intr as i64), device); // blank-interleaved symbol positions
-        let odd_mask = intr_pos.clone().remainder_scalar(2).not_equal_elem(0);
-        let gt_1_mask = intr_pos.clone().greater_elem(1);
-        let prev_2_ids = intr_ids.clone().roll_dim(-2, 0); // shift right by 2 on dim 0
-        let neq_prev_2_ids_mask = intr_ids.clone().not_equal(prev_2_ids.clone());
-        let not_blank_mask = intr_ids.clone().not_equal_elem(blank);
-        let can_skip_1_mask = intr_pos.clone().greater_elem(0);
+        // goal: (pos is odd) && (pos > 1) && (ids[pos] != ids[pos − 2]) && (ids[pos] != blank)
+        let intr_targ_pos = Tensor::<B, 1, Int>::arange(0..(len_targ_intr as i64), device); // blank-interleaved symbol positions
+        let odd_mask = intr_targ_pos.clone().remainder_scalar(2).not_equal_elem(0);
+        let pos_gt_1_mask = intr_targ_pos.clone().greater_elem(1);
+        let prev_2_ids = intr_targ_ids.clone().roll_dim(-2, 0); // shift right by 2 on dim 0
+        let neq_prev_2_ids_mask = intr_targ_ids.clone().not_equal(prev_2_ids.clone());
+        let not_blank_mask = intr_targ_ids.clone().not_equal_elem(blank);
+        let can_skip_1_mask = intr_targ_pos.clone().greater_elem(0);
         let can_skip_2_mask = odd_mask
             .clone()
-            .bool_and(gt_1_mask.clone())
+            .bool_and(pos_gt_1_mask.clone())
             .bool_and(neq_prev_2_ids_mask.clone())
             .bool_and(not_blank_mask.clone());
 
-        // curr/next transfer buffers of forward log-probs
-        let mut curr_fwd = Tensor::<B, 1>::full(Shape::new([l_intr]), sentinel_value, device);
-        let mut next_fwd = Tensor::<B, 1>::full(Shape::new([l_intr]), sentinel_value, device);
+        // create curr/next transfer buffers of forward log-probs
+        let large_negs = Tensor::<B, 1>::full([len_targ_intr], sentinel_value, device);
+        let mut curr_fwd = large_negs.clone();
+        let mut next_fwd = large_negs.clone();
 
         // t = 0 (base case)
-        // valid start positions: begin at first blank or symbol after it
-        let log_probs_0_v = log_probs.clone().slice([0..1, 0..vocab_size]);
-        if l_intr >= 1 {
-            let id_0_0 = intr_ids.clone().slice([0..1]).unsqueeze_dim(0);
-            let log_prob_0_0 = log_probs_0_v.clone().gather(1, id_0_0).reshape([1]);
+        // begin at first blank or symbol after it
+        if len_targ_intr >= 1 { // t = 0, v = 0
+            let id_0_0 = intr_targ_ids.clone().slice([0..1]).unsqueeze_dim(0);
+            let log_prob_0_0 = log_probs.clone()
+                .slice([0..1, 0..vocab_size])
+                .gather(1, id_0_0)
+                .reshape([1]);
             curr_fwd = curr_fwd.slice_assign([0..1], log_prob_0_0);
         }
-        if l_intr >= 2 {
-            let id_0_1 = intr_ids.clone().slice([1..2]).unsqueeze_dim(0);
-            let log_prob_0_1 = log_probs_0_v.clone().gather(1, id_0_1).reshape([1]);
+        if len_targ_intr >= 2 { // t = 0, v = 1
+            let id_0_1 = intr_targ_ids.clone().slice([1..2]).unsqueeze_dim(0);
+            let log_prob_0_1 = log_probs.clone()
+                .slice([0..1, 0..vocab_size])
+                .gather(1, id_0_1)
+                .reshape([1]);
             curr_fwd = curr_fwd.slice_assign([1..2], log_prob_0_1);
         }
 
         // t ≥ 1 (recurrence case)
         for t in 1..timesteps {
             // reset buffer
-            next_fwd = Tensor::<B, 1>::full_like(&next_fwd, sentinel_value);
+            next_fwd = large_negs.clone();
+        
+            // grab chunk of log-probs of each symbol ID in vocab at current timestep
+            // transform to log-probs of each symbol ID in blank-interleaved target sequence
+            let curr_log_probs: Tensor<B, 1> = log_probs.clone() // [T, Vocab]
+                .slice([t..(t + 1)]) // [1, Vocab]
+                .repeat_dim(0, len_targ_intr) // [(2L + 1), Vocab]
+                .gather(1, intr_targ_ids.clone().unsqueeze_dim(1)) // [(2L + 1), 1]
+                .squeeze(); // [(2L + 1)]
 
-            // grab chunk of log-probs of each symbol at current timestep
-            let log_probs_t = log_probs.clone().slice([t..(t + 1), 0..vocab_size]);
+            // probs at curr/prev positions
+            let prev_1_probs = curr_fwd.clone().roll_dim(-1, 0); // shift right by 1
+            let prev_2_probs = curr_fwd.clone().roll_dim(-2, 0); // shift right by 2
 
-            // probs at previous positions
-            let prev_1_probs = curr_fwd.clone().roll_dim(-1, 0); // shift by 1
-            let prev_2_probs = curr_fwd.clone().roll_dim(-2, 0); // shift by 2
+            // possible actions at current timestep (based on what could have happened at previous frame)
+            // - stay:  log-prob of staying at same symbol in interleaved target sequence   (from same position)
+            // - adv_1: log-prob of advancing by one symbol                                 (from one position earlier)
+            // - adv_2: log-prob of skipping blank to advance by two symbols                (from two positions earlier)
+            let stay = curr_fwd.clone();
+            let adv_1 = large_negs.clone().mask_where(can_skip_1_mask.clone(), prev_1_probs.clone());
+            let adv_2 = large_negs.clone().mask_where(can_skip_2_mask.clone(), prev_2_probs.clone());
 
-            for pos in 0..l_intr {
-                // possible actions at current timestep (based on what could have happened at previous frame)
-                // - stay:  log-prob of staying at same symbol in interleaved target sequence   (from same position)
-                // - adv_1: log-prob of advancing by one symbol                                 (from one position earlier)
-                // - adv_2: log-prob of skipping blank to advance by two symbols                (from two positions earlier)
-                let stay = curr_fwd.clone().slice([pos..(pos + 1)]);
-                let adv_1 = large_negs.clone().mask_where(
-                    can_skip_1_mask.clone().slice([pos..(pos + 1)]),
-                    prev_1_probs.clone().slice([pos..(pos + 1)]),
-                );
-                let adv_2 = large_negs.clone().mask_where(
-                    can_skip_2_mask.clone().slice([pos..(pos + 1)]),
-                    prev_2_probs.clone().slice([pos..(pos + 1)]),
-                );
+            // compute accumulated log-prob for current path (in time-sequence grid) from all possible actions
+            let total_log_probs = log_sum_exp_3_tensor(stay, adv_1, adv_2);
 
-                // compute accumulated log-prob for current path (in time-sequence grid) from all possible actions
-                let path_log_prob = log_sum_exp_3_tensor(stay, adv_1, adv_2);
-
-                // grab symbol log-prob at current position in interleaved target sequence given by model
-                let sym_id = intr_ids.clone().slice([pos..(pos + 1)]).unsqueeze_dim(0);
-                let sym_log_prob = log_probs_t.clone().gather(1, sym_id).reshape([1]);
-
-                // prep updated collection of forward log-probs
-                // combine log-prob of current path with log-prob of current symbol (from model output)
-                next_fwd = next_fwd.slice_assign([pos..(pos + 1)], path_log_prob.add(sym_log_prob));
-            }
-
+            // update log-probs of current path with log-prob of current timestep (from model output)
+            next_fwd = total_log_probs + curr_log_probs;
             swap(&mut curr_fwd, &mut next_fwd);
         }
 
         // end at last blank or symbol before it
-        let end_1 = curr_fwd.clone().slice([(l_intr - 1)..l_intr]);
-        let end_2 = if l_intr >= 2 {
-            curr_fwd.clone().slice([(l_intr - 2)..(l_intr - 1)])
-        } else {
-            large_negs.clone()
-        };
+        let end_1 = curr_fwd.clone().slice([(len_targ_intr - 1)..len_targ_intr]);
+        let end_2 = if len_targ_intr >= 2 {
+            curr_fwd.clone().slice([(len_targ_intr - 2)..(len_targ_intr - 1)])
+        } else { large_negs.clone() };
         let total_log_prob = log_sum_exp_2_tensor(end_1.clone(), end_2.clone());
 
         -total_log_prob // loss

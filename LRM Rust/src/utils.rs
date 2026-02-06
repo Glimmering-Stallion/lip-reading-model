@@ -5,7 +5,6 @@
 // imports
 use burn::tensor::{backend::Backend, Tensor};
 use num_traits::Float;
-use zip; // for extracting zip files
 
 
 
@@ -37,7 +36,11 @@ pub fn mean<T: Float>(data: &[T]) -> T {
 pub fn std_dev<T: Float>(data: &[T]) -> T {
     let count = T::from(data.len()).unwrap();
     let mean = mean(data);
-    let variance = data.iter().copied().fold(T::zero(), |acc, x| acc + ((x - mean) * (x - mean))) / count;
+    let variance = data
+        .iter()
+        .copied()
+        .fold(T::zero(), |acc, x| acc + ((x - mean) * (x - mean)))
+        / count;
     variance.sqrt()
 }
 
@@ -61,7 +64,10 @@ pub fn log_sum_exp_3_scalar(a: f32, b: f32, c: f32) -> f32 {
 
 
 #[inline]
-pub fn log_sum_exp_2_tensor<B: Backend, const D: usize>(a: Tensor<B, D>, b: Tensor<B, D>) -> Tensor<B, D> {
+pub fn log_sum_exp_2_tensor<B: Backend, const D: usize>(
+    a: Tensor<B, D>,
+    b: Tensor<B, D>,
+) -> Tensor<B, D> {
     let max = a.clone().max_pair(b.clone()); // element-wise maxxing
     let sum = (a - max.clone()).exp().add((b - max.clone()).exp());
     let lse = max.clone().add(sum.log());

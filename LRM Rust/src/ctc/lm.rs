@@ -67,6 +67,8 @@ pub struct NgramConfig {
 
 impl NgramConfig {
     pub fn init(&self) -> Ngram {
+        assert!((1..=5).contains(&self.n), "N-gram size ({}) must be in [1, 5]", self.n);
+
         if let Some(path) = &self.path {
             Ngram::load(path).unwrap()
         } else {
@@ -85,8 +87,8 @@ impl NgramConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Ngram {
-    n: usize,   // N-gram size
-    vocab_size: usize, // total vocab size
+    n: usize,           // N-gram size
+    vocab_size: usize,  // total vocab size
 
     // <sequence: count> maps
     n_gram_counts: HashMap<Vec<usize>, usize>,    // frequency counts of N-gram sequences                   (e.g. count of "the")
@@ -160,7 +162,7 @@ impl LanguageModel for Ngram {
 
         // get counts and assign to floats with simpler var names
         let c = *self.n_gram_counts.get(&n_gram).unwrap_or(&0) as f32;
-        let n = *self.prefix_counts.get(prefix).unwrap_or(&0) as f32;
+        let n = *self.prefix_counts.get(prefix).unwrap_or(&0) as f32; // not to be confused with N-gram size here
         let t = *self.unique_followers.get(prefix).unwrap_or(&0) as f32;
         
         // apply Witten-Bell smoothing (to handle unseen N-grams for robustness)

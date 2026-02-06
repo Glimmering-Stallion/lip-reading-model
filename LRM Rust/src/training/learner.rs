@@ -47,7 +47,9 @@ use burn::{
     lr_scheduler::noam::NoamLrSchedulerConfig,
     module::Module, optim::AdamConfig,
     record::CompactRecorder,
+    data::dataset::Dataset,
     tensor::{
+        ElementConversion,
         backend::{
             AutodiffBackend,
             Backend,
@@ -109,6 +111,9 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
     fn step(&self, batch: Batch<B>) -> TrainOutput<VsrmStepOutput<B>> {
         let logits = self.forward(batch.inputs);
 
+        let [n, t, v] = logits.dims();
+        assert!(n > 0 && t > 0 && v > 0);
+
         let loss = CtcLossConfig::new()
             .with_blank_id(BLANK_ID)
             .init()
@@ -118,6 +123,7 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
                 batch.input_lengths.clone(),
                 batch.target_lengths.clone(),
             );
+        if !loss.clone().is_finite().all().into_scalar().elem::<bool>() { panic!("Loss contains non-finite values"); }
 
         let grads = loss.backward();
 
@@ -142,6 +148,9 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
     fn step(&self, batch: Batch<B>) -> VsrmStepOutput<B> {
         let logits = self.forward(batch.inputs);
 
+        let [n, t, v] = logits.dims();
+        assert!(n > 0 && t > 0 && v > 0);
+
         let loss = CtcLossConfig::new()
             .with_blank_id(BLANK_ID)
             .init()
@@ -151,6 +160,7 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
                 batch.input_lengths.clone(),
                 batch.target_lengths.clone(),
             );
+        if !loss.clone().is_finite().all().into_scalar().elem::<bool>() { panic!("Loss contains non-finite values"); }
 
         VsrmStepOutput {
             loss,
@@ -182,14 +192,22 @@ where
 {
     let root_path = root_path.as_ref();
     let output_path = output_path.as_ref();
+    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
+    assert!(output_path.exists(), "Output path {:?} does not exist", output_path);
 
     // create model experiment/artifacts directory
     let model_dir = format!("vsrm_{}", dataset_src.tag());
     let model_path = output_path.join(&model_dir);
     create_dir_all(&model_path).expect("Failed to create trained vsrm artifacts directory");
 
+    assert!(learner_config.num_epochs > 0, "Number of epochs must be > 0, got {}", learner_config.num_epochs);
+    assert!(learner_config.batch_size > 0, "Batch size must be > 0, got {}", learner_config.batch_size);
+    assert!(learner_config.learning_rate > 0.0, "Learning rate must be > 0, got {}", learner_config.learning_rate);
+    assert!(learner_config.num_workers <= 64, "Exceeded reasonable worker limit ({})", learner_config.num_workers);
+    if learner_config.num_workers == 0 { println!("Running with 0 workers: data loading will be synchronous"); }
+
     // save hyperparams
-    learner_config.save(&model_path.join("learner_config.json")).expect("Failed to save config");
+    learner_config.save(model_path.join("learner_config.json")).expect("Failed to save config");
 
     // ------------------------------------ Dataset batching and loading ------------------------------------
 
@@ -209,6 +227,10 @@ where
     let num_batches = num_items.div_ceil(learner_config.batch_size);
     let total_steps = num_batches * learner_config.num_epochs;
     let warmup_steps = (0.2_f64 * total_steps as f64).floor() as usize;
+
+    assert!(num_batches > 0, "Computed 0 batches for training");
+    assert!(total_steps > 0, "Total training steps is 0");
+    assert!(warmup_steps < total_steps, "Warmup steps ({}) must be less than total steps ({})", warmup_steps, total_steps);
 
     // learning rate scheduler (Noam scheduler)
     let scheduler = NoamLrSchedulerConfig::new(learner_config.learning_rate)
@@ -233,6 +255,7 @@ where
     let ngram_lm_path = Path::new(&root_path)
         .join("models")
         .join("ngram_lm.bin");
+    assert!(ngram_lm_path.exists(), "N-gram LM at {:?} does not exist", ngram_lm_path);
 
     // N-gram LM instance
     let ngram_lm = NgramConfig::new()
@@ -240,14 +263,18 @@ where
         .with_vocab_size(VOCAB_SIZE)
         .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
 
+    let beam_width = 5;
+    let lm_alpha = 2.0;
+    let lm_beta = 2.0;
+
     // init CTC Beam decoder with N-gram LM (slower)
     let beam_decoder = CtcDecoderConfig::new()
         .with_search_type(CtcDecodeType::BeamSearch)
-        .with_beam_width(5)
+        .with_beam_width(beam_width)
         .with_blank_id(BLANK_ID)
         .with_lm(Some(LanguageModelConfig::Ngram(ngram_lm)))
-        .with_lm_alpha(2.0)
-        .with_lm_beta(2.0)
+        .with_lm_alpha(lm_alpha)
+        .with_lm_beta(lm_beta)
         .init();
 
     // init CTC Greedy decoder (faster)
@@ -280,7 +307,7 @@ where
         .save_file(model_path.join(format!("{}_final_weights", model_dir)), &CompactRecorder::new())
         .expect("Failed to save trained model");
 
-    println!("Training complete - model weights saved to {:?}", output_path);
+    println!("Training complete: model weights saved to {:?}", output_path);
 }
 
 
@@ -299,10 +326,13 @@ where
     B: AutodiffBackend,
     P: AsRef<Path>,
 {
-    // (train/validation boundary at 80% of data, validation/test boundary at 90% of data)
-    // data:            |---------------------------train---------------------------|-valid-|--test--|
-    // train/valid:     |----------------------------80%--------------------------->|<---------------|
-    // valid/test:      |--------------------------------90%------------------------------->|<-------|
+    let root_path = root_path.as_ref();
+    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
+
+    // (train/validation boundary, validation/test boundary)
+    // total data:                  |---------------------------train---------------------------|-valid-|--test--|
+    // train/valid split point:     |----------------------------80%--------------------------->|<---------------|
+    // valid/test split point:      |--------------------------------90%------------------------------->|<-------|
     let split_thresholds = (0.8, 0.9);
 
     match dataset_src {
@@ -310,6 +340,9 @@ where
             // train/validation dataset instances
             let train_dataset = GridDataset::new(root_path, DatasetSplit::Train, split_thresholds, token_map.clone());
             let valid_dataset = GridDataset::new(root_path, DatasetSplit::Val, split_thresholds, token_map.clone());
+
+            assert!(train_dataset.len() > 0, "Training dataset is empty");
+            assert!(valid_dataset.len() > 0, "Validation dataset is empty");
 
             // train/validation data batcher instances (train uses Autodiff B, while valid uses InnerBackend raw B)
             let train_batcher = VsrmBatcher::<B>::new(device.clone());
@@ -326,6 +359,9 @@ where
                 .shuffle(learner_config.seed)
                 .num_workers(learner_config.num_workers)
                 .build(valid_dataset);
+
+            assert!(train_dataloader.num_items() > 0, "Training dataloader has 0 items");
+            assert!(valid_dataloader.num_items() > 0, "Validation dataloader has 0 items");
 
             (train_dataloader, valid_dataloader)
         }

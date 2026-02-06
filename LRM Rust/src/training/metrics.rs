@@ -208,6 +208,8 @@ impl<B: Backend> Metric for CtcCharErrorRate<B> {
             input_item.target_lengths.clone(),
         );
 
+        debug_assert!(predictions.len() == targets.len(), "Predictions/targets batch size mismatch");
+
         // init per batch counts
         let mut batch_error = 0;
         let mut batch_chars = 0;
@@ -216,6 +218,9 @@ impl<B: Backend> Metric for CtcCharErrorRate<B> {
         for i in 0..predictions.len() {
             let prediction_ids = &predictions[i];
             let target_ids = &targets[i];
+
+            debug_assert!(!prediction_ids.is_empty(), "Decoder produced empty prediction sequence");
+            debug_assert!(!target_ids.is_empty(), "Encountered empty target sequence");
 
             let edit_distance = levenshtein(prediction_ids, target_ids);
 
@@ -272,6 +277,8 @@ impl<B: Backend> Metric for CtcWordErrorRate<B> {
             input_item.target_lengths.clone(),
         );
 
+        debug_assert!(predictions.len() == targets.len(), "Predictions/targets batch size mismatch");
+
         // init per batch counts
         let mut batch_error = 0;
         let mut batch_words = 0;
@@ -285,6 +292,9 @@ impl<B: Backend> Metric for CtcWordErrorRate<B> {
             let target_chars = self.token_map
                 .ids_to_chars(&targets[i])
                 .expect("Failed to convert target IDs to chars");
+
+            debug_assert!(!prediction_chars.is_empty(), "Decoder produced empty prediction sequence");
+            debug_assert!(!target_chars.is_empty(), "Encountered empty target sequence");
 
             // convert char sequence to a container of words (for both prediction and target)
             let prediction_words: Vec<String> = String::from_iter(prediction_chars)
@@ -435,8 +445,6 @@ mod tests {
 
     #[test]
     fn test_unpad_to_vec() {
-        type B = NdArray;
-
         // N = 3, max_l = 5
         // Row 0: [1, 2, 3, 0, 0]  length = 3
         // Row 1: [4, 5, 0, 0, 0]  length = 2

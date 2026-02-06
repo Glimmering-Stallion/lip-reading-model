@@ -5,6 +5,7 @@
 // imports
 use burn::{
     module::Module,
+    config::Config,
     nn::{
         conv::{Conv1d, Conv1dConfig},
         Dropout, DropoutConfig,
@@ -29,7 +30,46 @@ pub struct TcnBlock<B: Backend> {
 
 
 
+#[derive(Config, Debug)]
+pub struct TemporalConvNetConfig {
+    /// [in channels, out channels]
+    pub channels: [usize; 2],
+
+    #[config(default = 3)]
+    pub kernel_size: usize,
+
+    #[config(default = 4)]
+    pub layers: usize,
+
+    #[config(default = 0.0)]
+    pub dropout_prob: f64,
+}
+
+
+
+#[derive(Module, Debug)]
+pub struct TemporalConvNet<B: Backend> {
+    tcn_blocks: Vec<TcnBlock<B>>,
+
+    #[module(ignored)]
+    pub kernel_size: usize,
+
+    #[module(ignored)]
+    pub layers: usize,
+}
+
+
+
 impl<B: Backend> TcnBlock<B> {
+    /// initializes a residual block with two dilated causal convolutions
+    /// params:
+    /// - in_channels: number of input features
+    /// - out_channels: number of output features (and internal width)
+    /// - kernel_size: temporal width of convolution window
+    /// - dilation: spacing between kernel elements (controls lookback range)
+    /// - dropout_prob: probability for dropout layers between convolutions
+    /// - device: the backend device to initialize weights on
+    /// returns: a block containing dual convolutions and an optional projection for residuals
     pub fn new(
         in_channels: usize,
         out_channels: usize,
@@ -38,6 +78,11 @@ impl<B: Backend> TcnBlock<B> {
         dropout_prob: f64,
         device: &B::Device,
     ) -> Self {
+        assert!(in_channels > 0 && out_channels > 0, "TCN channels must be > 0");
+        assert!(kernel_size > 0, "TCN kernel size must be > 0");
+        assert!(dilation > 0, "TCN dilation must be > 0");
+        assert!((0.0..=1.0).contains(&dropout_prob), "TCN dropout probability must be in [0, 1]");
+
         let conv1 = Conv1dConfig::new(in_channels, out_channels, kernel_size)
             .with_dilation(dilation)
             .init(device);
@@ -52,9 +97,7 @@ impl<B: Backend> TcnBlock<B> {
 
         let proj = if in_channels != out_channels {
             Some(Conv1dConfig::new(in_channels, out_channels, 1).init(device))
-        } else {
-            None
-        };
+        } else { None };
 
         Self {
             conv1,
@@ -76,6 +119,9 @@ impl<B: Backend> TcnBlock<B> {
         // our case:        (timesteps_left, timesteps_right, channels_left, channels_right)
         // resulting input: (padding, 0, 0, 0)
 
+        debug_assert_eq!(input.dims().len(), 3);
+        debug_assert!(input.dims()[2] > 0, "Temporal dimension must be > 0");
+
         let x = input.clone().pad((self.padding, 0, 0, 0), 0.0); // first left-padding
         let x = activation::relu(self.conv1.forward(x));
         let x = self.dropout.forward(x);
@@ -95,23 +141,29 @@ impl<B: Backend> TcnBlock<B> {
 
 
 
-#[derive(Module, Debug)]
-pub struct TemporalConvNet<B: Backend> {
-    tcn_blocks: Vec<TcnBlock<B>>,
-}
-
-
-
-pub struct TemporalConvNetConfig {
-    pub channels: [usize; 2],
-    pub kernel_size: usize,
-    pub layers: usize,
-    pub dropout_prob: f64,
+impl TemporalConvNetConfig {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> TemporalConvNet<B> {
+        TemporalConvNet::new(
+            self.channels,
+            self.kernel_size,
+            self.layers,
+            self.dropout_prob,
+            device,
+        )
+    }
 }
 
 
 
 impl<B: Backend> TemporalConvNet<B> {
+    /// builds a stack of TCN blocks with exponentially increasing dilation
+    /// params:
+    /// - channels: array of [in channels, out channels]
+    /// - kernel_size: size of the 1D temporal kernel
+    /// - layers: number of residual blocks to stack (dilation = 2^layers)
+    /// - dropout_prob: dropout rate applied within each residual block
+    /// - device: backend device for weight allocation
+    /// returns: a network with a receptive field determined by kernel and depth
     pub fn new(
         channels: [usize; 2],
         kernel_size: usize,
@@ -119,6 +171,11 @@ impl<B: Backend> TemporalConvNet<B> {
         dropout_prob: f64,
         device: &B::Device,
     ) -> Self {
+        assert!(layers > 0, "TCN must have at least one layer");
+        assert!(layers < 12, "TCN layers too large ({}), dilation will explode", layers);
+        assert!(kernel_size > 0);
+        assert!(channels[0] > 0 && channels[1] > 0);
+
         let mut tcn_blocks = Vec::with_capacity(layers);
         let mut current_in_channels = channels[0];
         let out_channels = channels[1];
@@ -138,47 +195,29 @@ impl<B: Backend> TemporalConvNet<B> {
             current_in_channels = out_channels;
         }
 
-        Self { tcn_blocks }
+        Self {
+            tcn_blocks,
+            kernel_size,
+            layers,
+        }
     }
 
+    /// sequential forward pass through stack of residual blocks
+    /// params:
+    /// - x: [N, C_in, T] input tensor from frontend/embedding
+    /// returns: [N, C_out, T] tensor with deep temporal features
     pub fn forward(&self, mut x: Tensor<B, 3>) -> Tensor<B, 3> {
         for tcn_block in &self.tcn_blocks {
             x = tcn_block.forward(x);
         }
         x
     }
-}
 
-
-
-impl TemporalConvNetConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> TemporalConvNet<B> {
-        TemporalConvNet::new(
-            self.channels,
-            self.kernel_size,
-            self.layers,
-            self.dropout_prob,
-            device,
-        )
-    }
-
-    pub fn new(channels: [usize; 2], kernel_size: usize) -> Self {
-        Self {
-            channels,
-            kernel_size,
-            layers: 4,
-            dropout_prob: 0.0,
-        }
-    }
-
-    pub fn with_layers(mut self, layers: usize) -> Self {
-        self.layers = layers;
-        self
-    }
-
-    pub fn with_dropout(mut self, dropout_prob: f64) -> Self {
-        self.dropout_prob = dropout_prob;
-        self
+    /// calculates model's temporal lookback range in frames
+    /// formula: 1 + 2 * (kernel_size - 1) * (2^layers - 1)
+    /// returns: total number of past frames a single output point can see
+    pub fn receptive_field(&self) -> usize {
+        1 + 2 * (self.kernel_size - 1) * ((1 << self.layers) - 1)
     }
 }
 
@@ -224,9 +263,9 @@ mod tests {
         let t0 = 10; // current timestep
 
         // causal TCN with no dropout for determinism
-        let tcn: TemporalConvNet<B> = TemporalConvNetConfig::new([c, c], 3)
+        let tcn: TemporalConvNet<B> = TemporalConvNetConfig::new([c, c])
             .with_layers(3)
-            .with_dropout(0.0)
+            // .with_dropout(0.0)
             .init(&device);
 
         // input tensor with two batches

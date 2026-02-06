@@ -4,7 +4,7 @@
 
 // custom imports
 use crate::{
-    ctc::ctc_loss::CtcLossConfig,
+    ctc::ctc_loss::{CtcLoss, CtcLossConfig},
     pipeline::batcher::Batch,
     vsrm::VsrModel,
 };
@@ -13,11 +13,12 @@ use crate::{
 use burn::{
     backend::{
         Autodiff,
+        wgpu::Wgpu,
         ndarray::NdArray,
     },
+    tensor::Tensor,
     grad_clipping::GradientClippingConfig,
     lr_scheduler::LrScheduler,
-    nn::loss::Reduction,
     optim::{
         AdamConfig,
         GradientsParams,
@@ -27,8 +28,10 @@ use burn::{
 
 
 
-pub type B = NdArray<f32>; // backend type
-pub type AD = Autodiff<B>; // autodiff backend
+pub type B = B2;               // select active backend type
+pub type B1 = NdArray<f32>;    // backend type (CPU)
+pub type B2 = Wgpu<f32, i32>;  // backend type (GPU)
+pub type AD = Autodiff<B>;     // autodiff backend
 
 
 
@@ -36,37 +39,27 @@ pub fn train_epoch<S: LrScheduler>(
     mut model: VsrModel<AD>,
     optimizer: &mut impl Optimizer<VsrModel<AD>, AD>,
     loader: &mut impl Iterator<Item = Batch<AD>>,
+    ctc_loss: &CtcLoss,
     scheduler: &mut S,
-    blank_id: usize,
 ) -> (VsrModel<AD>, f64) {
-    let mut total_loss = 0.0f64;
     let mut steps = 0usize;
-    let reduction = Reduction::Mean;
+    let mut total_loss: Option<Tensor<AD, 1>> = None;
 
-    let ctc = CtcLossConfig::new()
-        .with_blank_id(blank_id)
-        .with_reduction(reduction)
-        .init();
+    for batch in loader {
+        let (inputs, targets, input_lengths, target_lengths) = (
+            batch.inputs,
+            batch.targets,
+            batch.input_lengths,
+            batch.target_lengths,
+        );
 
-    for Batch {
-        inputs,
-        targets,
-        input_lengths,
-        target_lengths,
-    } in loader
-    {
         // forward pass
-        let logits = model.forward(inputs); // [N, T, Vocab] (these are the raw, unnormalized predictions)
+        // [N, T, Vocab] (these are the raw, unnormalized predictions)
+        let logits = model.forward(inputs);
 
         // loss from CTC
-        let loss = ctc.forward(logits.clone(), targets, input_lengths, target_lengths);
-
-        // bail backprop if loss is non-finite
-        let l = loss.clone().to_data().to_vec::<f32>().unwrap()[0];
-        if !l.is_finite() {
-            eprintln!("\n[skip] non-finite loss: {l}\n");
-            continue;
-        }
+        // [N] (these are scores for how well the model aligned with the targets)
+        let loss = ctc_loss.forward(logits.clone(), targets, input_lengths, target_lengths);
 
         // backpropagation
         let grads = loss.backward();
@@ -77,16 +70,19 @@ pub fn train_epoch<S: LrScheduler>(
         model = optimizer.step(learning_rate, model, grads);
 
         // accumulate loss per batch
-        total_loss += loss.to_data().convert::<f32>().as_slice::<f32>().unwrap()[0] as f64;
+        let loss_val = loss.clone().detach();
+        if let Some(acc) = total_loss { total_loss = Some(acc.add(loss_val)); }
+        else { total_loss = Some(loss_val); }
+
         steps += 1;
     }
 
     // batch-wise average loss
-    let avg_loss = if steps == 0 {
-        0.0
-    } else {
-        total_loss / steps as f64
-    };
+    let avg_loss = if let Some(acc) = total_loss {
+        let total = acc.to_data().convert::<f64>().as_slice::<f64>().unwrap()[0];
+        if steps == 0 { 0.0 } else { total / steps as f64 }
+    } else { 0.0 };
+
     (model, avg_loss)
 }
 
@@ -95,7 +91,6 @@ pub fn train_epoch<S: LrScheduler>(
 pub fn train_loop<S, F, L>(
     mut model: VsrModel<AD>,
     epochs: usize,
-    // learning_rate: f64,
     scheduler: &mut S,
     mut make_loader: F,
     blank_id: usize,
@@ -110,11 +105,23 @@ where
         .with_epsilon(1e-6)
         .with_grad_clipping(Some(clipper))
         .init();
-    let mut losses = Vec::with_capacity(epochs); // history of losses for each epoch
+
+    // history of losses per epoch
+    let mut losses = Vec::with_capacity(epochs);
+
+    let ctc_loss = CtcLossConfig::new()
+        .with_blank_id(blank_id)
+        .init();
 
     for epoch in 0..epochs {
         let mut loader = make_loader(); // new loader each epoch
-        let (m, l) = train_epoch(model, &mut optimizer, &mut loader, scheduler, blank_id);
+        let (m, l) = train_epoch(
+            model,
+            &mut optimizer,
+            &mut loader,
+            &ctc_loss,
+            scheduler,
+        );
         losses.push(l);
         model = m;
         println!("Epoch {}/{} | Loss {:.4}", epoch + 1, epochs, l);
@@ -137,34 +144,27 @@ mod tests {
         utils::mean,
     };
     use burn::{
-            backend::{
-                Autodiff,
-                ndarray::NdArray,
-            },
+        backend::Autodiff,
         lr_scheduler::noam::NoamLrSchedulerConfig,
         prelude::Int,
-        tensor::{backend::Backend, Distribution, Tensor},
+        tensor::{
+            backend::Backend,
+            Distribution,
+            Tensor,
+        },
     };
 
-    // backends
-    type B = NdArray<f32>;
-    type AD = Autodiff<B>;
-
-    // fn pick_norm_group(out_channels: usize) -> usize {
-    //     for g in (1..=out_channels).rev() {
-    //         if out_channels % g == 0 { return g.min(32);  /* 8 group cap */ }
-    //     }
-    //     1
-    // }
+    pub type B = Wgpu<f32, i32>;  // backend type (GPU)
+    pub type AD = Autodiff<B>;    // autodiff backend
 
     #[test]
     fn test_train_epoch() {
         // (batch size, channels, timesteps, height, width, sequence length), where t ≥ 2l - 1
-        let (n, c, t, h, w, l) = (1, 1, 6, 16, 16, 3);
-        let out_channels = 10;
+        let (n, c, t, h, w, l) = (1, 1, 6, 40, 40, 3);
+        let out_channels = 32;
         let epochs = 25;
         let batches = 2; // num batches per epoch
-        let norm_groups = 5;
+        let norm_groups = 4;
         let in_dist = Distribution::Uniform(-0.5, 0.5);
         let tgt_dist = Distribution::Uniform(0.0, (VOCAB_SIZE - 2) as f64);
         let device = Default::default();
@@ -222,7 +222,13 @@ mod tests {
 
         // run training loop
         println!("\nRunning training loop with {} epochs\n", epochs);
-        let (_, losses) = train_loop(model, epochs, &mut noam_lr, make_loader, BLANK_ID);
+        let (_, losses) = train_loop(
+            model,
+            epochs,
+            &mut noam_lr,
+            make_loader,
+            BLANK_ID,
+        );
 
         let n = 5;
         let first_n = losses[0..n].to_vec();
