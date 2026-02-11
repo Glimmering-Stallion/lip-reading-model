@@ -44,8 +44,13 @@ pub struct VsrModelConfig {
     #[config(default = 1)]
     pub in_channels: usize,
 
+    // base channel width for frontend CNN layers (the feature extractors)
     #[config(default = 128)]
     pub out_channels: usize,
+
+    // latent dimension for backend TCN layers (the sequence processors)
+    #[config(default = 128)]
+    pub hidden_dim: usize,
 
     // #[config(default = (50, 150))] // default should be (50, 150)
     pub frame_dims: (usize, usize), // (height, width)
@@ -53,7 +58,7 @@ pub struct VsrModelConfig {
     #[config(default = 8)]
     pub norm_groups: usize,
     
-    #[config(default = 27)] // 0-25 for alphabet, 26 for space, 27 for blank ID
+    #[config(default = 28)] // 0-25 for alphabet, 26 for space, 27 for blank ID
     pub vocab_size: usize,
 }
 
@@ -64,6 +69,7 @@ impl VsrModelConfig {
         VsrModel::new(
             self.in_channels,
             self.out_channels,
+            self.hidden_dim,
             self.frame_dims,
             self.norm_groups,
             self.vocab_size,
@@ -173,6 +179,7 @@ impl<B: Backend> VsrModel<B> {
     /// params:
     /// - in_channels: input video channels (usually always 1 for grayscale)
     /// - out_channels: base feature width (determines hidden sizes of TCN)
+    /// - hidden_dim: latent dimension for TCN block layers
     /// - frame_dims: tuple of (height, width) for spatial input
     /// - norm_groups: number of groups for GroupNorm (must divide channel counts)
     /// - vocab_size: total number of character classes for output
@@ -181,6 +188,7 @@ impl<B: Backend> VsrModel<B> {
     pub fn new(
         in_channels: usize,
         out_channels: usize,
+        hidden_dim: usize,
         frame_dims: (usize, usize),
         norm_groups: usize,
         vocab_size: usize,
@@ -273,17 +281,17 @@ impl<B: Backend> VsrModel<B> {
             .with_affine(true)
             .init(device);
 
-        let tcn1 = TemporalConvNetConfig::new([(conv3_out * h3 * w3), out_channels])
-            .with_layers(4)
+        let tcn1 = TemporalConvNetConfig::new([(conv3_out * h3 * w3), hidden_dim])
+            .with_layers(3)
             .with_dropout_prob(0.5)
             .init(device);
 
-        let tcn2 = TemporalConvNetConfig::new([out_channels, 75])
-            .with_layers(4)
+        let tcn2 = TemporalConvNetConfig::new([hidden_dim, hidden_dim])
+            .with_layers(3)
             .with_dropout_prob(0.5)
             .init(device);
 
-        let fc = LinearConfig::new(75, vocab_size)
+        let fc = LinearConfig::new(hidden_dim, vocab_size)
             .with_initializer(Initializer::KaimingUniform {
                 gain: 1.0,
                 fan_out_only: false,
@@ -499,8 +507,12 @@ mod tests {
         let norm_groups = 8;
 
         let device = Default::default();
-        // let model = VsrModel::<B>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
-        let model = VsrModel::<B>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
+        let model = VsrModelConfig::new((h, w))
+            .with_in_channels(c)
+            .with_out_channels(out_channels)
+            .with_norm_groups(norm_groups)
+            .with_vocab_size(VOCAB_SIZE)
+            .init(&device);
 
         let input = Tensor::<B, 5>::zeros([n, c, t, h, w], &device);
         let output = model.forward(input);

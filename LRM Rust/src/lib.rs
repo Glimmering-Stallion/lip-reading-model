@@ -21,7 +21,7 @@ pub mod prelude {
                 stream_jsonl_gz,
                 stream_txt_lines,
             },
-            preprocessors::grid::{GridDataset},
+            adapters::grid::{GridDataset},
             batcher::{
                 Batch,
                 VsrmItem,

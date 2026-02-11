@@ -83,9 +83,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
     let models_path = Path::new(&rust_root).join("models");
     let data_path = Path::new(&rust_root).join("data");
+    let tests_path = Path::new(&rust_root).join("tests");
 
     if !models_path.exists() { fs::create_dir(&models_path).expect("Failed to create output directory for models") }
     if !data_path.exists() { fs::create_dir(&data_path).expect("Failed to create output directory for data") }
+    if !tests_path.exists() { fs::create_dir(&tests_path).expect("Failed to create tests directory") }
 
     let token_map = Arc::new(TokenMap::new(VOCAB)); // bidirectional char to ID mapping
     // let token_map = TokenMap::new(VOCAB); // bidirectional char to ID mapping
@@ -165,10 +167,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     // ------------------------------------------- VSRM training --------------------------------------------
 
     // define hyperparameters
-    let frame_dims = (50, 150); // height width
-    let num_epochs = 100;
+    let frame_dims = (50, 150); // height, width
+    let num_epochs = 50;
     let batch_size = 8;
-    let learning_rate = 0.0001;
+    let learning_rate = 5e-4;
     let num_workers = 4;
     let seed = 42;
     let device = DefaultDevice;

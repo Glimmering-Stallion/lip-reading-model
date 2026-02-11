@@ -7,9 +7,9 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Accomplishments to Date
 
-### Data Ingestion & Preprocessing (```pipeline/io.rs``` and ```pipeline/preprocessors/grid.rs```)
+### Data Ingestion (```pipeline/io.rs``` and ```pipeline/adapters/grid.rs```)
 
-- For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") and "alignments" directories placed under a self created "data/grid-lr-corpus").
+- For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") data organized into "frames" and "alignments" directories under a self created "data/grid-lr-corpus").
 - In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
 - Built dataset utilities that:
   - Infer file name stems automatically.
@@ -19,18 +19,26 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Decodes video files frame by frame.
   - Converts frames to grayscale.
   - Crops a fixed mouth region of interest (ROI).
+  - Flattens pixel data into contiguous ```Vec<u8>``` tensors.
   - In future, might consider using pre-trained Haar Cascade or a DNN-based Face Detector to find face, then estimate mouth region.
-- Implemented a custom preprocessor ```grid.rs``` that:
-  - Flattens pixel data into contiguous ```Vec<f32>``` tensors.
-  - Scales pixel values to within $[0, 1]$ for normalization.
+
+### Data Standardization (```adapters/```)
+
+- Implemented dataset adapter ```adapters/``` that:
+  - Contains source-specific logic to map raw datasets (GRID, LRW, etc.) into a standardized ```VsrmItem``` format.
+  - Scales 8-bit grayscale pixel values to within $[0, 1]$ for normalization.
+- In future, will consider FPS standardization to a target FPS (25) as well (frame dropping preferred over interpolation due to simplicity and avoidance of ghost data).
 
 ### Data Batching (```pipeline/batcher.rs```)
 
-- Developed a custom ```VsrmBatcher``` that handles padding by:
-  - Finding longest video/transcript sequences among a batch of sequences (as ```max_t```/```max_l```).
-  - Padding variable-length video sequences in that batch to ```max_t``` with $0$.
+- Developed a custom ```VsrmBatcher``` that:
+  - Scales pixel values to [0, 1].
+  - Centers pixel values to zero mean and unit variance.
+- Padding handled by:
+  - Finding longest video-frames/transcript-sequences among a batch of sequences (as ```max_t```/```max_l```).
+  - Padding variable-length video frames in that batch to ```max_t``` with $0$.
   - Padding variable-length transcript sequences in that batch to ```max_l``` with ```BLANK_ID```.
-- This batcher uses a CPU-to-GPU staging strategy, where tensors are collated on the ```NdArray``` CPU backend before a single-shot move to the compute device for minimizing PCIe bus latency.
+- Uses a CPU-to-GPU staging strategy, where tensors are collated on the ```NdArray``` CPU backend before a single-shot move to the ```Wgpu``` GPU backend for minimizing PCIe bus latency.
 
 ### Alignment & Vocabulary Handling (```vocab.rs```)
 
@@ -131,12 +139,13 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 ## Current Status
 
 - I/O and data aqcuisition helper functions are finished.
-- Data preprocessing and batching pipeline is officially done.
+- Data adapting (for GRID), preprocessing, and batching pipeline is officially done.
 - Offline lip-reading inference and language model integration is functionally complete.
 - Greedy decoding and Beam Search decoding with a char-level N-gram language model both work end-to-end.
 - Training and validation pipeline is implemented and wired into Burn's learner framework.
 - Pending VSRM train/eval.
 - Dynamic mouth tracking planned but not implemented yet.
+- Planning FPS video standardization to unify varying video-transcript datasets.
 
 ---
 
@@ -162,6 +171,20 @@ Lip Reading Model
 ├─ LRM Rust
 │  ├─ Cargo.lock
 │  ├─ Cargo.toml
+│  ├─ data
+│  │  ├─ grid-lr-corpus
+│  │  │  ├─ alignments
+│  │  │  │  ├─ s1
+│  │  │  │  │  ⋮
+│  │  │  │  └─ s34
+│  │  │  └─ frames
+│  │  │     ├─ s1
+│  │  │     │  ⋮
+│  │  │     └─ s34
+│  │  └─ librispeech-lm-norm
+│  │     └─ librispeech-lm-norm.txt
+│  ├─ models
+│  │  └─ ⋯
 │  ├─ rust-toolchain.toml
 │  ├─ rustfmt.toml
 │  ├─ src
@@ -180,7 +203,7 @@ Lip Reading Model
 │  │  │  ├─ dataset.rs
 │  │  │  ├─ io.rs
 │  │  │  ├─ mod.rs
-│  │  │  └─ preprocessors
+│  │  │  └─ adapters
 │  │  │     ├─ grid.rs
 │  │  │     └─ mod.rs
 │  │  ├─ training

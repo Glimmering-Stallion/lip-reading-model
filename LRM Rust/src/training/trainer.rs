@@ -137,11 +137,9 @@ where
 mod tests {
     use super::*;
     use crate::{
-        vocab::{
-            VOCAB_SIZE,
-            BLANK_ID,
-        },
-        utils::mean,
+        utils::mean, vocab::{
+            BLANK_ID, VOCAB_SIZE
+        }, vsrm::VsrModelConfig
     };
     use burn::{
         backend::Autodiff,
@@ -184,8 +182,12 @@ mod tests {
             .unwrap();
 
         // dummy model
-        let model =
-            VsrModel::<AD>::new(c, out_channels, (h, w), norm_groups, VOCAB_SIZE, &device);
+        let model = VsrModelConfig::new((h, w))
+            .with_in_channels(c)
+            .with_out_channels(out_channels)
+            .with_norm_groups(norm_groups)
+            .with_vocab_size(VOCAB_SIZE)
+            .init(&device);
 
         // debugging: inspect model's layers' shapes
         println!("\nModel layer shapes:");

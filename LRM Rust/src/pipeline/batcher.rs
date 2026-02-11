@@ -105,12 +105,18 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
                 item.transcript_ids.len(),
             );
             assert!(c == 1, "VSRM assumes grayscale frame inputs: expected single-channel input, got {}", c);
-            assert!(t >= l, "CTC Constraint Violated: Video frames ({}) must be greater than transcript length ({})", t, l);
+            assert!(t >= (2 * l), "CTC Constraint Violated: Video frames ({}) for item {} must be greater than transcript length ({})", t, item.item_id, l);
             assert!(h > 0 && w > 0, "Invalid frame dimensions {}x{}", h, w);
 
             // --------------- (A) ---------------
 
-            let frames: Tensor<CpuB, 4> = Tensor::from_data(item.frames, &Default::default());
+            let frames: Tensor<CpuB, 4> = Tensor::from_data(item.frames, &Default::default()); // [C, T, H, W] frames of the video
+
+            // preprocess frames
+            let frames = frames.div_scalar(255.0); // scale pixel values to [0, 1] range
+            let (var, mean) = frames.clone().reshape([1, c * t * h * w]).var_mean_bias(1); // calc mean and var with var_mean_bias on reshaped frames to get single mean and var across all pixels in video; reshape back to [C, T, H, W] for broadcasting
+            let st_dev = var.sqrt().add_scalar(1e-7); // calc st dev from var, add small epsilon for numerical stability
+            let frames = frames.sub(mean.reshape([c, 1, 1, 1])).div(st_dev.reshape([c, 1, 1, 1])); // standardize frames (by centering to zero mean and scaling to unit variance)
 
             // if curr item's num frames are shorter than max timesteps, pad it
             let padded_frames = if t < max_t {

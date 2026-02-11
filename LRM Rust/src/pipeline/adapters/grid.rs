@@ -1,4 +1,4 @@
-// Data preprocessing/standardization for GRID audio-visual sentence corpus
+// Data adaptation/standardization for GRID audio-visual sentence corpus
 
 
 
@@ -7,9 +7,7 @@ use crate::{
     vocab::TokenMap,
     pipeline::{
         batcher::VsrmItem,
-        io::{
-            load_grid_corpus,
-        },
+        io::load_grid_corpus,
         DatasetSplit,
     },
 };
@@ -19,7 +17,6 @@ use burn::{
     data::dataset::Dataset,
     tensor::TensorData,
 };
-use image::{GrayImage, Luma};
 use std::{
     path::{
         Path,
@@ -49,11 +46,16 @@ impl GridDataset {
         let grid_dir = root_path
             .join("data")
             .join("grid-lr-corpus");
+        let frames_dir = grid_dir.join("frames");
+        let alignments_dir = grid_dir.join("alignments");
+
         assert!(grid_dir.exists(), "GRID corpus directory does not exist at {:?}", grid_dir);
+        assert!(frames_dir.exists(), "GRID frames directory does not exist at {:?}", frames_dir);
+        assert!(alignments_dir.exists(), "GRID alignments directory does not exist at {:?}", alignments_dir);
 
         // identify all speakers available on disk (s1, s2, ..., s34)
         let mut avail_speakers = Vec::new();
-        if let Ok(speaker_dirs) = read_dir(&grid_dir) {
+        if let Ok(speaker_dirs) = read_dir(&frames_dir) {
             for speaker_dir in speaker_dirs.flatten() {
                 let speaker_str = speaker_dir.file_name().to_string_lossy().to_string();
                 if speaker_str.starts_with('s') && speaker_dir.path().is_dir() {
@@ -61,7 +63,7 @@ impl GridDataset {
                 }
             }
         }
-        assert!(!avail_speakers.is_empty(), "No speaker directories found in {:?}", grid_dir);
+        assert!(!avail_speakers.is_empty(), "No speaker directories found in {:?}", frames_dir);
 
         // sort s1, s2, ..., s34
         avail_speakers.sort_by_key(|s| s[1..].parse::<i32>().unwrap_or(1));
@@ -89,13 +91,19 @@ impl GridDataset {
         // scan disk for only selected speakers and store
         let mut entries = Vec::new();
         for speaker in selected_speakers { // loop through dirs of selected speakers
-            let video_dir = grid_dir.join(speaker);
+            let video_dir = frames_dir.join(speaker);
+            let alignment_dir = alignments_dir.join(speaker);
+
             if let Ok(items) = read_dir(&video_dir) {
                 for item in items.flatten() { // loop through data items of each speakers' dirs
-                    if item.path().extension().is_some_and(|ext| ext == "mpg") {
-                        if let Some(stem) = item.path().file_stem().and_then(|s| s.to_str()) {
-                            entries.push(format!("{}/{}", speaker, stem)); // store speaker/data (e.g., "s1/bbaf2n")
-                        }
+                    if let Some(stem) = item.path().file_stem().and_then(|s| s.to_str()) {
+
+                        let is_video = item.path().extension().is_some_and(|ext| ext == "mpg");
+                        let has_alignment = alignment_dir.join(stem).with_extension("align").exists();
+
+                        // store speaker/data (e.g., "s1/bbaf2n")
+                        if is_video && has_alignment { entries.push(format!("{}/{}", speaker, stem)); }
+                        else { /* println!("Skipping {}/{}: missing alignment file.", speaker, stem); */ }
                     }
                 }
             }
@@ -124,8 +132,8 @@ impl Dataset<VsrmItem> for GridDataset {
     fn get(&self, index: usize) -> Option<VsrmItem> {
         let entry_name = self.entries.get(index)?;
         
-        // frames is currently a flattened Vec<32>
-        let (mut frames, transcript_ids) = load_grid_corpus(
+        // frames is currently a flattened Vec<u8>
+        let (frames, transcript_ids) = load_grid_corpus(
             &self.root_path,
             entry_name,
             &self.token_map,
@@ -136,42 +144,24 @@ impl Dataset<VsrmItem> for GridDataset {
 
         // isolate dims
         let (c, h, w) = (1, 50, 150);
-        let t: usize = frames.len() / (c * h * w);
+        let t = frames.len() / (c * h * w);
+        let l = transcript_ids.len();
         assert!(frames.len().is_multiple_of(c * h * w), "Frame buffer size {} is not divisible by frame dimensions", frames.len());
         assert!(t > 0, "Computed zero frames for item {}", entry_name);
-        if t == 0 { return None; }
 
-        // // obtain min and max pixel values (fold approach)
-        // let (norm_min, norm_max) = frames
-        //     .iter()
-        //     .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), &x| {
-        //         (min.min(x), max.max(x))
-        //     });
-        // assert!(norm_max.is_finite() && norm_min.is_finite(), "Non-finite pixel values detected");
-
-        // obtain min and max pixel values (loop approach)
-        let (mut norm_min, mut norm_max) = (f32::INFINITY, f32::NEG_INFINITY);
-        for &x in frames.iter() {
-            if x < norm_min { norm_min = x; }
-            if x > norm_max { norm_max = x; }
+        // enforce CTC constraint: T must be greater than L
+        // (ideally 2x greater, for chars plus possible blanks)
+        if t < (2 * l) {
+            // eprintln!("\nSkipping sample {}: T = {} is too short for L = {}", entry_name, t, l);
+            return None;
         }
-        assert!(norm_max.is_finite() && norm_min.is_finite(), "Non-finite pixel values detected");
-
-        // normalize pixel values to within [0, 1] (adaptive approach)
-        let range = norm_max - norm_min;
-        let divisor = if range == 0.0 { 1.0 } else { range };
-        for x in frames.iter_mut() { *x = ((*x - norm_min) / divisor).clamp(0.0, 1.0); }
-
-        // // normalize pixel values to within [0, 1] (global approach)
-        // for x in frames.iter_mut() {
-        //     *x /= 255.0; 
-        // }
 
         assert!(frames.len() == (c * t * h * w), "Tensor shape mismatch: len={} expected={}", frames.len(), (c * t * h * w));
 
         // convert frames into 4D tensor
         let frames = TensorData::new(
             frames,
+            // frames.into_iter().map(|b| b as f32).collect(), // temp f32 conversion if Burn doesn't support u8 tensors yet
             vec![c, t, h, w],
         );
 
@@ -187,5 +177,81 @@ impl Dataset<VsrmItem> for GridDataset {
     /// returns: count of valid video entries
     fn len(&self) -> usize {
         self.entries.len()
+    }
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        pipeline::DatasetSplit,
+        vocab::VOCAB,
+    };
+    use image::{GrayImage, Luma};
+    use std::{
+        path::PathBuf,
+        fs,
+    };
+
+    #[test]
+    fn test_extract_frames_from_grid_dataset_item() {
+        let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let tests_path = Path::new(&root_path).join("tests");
+        if !tests_path.exists() { fs::create_dir(&tests_path).expect("Failed to create tests directory") }
+
+        let token_map = TokenMap::new(VOCAB);
+        let split_thresholds = (0.1, 1.0);
+
+        // train/validation dataset instances
+        let dataset = GridDataset::new(
+            root_path, 
+            DatasetSplit::Train,
+            split_thresholds,
+            token_map.clone(),
+        );
+
+        // obtain first valid GRID dataset item
+        let mut item = None;
+        for i in 0..10 {
+            if let Some(entry) = dataset.get(i) {
+                item = Some(entry);
+                break;
+            }
+        }
+        let item = item.expect("Failed to extract any valid dataset item");
+        println!("Obtained item ID: {}", item.item_id);
+
+        // create output dir to hold collection of extracted frames as pngs
+        let item_id = item.item_id.replace("/", "_");
+        let output_dir = tests_path.join(&item_id);
+        if !output_dir.exists() { fs::create_dir(&output_dir).expect(&format!("Failed to create output directory for frames of item {}", item_id)); }
+
+        // extract frames
+        let frames = item.frames.as_slice::<u8>().expect("Failed to convert frames to slice");
+        let (c, h, w) = (1, 50, 150);
+        let t = frames.len() / (c * h * w);
+
+        println!("Exporting {} frames for item: {}", t, item.item_id);
+
+        for t_idx in 0..t {
+            let start_idx = t_idx * c * h * w;
+            let end_idx = start_idx + (c * h * w);
+            let frame_slice = &frames[start_idx..end_idx];
+
+            // create grayscale image
+            let mut img_buffer = GrayImage::new(w as u32, h as u32);
+            for y in 0..h {
+                for x in 0..w {
+                    let pixel_value = (frame_slice[y * w + x]).clamp(0, 255) as u8;
+                    img_buffer.put_pixel(x as u32, y as u32, Luma([pixel_value]));
+                }
+            }
+
+            // save image
+            let frame_path = output_dir.join(format!("{}_frame_{:03}.png", item_id, t_idx));
+            img_buffer.save(&frame_path).expect("Failed to save extracted frame image");
+        }
     }
 }

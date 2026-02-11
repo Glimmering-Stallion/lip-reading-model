@@ -1,4 +1,4 @@
-// I/O handler for high-level fs and networking tasks (loading, streaming, preprocessing)
+// I/O handler for high-level fs and networking tasks (data loading, streaming, extracting, etc.)
 
 
 
@@ -197,6 +197,7 @@ pub fn extract_gzip<P: AsRef<Path>, Q: AsRef<Path>>(gzip_path: P, extract_to: Q)
 
 
 /// extract GRID corpus externally to a given path
+/// (deprecated in favor of manual download due to Google Drive download complexities)
 pub fn extract_grid_corpus<P: AsRef<Path>>(root_path: P) {
     let root_path = root_path.as_ref();
     let data_dir = root_path.join("data");
@@ -303,23 +304,21 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
 
 
 
-/// takes in a video path and outputs a list of floats
-pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn Error>> {
+/// takes in a frames path and outputs a list of floats
+pub fn load_grid_frames<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, Box<dyn Error>> {
     let path = path.as_ref().to_str().ok_or("Non-UTF8 path")?;
 
     match VideoCapture::from_file(path, CAP_ANY) {
         Ok(mut cap) => {
-            let mut frames: Vec<f32> = vec![];
-
+            let mut frames: Vec<u8> = Vec::with_capacity(75 * 150 * 50);
             let mut frame = Mat::default();
+            let mut gray_frame = Mat::default();
+
             while cap.read(&mut frame).expect("Error reading frame") {
                 let size = frame.size().expect("Failed to get frame size");
-                if size.width == 0 || size.height == 0 {
-                    break; // End of video
-                }
+                if size.width == 0 || size.height == 0 { break; } // end of frames
 
                 // convert frame to grayscale
-                let mut gray_frame = Mat::default();
                 imgproc::cvt_color(
                     &frame,
                     &mut gray_frame,
@@ -329,35 +328,19 @@ pub fn load_grid_video<P: AsRef<Path>>(path: P) -> Result<Vec<f32>, Box<dyn Erro
                 )
                 .expect("Failed to convert frame to grayscale");
 
-                // crop frame to isolate region of interest (where the mouth is)
+                // crop frame to where mouth is (in future this will be replaced by dynamic tracking)
                 let roi = Rect::new(80, 190, 150, 50);
                 let temp = Mat::roi(&gray_frame, roi).expect("Failed to crop frame");
                 let mut mouth_frame = Mat::default();
                 temp.copy_to(&mut mouth_frame)
                     .expect("Failed to copy ROI to a continuous Mat");
 
-                // flatten and store
-                let flattened_frame: Vec<f32> = mouth_frame
-                    .data_bytes()
-                    .expect("Failed to get frame data")
-                    .iter()
-                    .map(|&pixel: &u8| pixel as f32)
-                    .collect::<Vec<f32>>();
-                frames.extend(flattened_frame);
+                // store frames as bytes (u8) to save memory
+                // will be converted to f32 and standardized later in the pipeline
+                frames.extend(mouth_frame.data_bytes()?);
             }
 
             assert!(!frames.is_empty(), "No frames read from video");
-            let mean = mean(&frames);
-            let std_dev = std_dev(&frames);
-            let eps = 1e-8; // small epsilon val for numerical stability
-            assert!(std_dev > 0.0, "Frame standard deviation is zero");
-
-            // standardize frames (by centering to zero mean and scaling to unit variance)
-            frames = frames
-                .iter()
-                .map(|&x: &f32| (x - mean) / (std_dev + eps))
-                .collect::<Vec<f32>>(); // frames as a vector of pixels as floats
-
             Ok(frames)
         }
         Err(e) => {
@@ -408,7 +391,7 @@ pub fn load_grid_corpus<P: AsRef<Path>>(
     root_path: P,
     entry_name: &str,
     token_map: &TokenMap,
-) -> Result<(Vec<f32>, Vec<usize>), Box<dyn Error>> {
+) -> Result<(Vec<u8>, Vec<usize>), Box<dyn Error>> {
     let root_path = root_path.as_ref();
     assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
 
@@ -421,10 +404,11 @@ pub fn load_grid_corpus<P: AsRef<Path>>(
     // join project root with LR data path for an absolute path
     let grid_dataset_path = root_path.join("data/grid-lr-corpus");
 
-    let video_path = grid_dataset_path
+    let frames_path = grid_dataset_path
+        .join("frames")
         .join(entry_name)
         .with_extension("mpg");
-    assert!(video_path.exists(), "Video file not found: {}", video_path.to_string_lossy());
+    assert!(frames_path.exists(), "Video file not found: {}", frames_path.to_string_lossy());
 
     let alignments_path = grid_dataset_path
         .join("alignments")
@@ -432,7 +416,7 @@ pub fn load_grid_corpus<P: AsRef<Path>>(
         .with_extension("align");
     assert!(alignments_path.exists(), "Alignment file not found: {}", alignments_path.to_string_lossy());
 
-    let frames = load_grid_video(&video_path)?;
+    let frames = load_grid_frames(&frames_path)?;
     let alignments = load_grid_alignments(&alignments_path, token_map)?;
     assert!(!frames.is_empty() && !alignments.is_empty(), "Loaded empty GRID sample");
 

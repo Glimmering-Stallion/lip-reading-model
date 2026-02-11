@@ -14,7 +14,7 @@ use crate::{
             DatasetSource,
             DatasetSplit,
         },
-        preprocessors::grid::GridDataset,
+        adapters::grid::GridDataset,
     },
     training::{
         metrics::{
