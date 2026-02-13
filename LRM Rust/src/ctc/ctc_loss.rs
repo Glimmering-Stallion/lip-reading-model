@@ -14,15 +14,13 @@ use burn::{
     config::Config,
     module::Ignored,
     nn::loss::Reduction,
-    prelude::Int,
     tensor::{
         activation::log_softmax,
         backend::Backend,
-        Shape,
         Tensor,
+        {Int, Bool},
     },
 };
-use core::mem::swap;
 
 
 
@@ -61,15 +59,15 @@ impl CtcLoss {
     /// since inputs/targets are padded to max length found in batch,
     /// needs separate input/target lengths info for true lengths
     /// params:
-    /// - inputs: [N, T_max, Vocab] (logits from model)
-    /// - targets: [N, T_max] (target sequences)
+    /// - inputs: [N, T_max, Vocab] (time-padded logits from model)
+    /// - targets: [N, L_max] (length-padded target sequences)
     /// - input_lengths: [N] (non-padded lengths of inputs)
     /// - target_lengths: [N] (non-padded lengths of targets)
-    /// returns: [N] (loss per sample in batch)
+    /// returns: scalar loss (if reduction is mean or sum)
     pub fn forward<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,       // [N, T_max, Vocab] (logits from model)
-        targets: Tensor<B, 2, Int>, // [N, T_max] (target sequences)
+        targets: Tensor<B, 2, Int>, // [N, L_max] (target sequences)
         input_lengths: Tensor<B, 1, Int>, // [N]
         target_lengths: Tensor<B, 1, Int>, // [N]
     ) -> Tensor<B, 1> {
@@ -85,8 +83,8 @@ impl CtcLoss {
     /// since inputs/targets are padded to max length found in batch,
     /// needs separate input/target lengths info for true lengths
     /// params:
-    /// - inputs: [N, T_max, Vocab] (logits from model)
-    /// - targets: [N, T_max] (target sequences)
+    /// - inputs: [N, T_max, Vocab] (time-padded logits from model)
+    /// - targets: [N, L_max] (length-padded target sequences)
     /// - input_lengths: [N] (non-padded lengths of inputs)
     /// - target_lengths: [N] (non-padded lengths of targets)
     /// returns: [N] (loss per sample in batch)
@@ -97,179 +95,179 @@ impl CtcLoss {
         input_lengths: Tensor<B, 1, Int>,
         target_lengths: Tensor<B, 1, Int>,
     ) -> Tensor<B, 1> {
-        let device = inputs.clone().device();
-        let [n, _, vocab_size] = inputs.dims();
+        let device = inputs.device();
+        let [n, t, vocab_size] = inputs.dims();
+        let sentinel_value = f32::NEG_INFINITY; // possibly causes NaNs
+        // let sentinel_value = -1e30; // numerically stable
         let log_probs = log_softmax(inputs.clone(), 2); // turn logits into log-probs
-        let mut losses: Vec<Tensor<B, 1>> = Vec::with_capacity(n);
 
         assert_eq!(inputs.dims()[0], targets.dims()[0], "Inputs/targets batch size mismatch");
         assert_eq!(input_lengths.dims()[0], inputs.shape()[0], "Inputs/lengths batch size mismatch");
         assert_eq!(target_lengths.dims()[0], targets.shape()[0], "Targets/lengths batch size mismatch");
 
-        let input_lengths_to_host = input_lengths
-            .to_data()
-            .convert::<i64>()
-            .as_slice::<i64>()
-            .unwrap()
-            .to_vec();
-        let target_lengths_to_host = target_lengths
-            .to_data()
-            .convert::<i64>()
-            .as_slice::<i64>()
-            .unwrap()
-            .to_vec();
+        // original and blank-interleaved lengths of target sequence (padded length)
+        let orig_pad_targ_length: usize = targets.dims()[1];                         // L_max
+        let intr_pad_targ_length = 2 * orig_pad_targ_length + 1;  // 2L_max + 1
 
-        // loop over samples in batch
-        for sample in 0..n {
-            let sample_input_length = input_lengths_to_host[sample] as usize;
-            let sample_target_length = target_lengths_to_host[sample] as usize;
+        // get batch-wise interleaved target lengths for masking (true lengths)
+        let intr_targ_lengths = target_lengths.clone() * 2 + 1; // [N]
 
-            assert!(sample_input_length > 0, "Empty input sequence");
-            assert!(sample_target_length > 0, "Empty target sequence");
-            assert!(sample_input_length <= inputs.dims()[1], "Input length ({}) should be <= T padded {}", sample_input_length, inputs.dims()[1],);
-            assert!(sample_target_length <= targets.dims()[1], "Target length ({}) should be <= L padded {}", sample_target_length, targets.dims()[1],);
+        // perform batch-wise interleaving of blank IDs into targets
+        let targets = self.interleave_targets_with_blanks(targets, &device); // [N, (2L + 1)]
 
-            let sample_log_probs = log_probs
-                .clone()
-                .slice([sample..(sample + 1), 0..sample_input_length, 0..vocab_size])
-                .reshape([sample_input_length, vocab_size]);
-            let sample_target = targets
-                .clone()
-                .slice([sample..(sample + 1), 0..sample_target_length])
-                .reshape([sample_target_length]);
+        // init DP buffer for storing accumulated log-probs for paths through time-sequence grid
+        let mut curr_fwd: Tensor<B, 2> = Tensor::full([n, intr_pad_targ_length], sentinel_value, &device); // [N, (2L_max + 1)]
 
-            let sample_loss =
-                self.per_sample_loss(sample_log_probs, sample_target, vocab_size, &device);
-            losses.push(sample_loss)
+        // precompute skip validity masks for 1-pos and 2-pos jumps in DP grid
+        // (these are same across timesteps, so can compute once here and reuse in DP loop)
+        let (skip_1_mask, skip_2_mask) = self.compute_skip_validity_masks(targets.clone(), &device); // both [N, (2L + 1)]
+
+        // build batch-wise length mask to mask out padded positions in sequence
+        let length_mask = Tensor::<B, 1, Int>::arange(0..(intr_pad_targ_length as i64), &device) // [(2L_max + 1)]
+            .expand([n, intr_pad_targ_length])  // [N, (2L_max + 1)]
+            .lower(intr_targ_lengths.clone().reshape([n, 1]));   // [N, (2L_max + 1)] but holds true for only for lengths within per sample (2L + 1)
+
+        // t = 0: DP base case (initialization)
+        // init DP with log-probs of first two symbols in blank-interleaved target sequence
+        let initial_log_probs = log_probs.clone().slice([0..n, 0..1, 0..vocab_size]); // [N, 1, Vocab]
+        for i in 0..2 {
+            // grab batch-wise symbol IDs of i-th position in blank-interleaved target sequence
+            let id_0_i = targets.clone()
+                .slice([0..n, i..(i + 1)])  // [N, 1]
+                .reshape([n, 1, 1]);                          // [N, 1, 1]
+
+            // gather batch-wise log-probs of those symbol IDs at t = 0
+            let log_prob_0_i = initial_log_probs.clone()
+                .gather(2, id_0_i)  // [N, 1, 1]
+                .reshape([n, 1]);                      // [N, 1]
+
+            // write gathered log-probs to DP buffer
+            curr_fwd = curr_fwd.slice_assign([0..n, i..(i + 1)], log_prob_0_i);
         }
 
-        Tensor::cat(losses, 0)
-    }
+        // t ≥ 1: DP recurrence
+        // per timestep, compute batch-wise log-probs of all possible paths to each position in blank-interleaved target sequence
+        for t_idx in 1..t {
+            // build a batch-wise time mask to mask out padded timesteps beyond true input lengths in batch
+            // (since inputs are time-padded to max length in batch, but each sample has different true length)
+            let time_mask = input_lengths.clone()
+                .greater_elem(t_idx as i64)
+                .unsqueeze_dim::<2>(1)
+                .expand([n, intr_pad_targ_length]);
 
-    /// compute neg log-likelihood for single sample
-    /// loss computed via: logits --> log softmax --> forward DP --> loss
-    /// params:
-    /// - log_probs: log-probabilities for each vocab symbol per-timestep given by model [T, Vocab]
-    /// - targets: ground-truth target sequence of symbol int IDs [L]
-    /// - vocab_size: size of vocabulary Vocab
-    /// - device: specifier for where tensors ops should be computed
-    #[inline]
-    fn per_sample_loss<B: Backend>(
-        &self,
-        log_probs: Tensor<B, 2>,
-        targets: Tensor<B, 1, Int>,
-        vocab_size: usize,
-        device: &B::Device,
-    ) -> Tensor<B, 1> {
-        let blank = self.blank_id as i64;
-        let timesteps = log_probs.dims()[0];
-        // let sentinel_value = f32::NEG_INFINITY; // causes NaNs
-        let sentinel_value = -1e30; // numerically stable
-        assert!(timesteps > 0, "No timesteps in input");
-        assert!(blank >= 0 && (blank as usize) < vocab_size, "Blank ID ({}) is out of vocabulary size bounds ({})", blank, vocab_size);
-
-        // original and blank-interleaved lengths of target sequence
-        let len_targ_orig: usize = targets.dims()[0];      // L
-        let len_targ_intr = 2 * len_targ_orig + 1;  // 2L + 1
-
-        // make [L + 1] tensor of blank IDs
-        // make [L + 1] tensor of target IDs + single blank ID concatenated at end
-        let blanks = Tensor::<B, 1, Int>::full([len_targ_orig + 1], blank, device);
-        let labels = Tensor::<B, 1, Int>::cat(
-            vec![
-                targets.clone(),
-                Tensor::<B, 1, Int>::full([1], blank, device),
-            ],
-            0,
-        );
-
-        // perform: stack --> transpose --> flatten
-        // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-interleaved targets of length 2L + 1)
-        let intr_targ_ids = Tensor::stack::<2>(vec![blanks, labels], 1)
-                .reshape([2 * (len_targ_orig + 1)])
-                .slice([0..len_targ_intr]);
-        assert_eq!(intr_targ_ids.dims()[0], len_targ_intr, "Interleaved targets/length mismatch");
-
-        // can-skip-by-1 & can-skip-by-2 validity masks
-        // goal: (pos is odd) && (pos > 1) && (ids[pos] != ids[pos − 2]) && (ids[pos] != blank)
-        let intr_targ_pos = Tensor::<B, 1, Int>::arange(0..(len_targ_intr as i64), device); // blank-interleaved symbol positions
-        let odd_mask = intr_targ_pos.clone().remainder_scalar(2).not_equal_elem(0);
-        let pos_gt_1_mask = intr_targ_pos.clone().greater_elem(1);
-        let prev_2_ids = intr_targ_ids.clone().roll_dim(-2, 0); // shift right by 2 on dim 0
-        let neq_prev_2_ids_mask = intr_targ_ids.clone().not_equal(prev_2_ids.clone());
-        let not_blank_mask = intr_targ_ids.clone().not_equal_elem(blank);
-        let can_skip_1_mask = intr_targ_pos.clone().greater_elem(0);
-        let can_skip_2_mask = odd_mask
-            .clone()
-            .bool_and(pos_gt_1_mask.clone())
-            .bool_and(neq_prev_2_ids_mask.clone())
-            .bool_and(not_blank_mask.clone());
-
-        // create curr/next transfer buffers of forward log-probs
-        let large_negs = Tensor::<B, 1>::full([len_targ_intr], sentinel_value, device);
-        let mut curr_fwd = large_negs.clone();
-        let mut next_fwd = large_negs.clone();
-
-        // t = 0 (base case)
-        // begin at first blank or symbol after it
-        if len_targ_intr >= 1 { // t = 0, v = 0
-            let id_0_0 = intr_targ_ids.clone().slice([0..1]).unsqueeze_dim(0);
-            let log_prob_0_0 = log_probs.clone()
-                .slice([0..1, 0..vocab_size])
-                .gather(1, id_0_0)
-                .reshape([1]);
-            curr_fwd = curr_fwd.slice_assign([0..1], log_prob_0_0);
-        }
-        if len_targ_intr >= 2 { // t = 0, v = 1
-            let id_0_1 = intr_targ_ids.clone().slice([1..2]).unsqueeze_dim(0);
-            let log_prob_0_1 = log_probs.clone()
-                .slice([0..1, 0..vocab_size])
-                .gather(1, id_0_1)
-                .reshape([1]);
-            curr_fwd = curr_fwd.slice_assign([1..2], log_prob_0_1);
-        }
-
-        // t ≥ 1 (recurrence case)
-        for t in 1..timesteps {
-            // reset buffer
-            next_fwd = large_negs.clone();
-        
-            // grab chunk of log-probs of each symbol ID in vocab at current timestep
-            // transform to log-probs of each symbol ID in blank-interleaved target sequence
-            let curr_log_probs: Tensor<B, 1> = log_probs.clone() // [T, Vocab]
-                .slice([t..(t + 1)]) // [1, Vocab]
-                .repeat_dim(0, len_targ_intr) // [(2L + 1), Vocab]
-                .gather(1, intr_targ_ids.clone().unsqueeze_dim(1)) // [(2L + 1), 1]
-                .squeeze(); // [(2L + 1)]
-
-            // probs at curr/prev positions
-            let prev_1_probs = curr_fwd.clone().roll_dim(-1, 0); // shift right by 1
-            let prev_2_probs = curr_fwd.clone().roll_dim(-2, 0); // shift right by 2
+            // get batch-wise log-probs of each symbol ID in blank-interleaved target sequence at current timestep
+            // then mask out log-probs at positions beyond true input timestep lengths
+            let log_probs_t = log_probs.clone()                                          // [N, T, Vocab]
+                .slice([0..n, t_idx..(t_idx + 1), 0..vocab_size])                              // [N, 1, Vocab]
+                .expand([n, intr_pad_targ_length, vocab_size])                                  // [N, (2L + 1), Vocab]
+                .gather(2, targets.clone().reshape([n, intr_pad_targ_length, 1]))  // [N, (2L + 1), 1]
+                .reshape([n, intr_pad_targ_length])                                             // [N, (2L + 1)]
+                .mask_where(
+                    time_mask.clone().bool_not(),
+                    Tensor::full([n, intr_pad_targ_length], sentinel_value, &device)
+                );
 
             // possible actions at current timestep (based on what could have happened at previous frame)
             // - stay:  log-prob of staying at same symbol in interleaved target sequence   (from same position)
             // - adv_1: log-prob of advancing by one symbol                                 (from one position earlier)
             // - adv_2: log-prob of skipping blank to advance by two symbols                (from two positions earlier)
             let stay = curr_fwd.clone();
-            let adv_1 = large_negs.clone().mask_where(can_skip_1_mask.clone(), prev_1_probs.clone());
-            let adv_2 = large_negs.clone().mask_where(can_skip_2_mask.clone(), prev_2_probs.clone());
+            let adv_1 = curr_fwd.clone()
+                .roll_dim(-1, 1) // shift right by 1 on dim 1
+                .mask_fill(skip_1_mask.clone().bool_not(), sentinel_value);
+            let adv_2 = curr_fwd.clone()
+                .roll_dim(-2, 1) // shift right by 2 on dim 1
+                .mask_fill(skip_2_mask.clone().bool_not(), sentinel_value);
 
             // compute accumulated log-prob for current path (in time-sequence grid) from all possible actions
-            let total_log_probs = log_sum_exp_3_tensor(stay, adv_1, adv_2);
+            // then mask out log-probs at positions beyond true blank-interleaved target lengths
+            let next_fwd = (log_sum_exp_3_tensor(stay, adv_1, adv_2) + log_probs_t.clone()) // [N, (2L + 1)]
+                .mask_fill(length_mask.clone().bool_not(), sentinel_value);
 
-            // update log-probs of current path with log-prob of current timestep (from model output)
-            next_fwd = total_log_probs + curr_log_probs;
-            swap(&mut curr_fwd, &mut next_fwd);
+            curr_fwd = curr_fwd.mask_where(time_mask, next_fwd); // 
         }
 
-        // end at last blank or symbol before it
-        let end_1 = curr_fwd.clone().slice([(len_targ_intr - 1)..len_targ_intr]);
-        let end_2 = if len_targ_intr >= 2 {
-            curr_fwd.clone().slice([(len_targ_intr - 2)..(len_targ_intr - 1)])
-        } else { large_negs.clone() };
-        let total_log_prob = log_sum_exp_2_tensor(end_1.clone(), end_2.clone());
+        // t = T: DP termination
+        // end at last blank or symbol before it in blank-interleaved target sequence
+        let end_1 = curr_fwd.clone().gather(1, (intr_targ_lengths.clone() - 1).reshape([n, 1])); // [N, 1]
+        let end_2 = curr_fwd.clone().gather(1, (intr_targ_lengths.clone() - 2).reshape([n, 1])); // [N, 1]
 
-        -total_log_prob // loss
+        let total_log_prob = log_sum_exp_2_tensor(end_1, end_2); // [N, 1]
+        -total_log_prob.squeeze_dim(1) // [N]
+    }
+
+
+    /// interleave blank IDs into target sequences in batch for CTC loss computation
+    /// params:
+    /// - targets: [N, L_max] (length-padded target sequences)
+    /// - device: backend device to create tensors on
+    /// returns: [N, (2L + 1)] (target sequences with blanks interleaved, where L is original target length without blanks)
+    fn interleave_targets_with_blanks<B: Backend>(
+        &self,
+        targets: Tensor<B, 2, Int>, // [N, L_max]
+        device: &B::Device,
+    ) -> Tensor<B, 2, Int> {
+        let blank = self.blank_id as i64;
+        let n = targets.dims()[0]; // batch size
+
+        // original and blank-interleaved lengths of target sequence
+        let len_targ_orig: usize = targets.dims()[1];      // L
+        let len_targ_intr = 2 * len_targ_orig + 1;  // 2L + 1
+
+        // make [N, L + 1] tensor of blank IDs (actually want shape [N, L], but stack requires same shape)
+        // take [N, L] tensor of target IDs + single blank ID concatenated at end for a [N, L + 1] tensor
+        let blanks = Tensor::<B, 2, Int>::full([n, len_targ_orig + 1], blank, device);
+        let labels = Tensor::<B, 2, Int>::cat(vec![targets, Tensor::<B, 2, Int>::full([n, 1], blank, device)], 1);
+
+        // perform:
+        // - stack      [N, 2, L + 1]
+        // - transpose  [N, 2L + 2]
+        // - flatten    [N, 2L + 1]
+        // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-interleaved targets of length 2L + 1)
+        let interleaved = Tensor::stack::<3>(vec![blanks, labels], 1) // [N, 2, L + 1]
+                .swap_dims(1, 2)
+                .reshape([n, (len_targ_orig + 1) * 2])
+                .slice([0..n, 0..len_targ_intr]);
+        assert_eq!(interleaved.dims()[1], len_targ_intr, "Interleaved targets/length mismatch");
+
+        interleaved
+    }
+
+    /// compute batch-wise skip validity masks for 1-pos and 2-pos jumps in time-sequence DP grid
+    /// params:
+    /// - interleaved_targets: [N, 2L + 1] (length-padded target sequences with blanks interleaved)
+    /// - device: backend device to create tensors on
+    /// returns: tuple of masks, where each is a [N, 2L + 1] bool tensor indicating whether it's valid to skip by 1 or 2 positions in DP grid at a position in blank-interleaved target sequence
+    fn compute_skip_validity_masks<B: Backend>(
+        &self,
+        interleaved_targets: Tensor<B, 2, Int>,
+        device: &B::Device,
+    ) -> (Tensor<B, 2, Bool>, Tensor<B, 2, Bool>) {
+        let blank = self.blank_id as i64;
+        let [n, l] = interleaved_targets.dims();
+
+        // blank-interleaved symbol positions and IDs [N, 2L + 1]
+        let intr_targ_ids = interleaved_targets.clone();
+        let intr_targ_pos = Tensor::<B, 1, Int>::arange(0..(l as i64), device)
+            .reshape([1, l])
+            .expand([n, l]);
+
+        // goal: (pos is odd) && (pos > 1) && (ids[pos] != ids[pos − 2]) && (ids[pos] != blank)
+        let prev_2 = intr_targ_ids.clone().roll_dim(-2, 1); // shift right by 2 on dim 1
+        let odd_mask = intr_targ_pos.clone().remainder_scalar(2).not_equal_elem(0);
+        let pos_gt_1_mask = intr_targ_pos.clone().greater_elem(1);
+        let neq_prev_2_mask = intr_targ_ids.clone().not_equal(prev_2.clone());
+        let not_blank_mask = intr_targ_ids.clone().not_equal_elem(blank);
+
+        // can-skip-by-1 & can-skip-by-2 validity masks
+        let can_skip_1_mask = intr_targ_pos.clone().greater_elem(0);
+        let can_skip_2_mask = odd_mask
+            .clone()
+            .bool_and(pos_gt_1_mask.clone())
+            .bool_and(neq_prev_2_mask.clone())
+            .bool_and(not_blank_mask.clone());
+
+        (can_skip_1_mask, can_skip_2_mask)
     }
 }
 
@@ -296,6 +294,33 @@ mod tests {
         let input_length = Tensor::<B, 1, Int>::from_ints(data_inputs.as_slice(), device);
         let target_len = Tensor::<B, 1, Int>::from_ints(data_targets.as_slice(), device);
         (input_length, target_len)
+    }
+
+    #[test]
+    fn debug_roll_dim_shift_directionality() {
+        let device = Default::default();
+        
+        // dummy 1D-like tensor: [[0, 1, 2, 3, 4]]
+        let data = Tensor::<B, 2>::from_floats([[0.0, 1.0, 2.0, 3.0, 4.0]], &device);
+        println!("\nOriginal: {:?}", data.to_data().convert::<f32>().into_vec::<f32>().unwrap());
+
+        // test positive roll
+        // for most frameworks, this should move right (4 moves to index 0):
+        // [0, 1, 2, 3, 4] --> [4, 0, 1, 2, 3]
+        println!("Attempting Roll +1");
+        let pos_roll = data.clone().roll_dim(1, 1); 
+        println!("Roll +1: {:?}", pos_roll.to_data().convert::<f32>().into_vec::<f32>().unwrap());
+
+        // test negative roll
+        // for most frameworks, this should move left (0 moves to index 4):
+        // [0, 1, 2, 3, 4] --> [1, 2, 3, 4, 0]
+        println!("Attempting Roll -1");
+        let neg_roll = data.clone().roll_dim(-1, 1);
+        println!("Roll -1: {:?}\n", neg_roll.to_data().convert::<f32>().into_vec::<f32>().unwrap());
+
+        // takeaway after testing (as of Burn 0.20.1):
+        // - positive shift val rolls left
+        // - negative shift val rolls right
     }
 
     #[test]

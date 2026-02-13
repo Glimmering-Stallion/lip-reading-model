@@ -150,18 +150,23 @@ impl CtcDecoder {
         &self,
         inputs: Tensor<B, 3>
     ) -> Vec<Vec<i64>> {
-        // grab most probable symbol ID from vocab distribution (dim 2), per frame (dim 1), per sample (dim 0)
-        let argmax_ids = inputs.clone().argmax(2); // [N, T]
-        let argmax_ids = argmax_ids.to_data().convert::<i64>().to_vec().unwrap();
-        let (n, t) = (inputs.clone().dims()[0], inputs.dims()[1]);
+        let [n, t, _] = inputs.dims();
         assert!(self.blank_id < inputs.dims()[2], "Blank ID {} is out of vocabulary size bounds {}", self.blank_id, inputs.dims()[2]);
 
-        (0..n)
-            .map(|sample| {
-                let sequence = &argmax_ids[(sample * t)..((sample + 1) * t)];
-                collapse_path(sequence, self.blank_id as i64)
-            })
-            .collect()
+        // grab most probable symbol ID from vocab distribution (dim 2), per frame (dim 1), per sample (dim 0)
+        let argmax_ids = inputs          // [N, T, Vocab]
+            .argmax(2)                   // [N, T, 1]
+            .reshape([n, t])           // [N, T]
+            .to_data()
+            .convert::<i64>()
+            .to_vec()
+            .unwrap();
+
+        // collapse singular most probable path per sample by removing dupes and blanks
+        argmax_ids
+            .chunks(t)
+            .map(|seq| collapse_path(seq, self.blank_id as i64))
+            .collect::<Vec<Vec<i64>>>()
     }
 
     /// beam search decode for batch of samples
@@ -390,25 +395,25 @@ impl CtcDecoder {
 
 
 
-/// helper function for greedy search to collapse a path by removing consecutive duplicates between blanks
-/// blank tokens are then removed subsequently
+/// helper function for greedy search to collapse a path by:
+/// - removing blanks and false duplicates (repeated chars between blanks)
+/// - keeping true duplicates (repeated chars separated by blanks)
 /// this helps to align time-based predictions with text-based targets
 /// params:
 /// - path: sequence of symbol int IDs deemed most probable by model (with blanks and duplicates) [T]
 /// - blank_id: id of blank token in vocab
 /// returns: collapsed sequence of symbol int IDs (without blanks or duplicates) [L]
 pub fn collapse_path<T: PartialEq + Copy>(path: &[T], blank_id: T) -> Vec<T> {
-    let mut collapsed_path = Vec::new();
+    let mut collapsed_path = Vec::with_capacity(path.len());
     let mut prev = None;
 
-    // dupe removal
+    // ignore dupes and blanks
     for &token in path {
-        if Some(token) != prev { collapsed_path.push(token); }
+        if Some(token) != prev && token != blank_id { collapsed_path.push(token); }
         prev = Some(token);
     }
 
-    // blank removal
-    collapsed_path.into_iter().filter(|&token| token != blank_id).collect()
+    collapsed_path
 }
 
 
