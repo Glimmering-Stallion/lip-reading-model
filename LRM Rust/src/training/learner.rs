@@ -4,15 +4,15 @@
 
 // custom imports
 use crate::{
-    vocab::{VOCAB_SIZE, BLANK_ID, TokenMap},
+    vocab::{VOCAB, VOCAB_SIZE, BLANK_ID, TokenMap},
     pipeline::{
         batcher::{
             Batch,
             VsrmBatcher,
         },
         dataset::{
-            DatasetSource,
             DatasetSplit,
+            DatasetSource,
         },
         adapters::grid::GridDataset,
     },
@@ -45,7 +45,8 @@ use burn::{
     config::Config,
     data::dataloader::{DataLoader, DataLoaderBuilder},
     lr_scheduler::noam::NoamLrSchedulerConfig,
-    module::Module, optim::AdamConfig,
+    module::Module,
+    optim::AdamConfig,
     record::CompactRecorder,
     data::dataset::Dataset,
     tensor::{
@@ -65,7 +66,7 @@ use burn::{
             LossInput,
             LossMetric,
         }
-    }
+    },
 };
 use std::{
     sync::Arc,
@@ -98,6 +99,9 @@ pub struct VsrmLearnerConfig  {
     #[config(default = 8)]
     pub num_workers: usize,
 
+    #[config(default = 1)]
+    pub accumulation: usize,
+
     #[config(default = 42)]
     pub seed: u64,
 }
@@ -123,7 +127,11 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
                 batch.input_lengths.clone(),
                 batch.target_lengths.clone(),
             );
-        if !loss.clone().is_finite().all().into_scalar().elem::<bool>() { panic!("Loss contains non-finite values"); }
+        if !loss.clone().is_finite().all().into_scalar().elem::<bool>() {
+            println!("DUMPING BATCH: Loss is NaN/Inf!");
+            println!("Batch lengths: {:?}", batch.input_lengths);
+            panic!("Loss contains non-finite values");
+        }
 
         let grads = loss.backward();
 
@@ -150,6 +158,29 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
 
         let [n, t, v] = logits.dims();
         assert!(n > 0 && t > 0 && v > 0);
+
+        // -------------------------------------- Debugging --------------------------------------
+
+        // debugging: print out character-level predictions for first item in batch
+        let indices = logits.clone().argmax(2).squeeze::<2>();
+
+        // convert indices to &[usize]
+        let indices_vec: Vec<usize> = indices.clone().slice([0..1, 0..t])
+            .to_data()
+            .convert::<i64>()
+            .to_vec::<i64>()
+            .unwrap()
+            .into_iter()
+            .map(|x| x as usize)
+            .collect();
+
+        // use token map to convert indices to characters (for first item in batch)
+        let token_map = TokenMap::new(VOCAB); // replace with actual token map if needed
+        let predicted_tokens: Vec<char> = token_map.ids_to_chars(&indices_vec).unwrap();
+
+        println!("Predicted tokens for first item in batch: {:?}", predicted_tokens);
+
+        // ---------------------------------------------------------------------------------------
 
         let loss = CtcLossConfig::new()
             .with_blank_id(BLANK_ID)
@@ -299,6 +330,7 @@ where
         .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map))
         .with_file_checkpointer(CompactRecorder::new())
         .num_epochs(learner_config.num_epochs)
+        .grads_accumulation(learner_config.accumulation)
         .launch(learner);
 
     // save final model weights
@@ -331,15 +363,22 @@ where
 
     // (train/validation boundary, validation/test boundary)
     // total data:                  |---------------------------train---------------------------|-valid-|--test--|
-    // train/valid split point:     |----------------------------80%--------------------------->|<---------------|
-    // valid/test split point:      |--------------------------------90%------------------------------->|<-------|
-    let split_thresholds = (0.8, 0.9);
+    // train/eval split point:      |----------------------------80%--------------------------->|<---------------|
+    // valid/test split point:      |-----------------------------------------------------------|--10%-->|<------|
+    let split_thresholds = (0.8, 0.1);
 
     match dataset_src {
         DatasetSource::Grid => {
+            // dataset instance
+            let dataset = Arc::new(GridDataset::new(root_path, token_map));
+
             // train/validation dataset instances
-            let train_dataset = GridDataset::new(root_path, DatasetSplit::Train, split_thresholds, token_map.clone());
-            let valid_dataset = GridDataset::new(root_path, DatasetSplit::Val, split_thresholds, token_map.clone());
+            let (train_dataset, valid_dataset, _) = DatasetSplit::split(
+                dataset,
+                split_thresholds.0,
+                split_thresholds.1,
+                learner_config.seed,
+            );
 
             assert!(train_dataset.len() > 0, "Training dataset is empty");
             assert!(valid_dataset.len() > 0, "Validation dataset is empty");
@@ -366,5 +405,281 @@ where
             (train_dataloader, valid_dataloader)
         }
         // DatasetSource::Lrw => { // similar logic for future LRW dataset },
+    }
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use crate::pipeline::dataset;
+
+    use super::*;
+    use burn::{
+        tensor::{
+            Tensor,
+            Int,
+            Distribution,
+        },
+        backend::{
+            Autodiff,
+            NdArray,
+            ndarray::NdArrayDevice,
+            wgpu::{Wgpu, WgpuDevice},
+        },
+        data::dataloader::batcher::Batcher,
+        optim::{
+            AdamConfig,
+            GradientsParams,
+            Optimizer,
+        },
+    };
+    use std::path::PathBuf;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
+
+    type TestBackend = Autodiff<Wgpu<f32, i32>>;
+    // type TestBackend = Autodiff<NdArray>;
+
+    #[test]
+    fn test_overfit_single_synthetic_batch() {
+        // test if a randomly initialized model can overfit a single batch of dummy data (loss should drop significantly after 100 training steps)
+        // this is a sanity check to ensure the training loop, loss function, and backward pass are implemented correctly
+        // and can successfully optimize the model on a small dataset (without this, we might have silent bugs that prevent learning but don't cause crashes)
+
+        let vocab = VOCAB;
+        let vocab_size = VOCAB_SIZE;
+        let blank_id = BLANK_ID;
+        let token_map = TokenMap::new(vocab);
+        let device = WgpuDevice::default();
+        // let device = NdArrayDevice::Cpu;
+
+        let lr = 1e-3;
+        let steps = 200;
+        let mut initial_loss = 0.0;
+        let mut current_loss = 0.0;
+        let loss_threshold = 0.1;
+        let frame_dims = (50, 150);
+
+        println!("Device used for testing: {:?}", device);
+
+        // create dummy dims for a batch
+        let (n, c, t, h, w, l) = (
+            2,            // batch size
+            1,            // channels (grayscale)
+            50,           // input length (frames)
+            frame_dims.0, // frame height
+            frame_dims.1, // frame width
+            10,           // target length (chars)
+        );
+        
+        // create dummy inputs data
+        // (generate data between 0.0 and 1.0 as normalized pixel values)
+        let inputs: Tensor<TestBackend, 5> = Tensor::random(
+            [n, c, t, h, w],
+            Distribution::Uniform(0.0, 1.0),
+            &device,
+        );
+
+        // create dummy targets data
+        // (just a repeating sequence of indices [1, 2, ... 10])
+        let targets: Tensor<TestBackend, 2, Int> = Tensor::<TestBackend, 1, Int>::from_ints(
+            (0..l as i32).cycle().take(l * n).collect::<Vec<i32>>().as_slice(),
+            &device,
+        ).reshape([n, l]);
+
+        // establish input/target lengths tensors
+        let input_lengths = Tensor::from_ints([t as i32, t as i32], &device);
+        let target_lengths = Tensor::from_ints([l as i32, l as i32], &device);
+
+        // init optimizer
+        let mut optim = AdamConfig::new()
+            .with_beta_1(0.9)
+            .with_beta_2(0.999)
+            .with_epsilon(1e-8)
+            .init();
+
+        // init VSR model
+        let mut model: VsrModel<TestBackend> = VsrModelConfig::new(frame_dims)
+            .with_vocab_size(vocab_size)
+            .init(&device);
+
+        // init CTC loss
+        let ctc_loss = CtcLossConfig::new()
+            .with_blank_id(blank_id)
+            .init();
+
+        // init CTC decoder
+        let ctc_decoder = CtcDecoderConfig::new()
+            .with_search_type(CtcDecodeType::GreedySearch)
+            .with_blank_id(blank_id)
+            .init();
+
+        println!("--- STARTING SINGLE BATCH OVERFIT TEST ---\n");
+
+        // print out actual target sequences for debugging
+        let targ_sequences = targets.to_data().to_vec::<i32>().unwrap()
+            .chunks(l)
+            .map(|seq| {
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
+            })
+            .collect::<Vec<Vec<char>>>();
+        println!("Actual sequences: {:?}\n", targ_sequences);
+
+        // training loop
+        for i in 0..steps {
+            // forward pass and loss calculation
+            let logits = model.forward(inputs.clone());
+            let loss = ctc_loss
+                .forward(
+                    logits.clone(),
+                    targets.clone(),
+                    input_lengths.clone(),
+                    target_lengths.clone(),
+                );
+            
+            // check for explosion
+            let loss_val = loss.clone().into_scalar().elem();
+            if i == 0 { initial_loss = loss_val; }
+            if i % 10 == 0 {
+                println!("Step {}/{}: Loss = {:.4}", i, steps, loss_val);
+
+                // print out decoded predictions for debugging
+                let pred_sequences = ctc_decoder.forward(logits)
+                    .iter()
+                    .map(|seq| {
+                        let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                        token_map.ids_to_chars(&ids).unwrap()
+                    })
+                    .collect::<Vec<Vec<char>>>();
+                println!("Predicted sequences: {:?}\n", pred_sequences);
+            }
+
+            // backward pass and optimizer
+            let grads = GradientsParams::from_grads(loss.backward(), &model);
+            model = optim.step(lr, model, grads);
+
+            // success condition
+            if loss_val < loss_threshold {
+                println!("SUCCESS: Model overfit the batch! Loss dropped from {:.4} to {:.4}", initial_loss, current_loss);
+                return;
+            }
+
+            current_loss = loss_val;
+        }
+
+        panic!("FAILURE: Loss did not drop significantly. Started at {}, ended at {}.", initial_loss, current_loss);
+    }
+
+    #[test]
+    fn test_overfit_single_real_batch() {
+        // test if a randomly initialized model can overfit a single batch of real data (loss should drop significantly after 100 training steps)
+
+        let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let vocab = VOCAB;
+        let vocab_size = VOCAB_SIZE;
+        let blank_id = BLANK_ID;
+        let token_map = TokenMap::new(vocab);
+        let device = WgpuDevice::default();
+        // let device = NdArrayDevice::Cpu;
+
+        let seed = 69;
+        let mut rng = StdRng::seed_from_u64(seed);
+        let lr = 1e-3;
+        let steps = 200;
+        let mut initial_loss = 0.0;
+        let mut current_loss = 0.0;
+        let loss_threshold = 0.1;
+        let frame_dims = (50, 150);
+
+        // grab single real batch from our actual dataset (GRID)
+        let dataset = GridDataset::new(root_path, token_map.clone());
+        let dataset_item = dataset
+            .get(rng.random_range(0..dataset.len()))
+            .expect("Failed to get first item from dataset");
+        let batch = VsrmBatcher::<TestBackend>::new(device.clone())
+            .batch(vec![dataset_item], &device.clone());
+
+        // init optimizer
+        let mut optim = AdamConfig::new()
+            .with_beta_1(0.9)
+            .with_beta_2(0.999)
+            .with_epsilon(1e-8)
+            .init();
+
+        // init VSR model
+        let mut model: VsrModel<TestBackend> = VsrModelConfig::new(frame_dims)
+            .with_vocab_size(vocab_size)
+            .init(&device);
+
+        // init CTC loss
+        let ctc_loss = CtcLossConfig::new()
+            .with_blank_id(blank_id)
+            .init();
+
+        // init CTC decoder
+        let ctc_decoder = CtcDecoderConfig::new()
+            .with_search_type(CtcDecodeType::GreedySearch)
+            .with_blank_id(blank_id)
+            .init();
+
+        println!("--- OVERFITTING REAL BATCH ---\n");
+        
+        // check normalization on the fly
+        let min = batch.inputs.clone().min().into_scalar().elem::<f32>();
+        let max = batch.inputs.clone().max().into_scalar().elem::<f32>();
+        println!("Real frame pixels range: [{:.2} to {:.2}]\n", min, max);
+
+        // print out actual target sequences for debugging
+        let targ_sequences = batch.targets.to_data().to_vec::<i32>().unwrap()
+            .chunks(batch.target_lengths.clone().into_scalar().elem::<i32>() as usize)
+            .map(|seq| {
+                let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                token_map.ids_to_chars(&ids).unwrap()
+            })
+            .collect::<Vec<Vec<char>>>();
+        println!("Actual sequences: {:?}\n", targ_sequences);
+
+        for i in 0..steps {
+            // forward pass and loss calculation
+            let logits = model.forward(batch.inputs.clone());
+            let loss = ctc_loss.forward(
+                logits.clone(),
+                batch.targets.clone(),
+                batch.input_lengths.clone(),
+                batch.target_lengths.clone(),
+            );
+
+            // check for explosion
+            let loss_val = loss.clone().into_scalar().elem();
+            if i == 0 { initial_loss = loss_val; }
+            if i % 10 == 0 {
+                println!("Step {}/{}: Loss = {:.4}", i, steps, loss_val);
+
+                // decode predictions for debugging
+                let pred_sequences = ctc_decoder.forward(logits)
+                    .iter()
+                    .map(|seq| {
+                        let ids: Vec<usize> = seq.iter().map(|&id| id as usize).collect();
+                        token_map.ids_to_chars(&ids).unwrap()
+                    })
+                    .collect::<Vec<Vec<char>>>();
+                println!("Predicted sequences: {:?}\n", pred_sequences);
+            }
+
+            // backward pass and optimizer
+            let grads = GradientsParams::from_grads(loss.backward(), &model);
+            model = optim.step(lr, model, grads);
+
+            // success condition
+            if loss_val < loss_threshold {
+                println!("SUCCESS: Model overfit the batch! Loss dropped from {:.4} to {:.4}", initial_loss, current_loss);
+                return;
+            }
+
+            current_loss = loss_val;
+        }
+
+        panic!("FAILURE: Loss did not drop significantly. Started at {}, ended at {}.", initial_loss, current_loss);
     }
 }

@@ -59,6 +59,7 @@ impl<B: Backend> VsrmBatcher<B> {
 
 
 // stack data on CPU tensor first, then move that singular final Batch Tensor to GPU for model ingestion
+// (cheaper to move one big tensor to GPU than many small tensors)
 impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
     /// create a batch from a list of dataset items
     /// handles dynamic padding for both video frames and transcript sequences

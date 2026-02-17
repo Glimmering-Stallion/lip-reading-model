@@ -27,7 +27,7 @@ use burn::{
     },
 };
 use lrm_rust::{
-    ctc::lm::{self, LanguageModel},
+    ctc::lm::{LanguageModel},
     pipeline::DatasetSource,
     prelude::*,
 };
@@ -42,6 +42,7 @@ use std::{
 
 
 
+// Put this at the absolute top of main.rs or lib.rs
 type MyBackend = Autodiff<Wgpu>;
 
 
@@ -172,6 +173,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let batch_size = 8;
     let learning_rate = 5e-4;
     let num_workers = 4;
+    let accumulation = 4;
     let seed = 42;
     let device = DefaultDevice;
     let root_path = rust_root;
@@ -193,6 +195,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         learning_rate,
         optimizer: optimizer_config,
         num_workers,
+        accumulation,
         seed,
     };
 

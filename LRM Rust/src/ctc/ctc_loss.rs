@@ -97,8 +97,8 @@ impl CtcLoss {
     ) -> Tensor<B, 1> {
         let device = inputs.device();
         let [n, t, vocab_size] = inputs.dims();
-        let sentinel_value = f32::NEG_INFINITY; // possibly causes NaNs
-        // let sentinel_value = -1e30; // numerically stable
+        // let sentinel_value = f32::NEG_INFINITY; // possibly causes NaNs
+        let sentinel_value = -1e30; // numerically stable
         let log_probs = log_softmax(inputs.clone(), 2); // turn logits into log-probs
 
         assert_eq!(inputs.dims()[0], targets.dims()[0], "Inputs/targets batch size mismatch");

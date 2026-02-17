@@ -1,5 +1,6 @@
 // Modules
 
+#![recursion_limit = "512"]
 pub mod pipeline;
 pub mod training;
 // pub mod inference;

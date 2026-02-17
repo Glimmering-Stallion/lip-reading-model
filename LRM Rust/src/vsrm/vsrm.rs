@@ -309,7 +309,7 @@ impl<B: Backend> VsrModel<B> {
         let min_viable_rf = 25;
         let max_viable_rf = 3 * 75;
 
-        println!("Model initialized with temporal receptive field of {} frames", total_rf);
+        println!("Model initialized with temporal receptive field of {} frames\n", total_rf);
         debug_assert!(total_rf > min_viable_rf, "Vision too narrow: {} frames", total_rf);
         debug_assert!(total_rf < max_viable_rf, "Vision too wide: {} frames", total_rf);
 

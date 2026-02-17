@@ -8,7 +8,6 @@ use crate::{
     pipeline::{
         batcher::VsrmItem,
         io::load_grid_corpus,
-        DatasetSplit,
     },
 };
 
@@ -36,10 +35,15 @@ pub struct GridDataset {
 
 
 impl GridDataset {
+    /// constructor for GRID dataset adapter
+    /// scans disk for available video samples and their corresponding alignment files
+    /// stores valid entries as "speaker_id/item_id" (e.g., "s1/bbaf2n")
+    /// params:
+    /// - root_path: root directory containing "data/grid-lr-corpus" subdirectory with frames and alignments
+    /// - token_map: bidirectional mapping of chars to IDs for transcript encoding
+    /// returns: initialized GridDataset instance with valid entries loaded from disk
     pub fn new<P: AsRef<Path>>(
         root_path: P,
-        split: DatasetSplit,
-        split_thresholds: (f32, f32),
         token_map: TokenMap
     ) -> Self {
         let root_path = root_path.as_ref();
@@ -68,29 +72,9 @@ impl GridDataset {
         // sort s1, s2, ..., s34
         avail_speakers.sort_by_key(|s| s[1..].parse::<i32>().unwrap_or(1));
 
-        // calculate split points
-        // dataset: [train|val|test]
-        let total = avail_speakers.len() as f32;
-        let (train_test_threshold, val_test_threshold) = split_thresholds;
-        let (train_end, val_end) = (
-            (total * train_test_threshold).round() as usize,
-            (total * val_test_threshold).round() as usize,
-        );
-
-        assert!(total > 1.0, "Total number of speakers must be more than one");
-        assert!(train_test_threshold < val_test_threshold || train_end < val_end, "Train threshold must be before Val threshold");
-        assert!(train_test_threshold > 0.0 && val_test_threshold <= 1.0, "Split thresholds must be in (0, 1]");
-
-        // partition speakers based on split points and select based on which split given
-        let selected_speakers = match split {
-            DatasetSplit::Train => &avail_speakers[0..train_end],
-            DatasetSplit::Val => &avail_speakers[train_end..val_end],
-            DatasetSplit::Test => &avail_speakers[val_end..],
-        };
-
         // scan disk for only selected speakers and store
         let mut entries = Vec::new();
-        for speaker in selected_speakers { // loop through dirs of selected speakers
+        for speaker in &avail_speakers { // loop through dirs of selected speakers
             let video_dir = frames_dir.join(speaker);
             let alignment_dir = alignments_dir.join(speaker);
 
@@ -98,6 +82,8 @@ impl GridDataset {
                 for item in items.flatten() { // loop through data items of each speakers' dirs
                     if let Some(stem) = item.path().file_stem().and_then(|s| s.to_str()) {
 
+                        // validity flags
+                        // only if a valid video file has a corresponding alignment file do we consider it a valid entry
                         let is_video = item.path().extension().is_some_and(|ext| ext == "mpg");
                         let has_alignment = alignment_dir.join(stem).with_extension("align").exists();
 
@@ -109,8 +95,8 @@ impl GridDataset {
             }
         }
         entries.sort(); // sort for deterministic order
-        assert!(!entries.is_empty(), "Dataset split {:?} resulted in 0 samples\nCheck if path {:?} contains .mpg files", split, grid_dir);
-        println!("Initialized GridDataset ({:?}) with {} samples from {:?}", split, entries.len(), selected_speakers);
+        assert!(!entries.is_empty(), "Dataset instance resulted in 0 samples\nCheck if path {:?} contains .mpg files", grid_dir);
+        println!("Initialized GridDataset instance with {} samples from speakers {:?}\n", entries.len(), avail_speakers);
 
         Self {
             root_path: root_path.to_path_buf(),
@@ -186,7 +172,6 @@ impl Dataset<VsrmItem> for GridDataset {
 mod tests {
     use super::*;
     use crate::{
-        pipeline::DatasetSplit,
         vocab::VOCAB,
     };
     use image::{GrayImage, Luma};
@@ -197,20 +182,14 @@ mod tests {
 
     #[test]
     fn test_extract_frames_from_grid_dataset_item() {
+        // test if we can load a GRID dataset item, extract its frames, and save them as individual PNG images for visual inspection
+
         let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let tests_path = Path::new(&root_path).join("tests");
         if !tests_path.exists() { fs::create_dir(&tests_path).expect("Failed to create tests directory") }
 
-        let token_map = TokenMap::new(VOCAB);
-        let split_thresholds = (0.1, 1.0);
-
-        // train/validation dataset instances
-        let dataset = GridDataset::new(
-            root_path, 
-            DatasetSplit::Train,
-            split_thresholds,
-            token_map.clone(),
-        );
+        // GRID dataset instance
+        let mut dataset = GridDataset::new(root_path.clone(), TokenMap::new(VOCAB));
 
         // obtain first valid GRID dataset item
         let mut item = None;

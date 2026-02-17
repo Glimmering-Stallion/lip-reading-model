@@ -481,7 +481,7 @@ mod tests {
         let device = Default::default();
         let dist = Distribution::Uniform(0.0, 1.0);
 
-        // dummy logits for 2 samples, 5 timesteps, 41 vocab symbols
+        // dummy logits for 2 samples, 5 timesteps, V vocab symbols
         let logits = Tensor::<B, 3>::random([2, 5, vocab_size], dist, &device);
 
         let decoder = CtcDecoderConfig::new()
@@ -525,7 +525,7 @@ mod tests {
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
-        // dummy logits for 2 samples, 11 timesteps, 41 vocab symbols (manually biased high blanks)
+        // dummy logits for 2 samples, 11 timesteps, V vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -566,7 +566,7 @@ mod tests {
         let device = Default::default();
         let dist = Distribution::Uniform(0.0, 1.0);
 
-        // dummy logits for 2 samples, 5 timesteps, 41 vocab symbols
+        // dummy logits for 2 samples, 5 timesteps, V vocab symbols
         let logits = Tensor::<B, 3>::random([2, 5, vocab_size], dist, &device);
 
         let decoder = CtcDecoderConfig::new()
@@ -611,7 +611,7 @@ mod tests {
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
-        // dummy logits for 2 samples, 11 timesteps, 41 vocab symbols (manually biased high blanks)
+        // dummy logits for 2 samples, 11 timesteps, V vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -663,7 +663,7 @@ mod tests {
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
-        // dummy logits for 2 samples, 11 timesteps, 41 vocab symbols (manually biased high blanks)
+        // dummy logits for 2 samples, 11 timesteps, V vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -745,7 +745,7 @@ mod tests {
             vec![7, 14, 15, 15, 4, 3, 39, 7, 14, 15, 4, 3],       // "h o p p e d   h o p e d"
         ];
 
-        // dummy logits for 5 samples, 14 timesteps, 41 vocab symbols (manually biased high blanks)
+        // dummy logits for 5 samples, 14 timesteps, V vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -887,7 +887,7 @@ mod tests {
 
         let (a_id, e_id, h_id, t_id, blank_id) = (0, 4, 7, 19, BLANK_ID); // "a", "e", "h", "t", "_"
 
-        // dummy logits for 1 sample, 4 timesteps, 41 vocab symbols (manually biased high blanks)
+        // dummy logits for 1 sample, 4 timesteps, V vocab symbols (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [[
             one_hot_logits(t_id, HI, LO),                            // t = 0: "t"
             one_hot_logits(h_id, HI, LO),                            // t = 1: "h"
