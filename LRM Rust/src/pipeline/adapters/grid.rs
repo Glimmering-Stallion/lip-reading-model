@@ -130,8 +130,10 @@ impl Dataset<VsrmItem> for GridDataset {
 
         // isolate dims
         let (c, h, w) = (1, 50, 150);
-        let t = frames.len() / (c * h * w);
-        let l = transcript_ids.len();
+        let (t, l) = (
+            frames.len() / (c * h * w),
+            transcript_ids.len(),
+        );
         assert!(frames.len().is_multiple_of(c * h * w), "Frame buffer size {} is not divisible by frame dimensions", frames.len());
         assert!(t > 0, "Computed zero frames for item {}", entry_name);
 
