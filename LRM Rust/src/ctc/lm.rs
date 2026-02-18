@@ -305,7 +305,7 @@ mod tests {
         // test scoring
         let seq = vec![0, 0, 1]; // "aab"
         let log_prob = ngram_lm.score(&seq);
-        println!("Log-prob of sequence {:?}: {:.4}", seq, log_prob); // should print approx. -1.7389
+        println!("\nLog-prob of sequence {:?}: {:.4}\n", seq, log_prob); // should print approx. -1.7389
         assert!(log_prob.is_finite());
     }
 
@@ -349,12 +349,12 @@ mod tests {
         let score_6 = ngram_lm.score(&test_seq_6);
 
         // sanity checks
-        println!("N-gram score for \'{:?}\': {}", string_1, score_1);
+        println!("\nN-gram score for \'{:?}\': {}", string_1, score_1);
         println!("N-gram score for \'{:?}\': {}", string_2, score_2);
         println!("N-gram score for \'{:?}\': {}", string_3, score_3);
         println!("N-gram baseline score for \'{:?}\': {}", string_4, score_4);
         println!("N-gram score for \'{:?}\' following \'{:?}\': {}", string_5.last().unwrap(), string_4, (score_5 - score_4));
-        println!("N-gram score for \'{:?}\' following \'{:?}\': {}", string_6.last().unwrap(), string_4, (score_6 - score_4));
+        println!("N-gram score for \'{:?}\' following \'{:?}\': {}\n", string_6.last().unwrap(), string_4, (score_6 - score_4));
 
         assert_eq!(score_1, 0.0);   // empty sequence should have log-prob of zero
         assert!(score_2 > score_3); // common word should have higher score than gibberish

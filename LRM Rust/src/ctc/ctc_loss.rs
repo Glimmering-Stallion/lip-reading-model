@@ -302,14 +302,14 @@ mod tests {
         
         // dummy 1D-like tensor: [[0, 1, 2, 3, 4]]
         let data = Tensor::<B, 2>::from_floats([[0.0, 1.0, 2.0, 3.0, 4.0]], &device);
-        println!("\nOriginal: {:?}", data.to_data().convert::<f32>().into_vec::<f32>().unwrap());
+        println!("\nOriginal: {:?}\n", data.to_data().convert::<f32>().into_vec::<f32>().unwrap());
 
         // test positive roll
         // for most frameworks, this should move right (4 moves to index 0):
         // [0, 1, 2, 3, 4] --> [4, 0, 1, 2, 3]
         println!("Attempting Roll +1");
         let pos_roll = data.clone().roll_dim(1, 1); 
-        println!("Roll +1: {:?}", pos_roll.to_data().convert::<f32>().into_vec::<f32>().unwrap());
+        println!("Roll +1: {:?}\n", pos_roll.to_data().convert::<f32>().into_vec::<f32>().unwrap());
 
         // test negative roll
         // for most frameworks, this should move left (0 moves to index 4):

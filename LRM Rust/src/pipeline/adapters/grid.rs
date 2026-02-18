@@ -191,7 +191,7 @@ mod tests {
         if !tests_path.exists() { fs::create_dir(&tests_path).expect("Failed to create tests directory") }
 
         // GRID dataset instance
-        let mut dataset = GridDataset::new(root_path.clone(), TokenMap::new(VOCAB));
+        let dataset = GridDataset::new(root_path.clone(), TokenMap::new(VOCAB));
 
         // obtain first valid GRID dataset item
         let mut item = None;
@@ -214,7 +214,7 @@ mod tests {
         let (c, h, w) = (1, 50, 150);
         let t = frames.len() / (c * h * w);
 
-        println!("Exporting {} frames for item: {}", t, item.item_id);
+        println!("Exporting {} frames for item: {}\n", t, item.item_id);
 
         for t_idx in 0..t {
             let start_idx = t_idx * c * h * w;

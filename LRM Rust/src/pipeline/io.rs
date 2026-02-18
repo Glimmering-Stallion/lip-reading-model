@@ -263,7 +263,7 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
 
     // check if the SLR corpus exists at the given path
     if !final_path.exists() {
-        println!("SLR corpus not found, downloading...");
+        println!("\nSLR corpus not found, downloading...");
 
         fs::create_dir_all(&slr_dir).expect("Failed to create SLR directory");
 

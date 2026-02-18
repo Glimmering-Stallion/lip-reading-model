@@ -466,9 +466,10 @@ mod tests {
         let collapsed_path = collapse_path(&path, blank_id);
 
         println!("\nOriginal path IDs: {:?}", path);
-        println!("Collapsed path IDs: {:?}", collapsed_path);
+        println!("Collapsed path IDs: {:?}\n", collapsed_path);
         println!("Original path chars: {:?}", token_map.ids_to_chars(&path.clone()));
         println!("Collapsed path chars: {:?}\n", token_map.ids_to_chars(&collapsed_path.clone()));
+
         assert_eq!(collapsed_path, vec![7, 4, 11, 11, 14, 28]);
     }
 
@@ -498,8 +499,8 @@ mod tests {
             })
             .collect::<Vec<Vec<char>>>();
         
-        println!("Decoded ID sequences: {:?}", decoded_id_sequences);
-        println!("Decoded char sequences: {:?}", decoded_char_sequences);
+        println!("\nDecoded ID sequences: {:?}", decoded_id_sequences);
+        println!("Decoded char sequences: {:?}\n", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
         assert!(!decoded_id_sequences[0].contains(&(blank_id as i64))); // no blanks expected
@@ -550,7 +551,7 @@ mod tests {
         println!("Original sample char sequences: {:?}, {:?}\n", chars_1, chars_2);
         
         println!("Decoded ID sequences: {:?}", decoded_id_sequences);
-        println!("Decoded char sequences: {:?}", decoded_char_sequences);
+        println!("Decoded char sequences: {:?}\n", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
         assert_eq!(decoded_id_sequences[0], vec![7, 4, 11, 11, 14, 28]); // expected collapsed path for sample 1
@@ -584,8 +585,8 @@ mod tests {
             })
             .collect::<Vec<Vec<char>>>();
         
-        println!("Decoded id sequences: {:?}", decoded_id_sequences);
-        println!("Decoded char sequences: {:?}", decoded_char_sequences);
+        println!("\nDecoded id sequences: {:?}", decoded_id_sequences);
+        println!("Decoded char sequences: {:?}\n", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
         assert!(!decoded_id_sequences[0].contains(&(blank_id as i64))); // no blanks expected
@@ -637,7 +638,7 @@ mod tests {
         println!("Original sample char sequences: {:?}, {:?}\n", chars_1, chars_2);
         
         println!("Decoded ID sequences: {:?}", decoded_id_sequences);
-        println!("Decoded char sequences: {:?}", decoded_char_sequences);
+        println!("Decoded char sequences: {:?}\n", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
         assert_eq!(decoded_id_sequences[0], vec![7, 4, 11, 11, 14, 28]);  // expected collapsed path for sample 1
@@ -702,10 +703,10 @@ mod tests {
         println!("\nOriginal sample ID sequences: {:?}, {:?}", ids_1, ids_2);
         println!("Original sample char sequences: {:?}, {:?}\n", chars_1, chars_2);
 
-        println!("\nBeam decoded ID sequences: {:?}", beam_decoded_id_sequences);
+        println!("Beam decoded ID sequences: {:?}", beam_decoded_id_sequences);
         println!("Beam decoded char sequences: {:?}\n", beam_decoded_char_sequences);
 
-        println!("\nGreedy decoded ID sequences: {:?}", greedy_decoded_id_sequences);
+        println!("Greedy decoded ID sequences: {:?}", greedy_decoded_id_sequences);
         println!("Greedy decoded char sequences: {:?}\n", greedy_decoded_char_sequences);
 
         // with beam width 1, no LM, with logits high-contrast and unambiguous, beam output should match greedy
@@ -786,16 +787,16 @@ mod tests {
             .collect::<Vec<Vec<char>>>();
 
         println!("\nOriginal sample id sequences:\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n", ids_1, ids_2, ids_3, ids_4, ids_5);
-        println!("\nOriginal sample char sequences:\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n", chars_1, chars_2, chars_3, chars_4, chars_5);
+        println!("Original sample char sequences:\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n", chars_1, chars_2, chars_3, chars_4, chars_5);
         
-        println!("\nBeam decoded id sequences:");
+        println!("Beam decoded id sequences:");
         for seq in &beam_decoded_id_sequences { println!("  {:?}", seq); }
         println!();
         println!("Beam decoded char sequences:");
         for seq in &beam_decoded_char_sequences { println!("  {}", seq.iter().collect::<String>()); }
         println!();
         
-        println!("\nGreedy decoded id sequences:");
+        println!("Greedy decoded id sequences:");
         for seq in &greedy_decoded_id_sequences { println!("  {:?}", seq); }
         println!();
         println!("Greedy decoded char sequences:");
@@ -864,7 +865,7 @@ mod tests {
         println!("\nBeam decoded ID sequences: {:?}", beam_decoded_id_sequences);
         println!("Beam decoded char sequences: {:?}\n", beam_decoded_char_sequences);
 
-        println!("\nGreedy decoded ID sequences: {:?}", greedy_decoded_id_sequences);
+        println!("Greedy decoded ID sequences: {:?}", greedy_decoded_id_sequences);
         println!("Greedy decoded char sequences: {:?}\n", greedy_decoded_char_sequences);
 
         // beam sums log-probs across alignments
@@ -1005,9 +1006,9 @@ mod tests {
 
         // with LM, "memory" should be preferred over "membry"
         println!("\nNative Beam decoded ID sequences: {:?}", native_beam_decoded_id_sequences);
-        println!("Native Beam decoded char sequences: {:?}", native_beam_decoded_char_sequences);
+        println!("Native Beam decoded char sequences: {:?}\n", native_beam_decoded_char_sequences);
 
-        println!("\nHybrid decoded ID sequences: {:?}", hybrid_beam_decoded_id_sequences);
+        println!("Hybrid decoded ID sequences: {:?}", hybrid_beam_decoded_id_sequences);
         println!("Hybrid decoded char sequences: {:?}\n", hybrid_beam_decoded_char_sequences);
 
         assert_eq!(hybrid_beam_decoded_id_sequences[0], vec![12, 4, 12, 14, 17, 24]); // expected "memory"

@@ -94,9 +94,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     // let token_map = TokenMap::new(VOCAB); // bidirectional char to ID mapping
 
     // debugging
-    println!("Vocabulary: {:?}", VOCAB);
+    println!("\nVocabulary: {:?}", VOCAB);
     println!("Vocabulary size: {}", VOCAB_SIZE);
-    println!("Blank token ID: {}", BLANK_ID);
+    println!("Blank token ID: {}\n", BLANK_ID);
     assert!(BLANK_ID < VOCAB_SIZE, "Blank ID ({}) is out of vocabulary size bounds ({})", BLANK_ID, VOCAB_SIZE);
     assert!(args.n > 0, "N-gram order ({}) must be greater than one", args.n);
 
@@ -139,7 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         lm.train(Box::new(train_sequences));
         lm.save(lm_output_path.to_str().unwrap())?;
-        println!("Saved N-gram LM to {}", lm_output_path.to_string_lossy());
+        println!("Saved N-gram LM to {}\n", lm_output_path.to_string_lossy());
 
         lm
     } else {
@@ -147,7 +147,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // load existing N-gram LM
         let lm = Ngram::load(lm_output_path.to_str().unwrap()).unwrap();
-        println!("Loaded N-gram LM from {}", lm_output_path.to_string_lossy());
+        println!("Loaded N-gram LM from {}\n", lm_output_path.to_string_lossy());
 
         lm
     };
@@ -162,16 +162,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .take(10000);
 
     let perplexity = lm.perplexity(Box::new(eval_sequences));
-    println!("N-gram LM perplexity on eval set: {:.3}", perplexity);
+    println!("N-gram LM perplexity on eval set: {:.3}\n", perplexity);
     assert!(perplexity.is_finite(), "LM perplexity ({}) is non-finite", perplexity);
 
     // ------------------------------------------- VSRM training --------------------------------------------
 
     // define hyperparameters
     let frame_dims = (50, 150); // height, width
-    let num_epochs = 50;
-    let batch_size = 8;
-    let learning_rate = 5e-4;
+    let num_epochs = 1;
+    let batch_size = 1;
+    let learning_rate = 1e-3;
     let num_workers = 4;
     let accumulation = 4;
     let seed = 42;
