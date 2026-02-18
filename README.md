@@ -26,19 +26,26 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 - Implemented dataset adapter ```adapters/``` that:
   - Contains source-specific logic to map raw datasets (GRID, LRW, etc.) into a standardized ```VsrmItem``` format.
-  - Scales 8-bit grayscale pixel values to within $[0, 1]$ for normalization.
+  - Relies on the more abstract ```DatasetSplit``` utility in ```pipeline/dataset.rs``` for train/val/test partitioning.
 - In future, will consider FPS standardization to a target FPS (25) as well (frame dropping preferred over interpolation due to simplicity and avoidance of ghost data).
 
 ### Data Batching (```pipeline/batcher.rs```)
 
-- Developed a custom ```VsrmBatcher``` that:
-  - Scales pixel values to [0, 1].
-  - Centers pixel values to zero mean and unit variance.
+- Developed a custom ```VsrmBatcher``` that standardizes and pads data:
+- Standardization handled by:
+  - Scaling pixel values to [0, 1].
+  - Centering pixel values to zero mean and unit variance.
 - Padding handled by:
   - Finding longest video-frames/transcript-sequences among a batch of sequences (as ```max_t```/```max_l```).
   - Padding variable-length video frames in that batch to ```max_t``` with $0$.
   - Padding variable-length transcript sequences in that batch to ```max_l``` with ```BLANK_ID```.
 - Uses a CPU-to-GPU staging strategy, where tensors are collated on the ```NdArray``` CPU backend before a single-shot move to the ```Wgpu``` GPU backend for minimizing PCIe bus latency.
+
+### Data Partitioning (```pipeline/dataset.rs```)
+
+- Dataset splitting policy is delegated to a generic and source-agnostic ```DatasetSplit``` wrapper, to allow any dataset (GRID, LRW, etc.) to be partitioned through index-mapping without modifying the more specialized adapter logic.
+- Applies a random but deterministic shuffle to the index-mapping. 
+- Then partitions dataset instances into train/val/test splits.
 
 ### Alignment & Vocabulary Handling (```vocab.rs```)
 
@@ -139,13 +146,14 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 ## Current Status
 
 - I/O and data aqcuisition helper functions are finished.
-- Data adapting (for GRID), preprocessing, and batching pipeline is officially done.
+- Data adapting (at least for GRID), preprocessing, splitting, and batching pipeline is officially done.
 - Offline lip-reading inference and language model integration is functionally complete.
 - Greedy decoding and Beam Search decoding with a char-level N-gram language model both work end-to-end.
 - Training and validation pipeline is implemented and wired into Burn's learner framework.
-- Pending VSRM train/eval.
+- Correctness of pipeline dataflow plus mathematical convergence of model verified through single-batch overfit unit tests.
+- Pending official VSRM train/eval using Burn's Learner framework.
 - Dynamic mouth tracking planned but not implemented yet.
-- Planning FPS video standardization to unify varying video-transcript datasets.
+- Planning FPS video standardization to unify potentially varying frame-rates between different video-transcript dataset sources.
 
 ---
 
