@@ -19,8 +19,6 @@ pub mod prelude {
                 extract_slr_corpus,
                 load_grid_corpus,
                 stream_corpus_lines,
-                stream_jsonl_gz,
-                stream_txt_lines,
             },
             adapters::grid::{GridDataset},
             batcher::{

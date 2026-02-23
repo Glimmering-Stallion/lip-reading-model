@@ -3654,6 +3654,7 @@ dependencies = [
  "flate2",
  "image",
  "indicatif",
+ "log",
  "ndarray 0.17.2",
  "num-traits",
  "opencv",

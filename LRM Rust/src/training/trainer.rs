@@ -159,6 +159,8 @@ mod tests {
     fn test_train_epoch() {
         // (batch size, channels, timesteps, height, width, sequence length), where t ≥ 2l - 1
         let (n, c, t, h, w, l) = (1, 1, 6, 40, 40, 3);
+        let vocab_size = VOCAB_SIZE;
+        let blank_id = BLANK_ID;
         let out_channels = 32;
         let epochs = 25;
         let batches = 2; // num batches per epoch
@@ -186,7 +188,8 @@ mod tests {
             .with_in_channels(c)
             .with_out_channels(out_channels)
             .with_norm_groups(norm_groups)
-            .with_vocab_size(VOCAB_SIZE)
+            .with_vocab_size(vocab_size)
+            .with_blank_id(blank_id)
             .init(&device);
 
         // debugging: inspect model's layers' shapes

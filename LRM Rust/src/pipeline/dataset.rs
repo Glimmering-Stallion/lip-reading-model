@@ -34,14 +34,14 @@ impl<I> DatasetSplit<I> {
     /// validation (test as remainder): 0.1 (10%)
     /// params:
     /// - dataset: base dataset to split
-    /// - train_pct: percentage of total data to allocate for training (e.g. 0.8 for 80%)
-    /// - eval_pct: percentage of total data to allocate for evaluation (e.g. 0.1 for 10%)
+    /// - train_pct: percentage of total data to allocate for training, rest for evaluation (e.g. 0.8 for 80%)
+    /// - valid_pct: percentage of total data to allocate for validation, rest for testing (e.g. 0.1 for 10%)
     /// - seed: random seed for deterministic shuffling before splitting
     /// returns: a tuple of (train_split, eval_split, test_split) DatasetSplit instances
     pub fn split(
         dataset: Arc<dyn Dataset<I>>,
         train_pct: f32,
-        eval_pct: f32,
+        valid_pct: f32,
         seed: u64,
     ) -> (Self, Self, Self) {
         let total = dataset.len();
@@ -53,7 +53,7 @@ impl<I> DatasetSplit<I> {
 
         // find split index points from percentages
         let train_end = (total as f32 * train_pct).round() as usize;
-        let eval_end = train_end + (total as f32 * eval_pct).round() as usize;
+        let eval_end = train_end + (total as f32 * valid_pct).round() as usize;
 
         // create DatasetSplit instances based on split indices
         let (train, valid, test) = (

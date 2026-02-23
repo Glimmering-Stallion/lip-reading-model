@@ -6,7 +6,17 @@
 use burn::{
     backend::Autodiff,
     config::Config,
-    module::{Module, ParamId},
+    module::{
+        Module,
+        ParamId,
+        Param,
+        ModuleVisitor,
+        ModuleDisplay,
+        ModuleDisplayDefault,
+        DisplaySettings,
+        Content,
+        AutodiffModule,
+    },
     nn::{
         conv::{
             Conv3d,
@@ -22,16 +32,21 @@ use burn::{
     optim::GradientsParams,
     tensor::{
         activation,
-        backend::Backend,
+        backend::{
+            Backend,
+            AutodiffBackend,
+        },
         Shape,
         Tensor,
     },
+    prelude::TensorData
 };
 
 
 
 #[cfg(test)]
 use std::sync::Once;
+use std::sync::{Arc, atomic::AtomicU64};
 use crate::vsrm::tcn::{TemporalConvNet, TemporalConvNetConfig};
 
 #[cfg(test)]
@@ -39,61 +54,57 @@ static PRINT_ONCE: Once = Once::new();
 
 
 
-#[derive(Config, Debug)]
-pub struct VsrModelConfig {
-    #[config(default = 1)]
-    pub in_channels: usize,
+// -------------------------------- Internal Metadata Tracking For Training Iterations --------------------------------
 
-    // base channel width for frontend CNN layers (the feature extractors)
-    #[config(default = 128)]
-    pub out_channels: usize,
+// since Burn's Module system is strictly designed for Tensors,
+// for sake of tracking an iteration counter without triggering constant GPU-to-CPU syncs,
+// or breaking serialization (Record) system,
+// wrap an AtomicU64 in a dummy module
 
-    // latent dimension for backend TCN layers (the sequence processors)
-    #[config(default = 128)]
-    pub hidden_dim: usize,
+#[derive(Default, Debug)]
+pub struct IterationCounter(pub Arc<AtomicU64>);
 
-    // #[config(default = (50, 150))] // default should be (50, 150)
-    pub frame_dims: (usize, usize), // (height, width)
-    
-    #[config(default = 8)]
-    pub norm_groups: usize,
-    
-    #[config(default = 28)] // 0-25 for alphabet, 26 for space, 27 for blank ID
-    pub vocab_size: usize,
-}
-
-
-
-impl VsrModelConfig {
-    pub fn init<B: Backend>(&self, device: &B::Device) -> VsrModel<B> {
-        VsrModel::new(
-            self.in_channels,
-            self.out_channels,
-            self.hidden_dim,
-            self.frame_dims,
-            self.norm_groups,
-            self.vocab_size,
-            device,
-        )
+/// prevents Burn logger from crashing when printing AtomicU64 iteration value
+impl ModuleDisplay for IterationCounter {}
+impl ModuleDisplayDefault for IterationCounter {
+    fn content(&self, _content: Content) -> Option<Content> {
+        let mut new_content = Content::new(_content.display_settings);
+        new_content.top_level_type = Some("IterationCounter".to_string());
+        Some(new_content)
     }
 }
 
-
-
-// define model architecture
-#[derive(Module, Debug)]
-pub struct VsrModel<B: Backend> {
-    conv1: Conv3d<B>, gn1: GroupNorm<B>,
-    conv2: Conv3d<B>, gn2: GroupNorm<B>,
-    conv3: Conv3d<B>, gn3: GroupNorm<B>,
-
-    tcn1: TemporalConvNet<B>,
-    tcn2: TemporalConvNet<B>,
-
-    fc: Linear<B>,
+/// AtomicU64 can't be cloned, so manual Clone implementation to return fresh counter
+impl Clone for IterationCounter {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
 }
 
+/// satisfy Autodiff requirement so this can live inside a training model
+impl<B: AutodiffBackend> AutodiffModule<B> for IterationCounter {
+    type InnerModule = IterationCounter;
+    fn valid(&self) -> Self::InnerModule { self.clone() }
+}
 
+/// dummy Module implementation for IterationCounter
+impl<B: Backend> Module<B> for IterationCounter {
+    type Record = (); // tells Burn "nothing to save to disk"
+
+    fn collect_devices(&self, devices: Vec<B::Device>) -> Vec<B::Device> { devices } // no tensors, so no new devices to add
+    fn fork(self, _device: &B::Device) -> Self { self } // atomics are CPU-bound, so ignore device forking
+    fn to_device(self, _device: &B::Device) -> Self { self } // stay on CPU
+    fn visit<V: ModuleVisitor<B>>(&self, _visitor: &mut V) {}
+    fn map<M: burn::module::ModuleMapper<B>>(self, _mapper: &mut M) -> Self { self } // nothing to map (no weights/biases)
+    fn load_record(self, _record: Self::Record) -> Self { self }
+    fn into_record(self) -> Self::Record { () } // save nothing to disk
+}
+
+// --------------------------------------------------------------------------------------------------------------------
+
+
+
+// ------------------------------------------ Debugging For Model Gradients -------------------------------------------
 
 /// helper that computes and prints basic distribution statistics for a given tensor
 /// used for identifying vanishing/exploding gradients or activations
@@ -136,8 +147,6 @@ fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(
 ) {
 }
 
-
-
 /// specific helper for logging gradient magnitudes during backpropagation
 /// params:
 /// - label: name of the parameter layer
@@ -172,6 +181,71 @@ fn print_grad_stats<B: Backend>(label: &str, t: &Tensor<B, 1>) {
     );
 }
 
+// --------------------------------------------------------------------------------------------------------------------
+
+
+
+#[derive(Config, Debug)]
+pub struct VsrModelConfig {
+    #[config(default = 1)]
+    pub in_channels: usize,
+
+    // base channel width for frontend CNN layers (the feature extractors)
+    #[config(default = 128)]
+    pub out_channels: usize,
+
+    // latent dimension for backend TCN layers (the sequence processors)
+    #[config(default = 128)]
+    pub hidden_dim: usize,
+
+    // default for now should be (50, 150)
+    pub frame_dims: (usize, usize), // (height, width)
+    
+    #[config(default = 8)]
+    pub norm_groups: usize,
+    
+    #[config(default = 28)] // default assumes 0-25 for alphabet, 26 for space, 27 for blank ID
+    pub vocab_size: usize,
+
+    #[config(default = 27)] // default assumes blank ID is at last position in char vocab
+    pub blank_id: usize,
+}
+
+
+
+impl VsrModelConfig {
+    pub fn init<B: Backend>(&self, device: &B::Device) -> VsrModel<B> {
+        VsrModel::new(
+            self.in_channels,
+            self.out_channels,
+            self.hidden_dim,
+            self.frame_dims,
+            self.norm_groups,
+            self.vocab_size,
+            self.blank_id,
+            device,
+        )
+    }
+}
+
+
+
+// define model architecture
+#[derive(Module, Debug)]
+pub struct VsrModel<B: Backend> {
+    conv1: Conv3d<B>, gn1: GroupNorm<B>,
+    conv2: Conv3d<B>, gn2: GroupNorm<B>,
+    conv3: Conv3d<B>, gn3: GroupNorm<B>,
+
+    tcn1: TemporalConvNet<B>,
+    tcn2: TemporalConvNet<B>,
+
+    fc: Linear<B>,
+
+    #[module(skip)] // treat this field not as a tensor/param
+    pub iterations: IterationCounter,
+}
+
 
 
 impl<B: Backend> VsrModel<B> {
@@ -192,8 +266,11 @@ impl<B: Backend> VsrModel<B> {
         frame_dims: (usize, usize),
         norm_groups: usize,
         vocab_size: usize,
+        blank_id: usize,
         device: &B::Device,
     ) -> Self {
+        let iterations = IterationCounter::default();
+
         // number of Conv3D/GroupNorm layers
         let frontend_layers = 3;
 
@@ -209,9 +286,9 @@ impl<B: Backend> VsrModel<B> {
         let (p_t, p_h, p_w) = (1, 1, 1);
 
         // Conv3D out channel values for each layer
-        let conv1_out = out_channels;       // 128 (default)
-        let conv2_out = out_channels * 2;   // 256 (default)
-        let conv3_out = out_channels / 2;   // 64  (default)
+        let conv1_out = out_channels;
+        let conv2_out = out_channels * 2;
+        let conv3_out = out_channels;
 
         // precompute spatial dim downsample output sizes after each Conv3D layer
         let downsample = |size: usize, stride: usize, kernel: usize, pad: usize| {
@@ -291,13 +368,25 @@ impl<B: Backend> VsrModel<B> {
             .with_dropout_prob(0.5)
             .init(device);
 
-        let fc = LinearConfig::new(hidden_dim, vocab_size)
+        let mut fc = LinearConfig::new(hidden_dim, vocab_size)
             .with_initializer(Initializer::KaimingUniform {
                 gain: 1.0,
                 fan_out_only: false,
             })
             .with_bias(true)
             .init(device);
+
+        // apply negative biasing for blank ID
+        if let Some(bias_param) = &fc.bias {
+            let mut data = bias_param.val().to_data();
+            
+            // force initial blank prob down so other chars can breathe
+            if let Ok(values) = data.as_mut_slice::<f32>() { values[blank_id] = 0.0; }
+            
+            // re-upload to device and update layer
+            let new_bias = Tensor::<B, 1>::from_data(data, device);
+            fc.bias = Some(Param::from_tensor(new_bias));
+        }
 
         // compute total receptive field from:
         // - frontend (3 Conv3D + GroupNorm) layers  RF = 1 + Σ_{i = (0..layers-1)} (k_t - 1) * s_t^i
@@ -320,6 +409,7 @@ impl<B: Backend> VsrModel<B> {
             tcn1,
             tcn2,
             fc,
+            iterations,
         }
     }
 
@@ -487,7 +577,7 @@ impl<B0: Backend> VsrModel<Autodiff<B0>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vocab::VOCAB_SIZE;
+    use crate::vocab::{BLANK_ID, VOCAB_SIZE};
     use burn::{
         backend::ndarray::NdArray,
         tensor::Tensor,
@@ -503,6 +593,8 @@ mod tests {
         // let norm_groups = 5;
 
         let (n, c, t, h, w) = (1, 1, 75, 50, 150); // Real GRID dimensions
+        let vocab_size = VOCAB_SIZE;
+        let blank_id = BLANK_ID;
         let out_channels = 128;
         let norm_groups = 8;
 
@@ -511,7 +603,8 @@ mod tests {
             .with_in_channels(c)
             .with_out_channels(out_channels)
             .with_norm_groups(norm_groups)
-            .with_vocab_size(VOCAB_SIZE)
+            .with_vocab_size(vocab_size)
+            .with_blank_id(blank_id)
             .init(&device);
 
         let input = Tensor::<B, 5>::zeros([n, c, t, h, w], &device);

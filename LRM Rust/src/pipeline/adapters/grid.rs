@@ -96,7 +96,7 @@ impl GridDataset {
         }
         entries.sort(); // sort for deterministic order
         assert!(!entries.is_empty(), "Dataset instance resulted in 0 samples\nCheck if path {:?} contains .mpg files", grid_dir);
-        println!("Initialized GridDataset instance with {} samples from speakers {:?}\n", entries.len(), avail_speakers);
+        println!("\nInitialized GridDataset instance with {} samples from speakers {:?}\n", entries.len(), avail_speakers);
 
         Self {
             root_path: root_path.to_path_buf(),
@@ -181,6 +181,7 @@ mod tests {
         path::PathBuf,
         fs,
     };
+    use rand::{Rng, SeedableRng, rngs::StdRng};
 
     #[test]
     fn test_extract_frames_from_grid_dataset_item() {
@@ -193,10 +194,13 @@ mod tests {
         // GRID dataset instance
         let dataset = GridDataset::new(root_path.clone(), TokenMap::new(VOCAB));
 
+        let seed = 10;
+        let mut rng = StdRng::seed_from_u64(seed);
+
         // obtain first valid GRID dataset item
         let mut item = None;
-        for i in 0..10 {
-            if let Some(entry) = dataset.get(i) {
+        for _ in 0..10 {
+            if let Some(entry) = dataset.get(rng.random_range(0..dataset.len())) {
                 item = Some(entry);
                 break;
             }

@@ -37,51 +37,6 @@ use tar::Archive;
 
 
 
-/// stream plain .txt lines from disk
-pub fn stream_txt_lines<P: AsRef<Path>>(path: P) -> Result<Vec<String>, Box<dyn Error>> {
-    assert!(path.as_ref().exists(), "Text file {} does not exist", path.as_ref().to_string_lossy());
-
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-
-    let mut out = Vec::new();
-    for line in reader.lines().map_while(Result::ok) {
-        let text = line.trim().to_string();
-        if !text.is_empty() {
-            out.push(text);
-        }
-    }
-
-    Ok(out)
-}
-
-
-
-/// stream "text" field from remote JSONL.gz shard (e.g., C4)
-pub fn stream_jsonl_gz(url: String) -> Result<Vec<String>, Box<dyn Error>> {
-    assert!(!url.is_empty(), "URL is empty");
-
-    let client = Client::new();
-    let resp = client.get(&url).send()?.error_for_status()?;
-    let decoder = GzDecoder::new(resp);
-    let reader = BufReader::new(decoder);
-
-    let mut out = Vec::new();
-    for line in reader.lines().map_while(Result::ok) {
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line) {
-            if let Some(text) = val.get("text").and_then(|t| t.as_str()) {
-                if !text.is_empty() {
-                    out.push(text.to_string());
-                }
-            }
-        }
-    }
-
-    Ok(out)
-}
-
-
-
 /// stream all text lines under a corpus line by line while applying sampling and basic preprocessing (takes in a file path as String for ownership)
 pub fn stream_corpus_lines<P: AsRef<Path>>(
     file_path: P,

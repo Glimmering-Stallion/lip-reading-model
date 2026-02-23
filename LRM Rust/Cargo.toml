@@ -10,6 +10,7 @@ burn = { version = "0.20.1", features = [
     "ndarray",
     "autodiff",
 ] }
+log = "0.4"
 image = "0.25.8" # for image processing
 ndarray = "0.17.2"
 num-traits = "0.2.19"

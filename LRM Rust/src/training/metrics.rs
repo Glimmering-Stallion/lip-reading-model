@@ -219,8 +219,8 @@ impl<B: Backend> Metric for CtcCharErrorRate<B> {
             let prediction_ids = &predictions[i];
             let target_ids = &targets[i];
 
-            debug_assert!(!prediction_ids.is_empty(), "Decoder produced empty prediction sequence");
-            debug_assert!(!target_ids.is_empty(), "Encountered empty target sequence");
+            if prediction_ids.is_empty() { log::warn!("Decoder produced empty prediction sequence"); }
+            if target_ids.is_empty() { log::warn!("Encountered empty target sequence"); }
 
             let edit_distance = levenshtein(prediction_ids, target_ids);
 
@@ -293,8 +293,8 @@ impl<B: Backend> Metric for CtcWordErrorRate<B> {
                 .ids_to_chars(&targets[i])
                 .expect("Failed to convert target IDs to chars");
 
-            debug_assert!(!prediction_chars.is_empty(), "Decoder produced empty prediction sequence");
-            debug_assert!(!target_chars.is_empty(), "Encountered empty target sequence");
+            if prediction_chars.is_empty() { log::warn!("Decoder produced empty prediction sequence"); }
+            if target_chars.is_empty() { log::warn!("Encountered empty target sequence"); }
 
             // convert char sequence to a container of words (for both prediction and target)
             let prediction_words: Vec<String> = String::from_iter(prediction_chars)

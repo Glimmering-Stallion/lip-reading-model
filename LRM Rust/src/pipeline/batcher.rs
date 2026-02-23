@@ -23,6 +23,7 @@ pub type CpuB = NdArray<f32>; // CPU backend for data staging area
 
 
 
+// standardized container for a batch of VSRM data samples (after collation and padding)
 #[derive(Clone, Debug)]
 pub struct Batch<B: Backend> {
     pub inputs: Tensor<B, 5>,               // [N, C, T_max, H, W]  padded frames
@@ -114,10 +115,14 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
             let frames: Tensor<CpuB, 4> = Tensor::from_data(item.frames, &Default::default()); // [C, T, H, W] frames of the video
 
             // preprocess frames
-            let frames = frames.div_scalar(255.0); // scale pixel values to [0, 1] range
-            let (var, mean) = frames.clone().reshape([1, c * t * h * w]).var_mean_bias(1); // calc mean and var with var_mean_bias on reshaped frames to get single mean and var across all pixels in video; reshape back to [C, T, H, W] for broadcasting
-            let st_dev = var.sqrt().add_scalar(1e-7); // calc st dev from var, add small epsilon for numerical stability
-            let frames = frames.sub(mean.reshape([c, 1, 1, 1])).div(st_dev.reshape([c, 1, 1, 1])); // standardize frames (by centering to zero mean and scaling to unit variance)
+            // 1. scale pixel values to [0, 1] range
+            // 2. calc mean and var with var_mean_bias on reshaped frames to get single mean and var across all pixels in video; reshape back to [C, T, H, W] for broadcasting
+            // 3. calc st dev from var, add small epsilon for numerical stability
+            // 4. standardize frames (by centering to zero mean and scaling to unit variance)
+            let frames = frames.div_scalar(255.0);
+            let (var, mean) = frames.clone().reshape([1, c * t * h * w]).var_mean_bias(1);
+            let st_dev = var.sqrt().add_scalar(1e-7);
+            let frames = frames.sub(mean.reshape([c, 1, 1, 1])).div(st_dev.reshape([c, 1, 1, 1]));
 
             // if curr item's num frames are shorter than max timesteps, pad it
             let padded_frames = if t < max_t {

@@ -200,6 +200,10 @@ impl CtcDecoder {
 
     /// beam search decode for single sample
     /// decoding obtained via: logits --> log softmax --> prefix beam search
+    /// works by:
+    /// - iteratively building prefix sequences of symbol IDs per timestep
+    /// - tracking their log-probabilities of ending in blank/non-blank (from VSRM and optional LM)
+    /// - pruning to top K most probable prefixes and vocab candidates for keeping search tractable
     /// params:
     /// - log_probs: log-probabilities for each vocab symbol per-timestep given by model [T, Vocab]
     /// returns: sequence of predicted symbol IDs (collapsed path) [L]

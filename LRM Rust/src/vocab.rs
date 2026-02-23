@@ -9,8 +9,8 @@ use std::{
 
 
 
-pub const VOCAB: &str = "abcdefghijklmnopqrstuvwxyz'?!0123456789 _"; // complex char set
-// pub const VOCAB: &str = "abcdefghijklmnopqrstuvwxyz _"; // simple char set
+// pub const VOCAB: &str = "abcdefghijklmnopqrstuvwxyz'?!0123456789 _"; // complex char set
+pub const VOCAB: &str = "abcdefghijklmnopqrstuvwxyz _"; // simple char set
 pub const VOCAB_SIZE: usize = VOCAB.len();
 pub const BLANK_ID: usize = VOCAB_SIZE - 1;
 

@@ -80,8 +80,11 @@ impl CtcLoss {
     }
 
     /// like `forward`, but without reduction
-    /// since inputs/targets are padded to max length found in batch,
-    /// needs separate input/target lengths info for true lengths
+    /// since inputs/targets are padded to max length found in batch, needs separate input/target lengths info for true lengths
+    /// works by:
+    /// - computing log-probs from logits via log softmax
+    /// - modifying target sequences by interleaving blanks between symbols
+    /// - iteratively computing accummulated log-probabilities of all possible paths through time-sequence grid that align with the modified target sequence
     /// params:
     /// - inputs: [N, T_max, Vocab] (time-padded logits from model)
     /// - targets: [N, L_max] (length-padded target sequences)
@@ -106,7 +109,7 @@ impl CtcLoss {
         assert_eq!(target_lengths.dims()[0], targets.shape()[0], "Targets/lengths batch size mismatch");
 
         // original and blank-interleaved lengths of target sequence (padded length)
-        let orig_pad_targ_length: usize = targets.dims()[1];                         // L_max
+        let orig_pad_targ_length: usize = targets.dims()[1];             // L_max
         let intr_pad_targ_length = 2 * orig_pad_targ_length + 1;  // 2L_max + 1
 
         // get batch-wise interleaved target lengths for masking (true lengths)

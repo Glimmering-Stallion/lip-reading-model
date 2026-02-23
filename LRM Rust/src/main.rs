@@ -1,26 +1,35 @@
-// create new Rust project with cargo (separate dir name from package name):              cargo new "[dir name]" --name [package_name]
-// create new Rust project with cargo (but without auto creating new Git repo):           cargo new [dir name] --vcs none
+// create new Rust project with cargo (separate dir name from package name):             cargo new "[dir name]" --name [package_name]
+// create new Rust project with cargo (but without auto creating new Git repo):          cargo new [dir name] --vcs none
 
 // for big projects:
 
-// compile project with cargo:                                                            cargo build
-// compile project with cargo with optimizations:                                         cargo build --release
-// compile and run project with cargo:                                                    cargo run
+// compile project with cargo:                                                           cargo build
+// compile project with cargo with optimizations:                                        cargo build --release
+// compile and run project with cargo:                                                   cargo run
+// compile and run all tests (while allowing prints):                                    cargo test --nocapture
+// compile and run specific unit test(while allowing prints):                            cargo test -- [test name] --nocapture
 
 // for small experiments:
 
-// compile single Rust file manually with rustc:                                          rustc [file name]
-// run compiled binary (in same folder):                                                  .\[file name]
+// compile single Rust file manually with rustc:                                         rustc [file name]
+// run compiled binary (in same folder):                                                 .\[file name]
 
 // for crate imports:
 
 // import crate with cargo:                                                              cargo add [crate name]
 
+// for this project:
+
+// build LM:                                                                             cargo run -- build-lm --corpus data/librispeech-lm-norm
+// train VSRM:                                                                           cargo run -- train-vsrm --epochs [num epochs]
 
 
 // imports
 use burn::{
-    optim::AdamConfig,
+    optim::{
+        AdamConfig,
+        optim::decay::WeightDecayConfig,
+    },
     backend::{
         {Autodiff, Wgpu},
         wgpu::WgpuDevice::DefaultDevice,
@@ -59,9 +68,8 @@ struct Args {
     #[arg(long)]
     url: Option<String>,
 
-    /// path to output model file
+    /// path to output LM file
     #[arg(long, default_value = "ngram_lm.bin")]
-    
     output: String,
 
     /// N-gram size
@@ -162,18 +170,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         .take(10000);
 
     let perplexity = lm.perplexity(Box::new(eval_sequences));
-    println!("N-gram LM perplexity on eval set: {:.3}\n", perplexity);
+    println!("N-gram LM perplexity on eval set: {:.3}", perplexity);
     assert!(perplexity.is_finite(), "LM perplexity ({}) is non-finite", perplexity);
 
     // ------------------------------------------- VSRM training --------------------------------------------
 
     // define hyperparameters
+    let vocab_size = VOCAB_SIZE;
+    let blank_id = BLANK_ID;
     let frame_dims = (50, 150); // height, width
-    let num_epochs = 1;
-    let batch_size = 1;
-    let learning_rate = 1e-3;
+    let num_epochs = 30;
+    let batch_size = 8;
+    let learning_rate = 1e-4;
     let num_workers = 4;
-    let accumulation = 4;
+    let accumulation = 1;
     let seed = 42;
     let device = DefaultDevice;
     let root_path = rust_root;
@@ -184,10 +194,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     let optimizer_config = AdamConfig::new()
         .with_beta_1(0.9)
         .with_beta_2(0.999)
-        .with_epsilon(1e-8);
+        .with_epsilon(1e-8)
+        .with_weight_decay(Some(WeightDecayConfig::new(1e-4)));
 
     let model_config = VsrModelConfig::new(frame_dims)
-        .with_vocab_size(VOCAB_SIZE);
+        .with_vocab_size(vocab_size)
+        .with_blank_id(blank_id);
 
     let learner_config = VsrmLearnerConfig {
         num_epochs,
