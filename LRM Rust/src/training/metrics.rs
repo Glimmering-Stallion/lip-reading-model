@@ -1,4 +1,9 @@
-// Custom CTC-compatible CER/WER Burn-adapted metric implementations
+//! Custom CTC-compatible Burn-adapted CER/WER evaluation metrics for VSRM.
+//! 
+//! Provides implementations for Character Error Rate (CER) and Word Error Rate (WER)
+//! adapted to the Burn training dashboard. These metrics use Levenshtein distance to
+//! compare decoded model predictions against ground-truth targets aross normalized
+//! sequences.
 
 
 

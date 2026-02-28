@@ -1,26 +1,17 @@
-// I/O handler for high-level fs and networking tasks (data loading, streaming, extracting, etc.)
+//! I/O utilities for high-level filesystem operations and extraction tasks.
+//! 
+//! This module provides high-level handlers for downloading external corpora (SLR),
+//! decompressing common archive formats (Zip/Gzip), and streaming processed text 
+//! data with integrated progress tracking and sampling.
 
 
 
-use crate::prelude::*;
 use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
-use opencv::{
-    self,
-    core::{Mat, AlgorithmHint, Rect},
-    imgproc,
-    prelude::*,
-    videoio::{
-        VideoCapture,
-        VideoCaptureTrait,
-        CAP_ANY,
-    },
-};
 use rand::Rng;
 use reqwest::blocking::Client;
 // use serde_json::Value;
 use std::{
-    error::Error,
     fs::{self, File},
     io::{self, BufRead, BufReader},
     path::Path,
@@ -151,63 +142,6 @@ pub fn extract_gzip<P: AsRef<Path>, Q: AsRef<Path>>(gzip_path: P, extract_to: Q)
 
 
 
-/// extract GRID corpus externally to a given path
-/// (deprecated in favor of manual download due to Google Drive download complexities)
-pub fn extract_grid_corpus<P: AsRef<Path>>(root_path: P) {
-    let root_path = root_path.as_ref();
-    let data_dir = root_path.join("data");
-    let grid_dir = data_dir.join("grid-lr-corpus");
-    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
-
-    // check if the GRID corpus exists at the given path
-    if !grid_dir.exists() {
-        println!("Grid corpus not found, downloading...");
-
-        // use client with NO timeout for large files
-        let client = Client::builder()
-            .timeout(None)
-            .build()
-            .expect("Failed to create HTTP client");
-
-        let url = "https://drive.google.com/uc?id=1YlvpDLix3S-U8fd-gqRwPcWXAXm8JwjL&confirm=t&export=download";
-        let output = root_path.join("data.zip");
-
-        // download file from URL
-        match client.get(url).send() {
-            Ok(mut response) => {
-                if response.status().is_success() {
-                    let mut file = File::create(&output).expect("Failed to create file.");
-                    response
-                        .copy_to(&mut file)
-                        .expect("Failed to write to file.");
-                    println!(
-                        "File downloaded successfully to {}",
-                        grid_dir.to_string_lossy()
-                    );
-
-                    // extract zip file
-                    extract_zip(&output, &root_path);
-
-                    // rename extracted subdir to grid-lr-corpus
-                    let nested_dir = data_dir.join("data");
-                    if nested_dir.exists() {
-                        fs::rename(&nested_dir, &grid_dir)
-                            .expect("Failed to rename extracted directory.");
-                    }
-
-                    // clean up zip file
-                    fs::remove_file(&output).expect("Failed to delete zip file.");
-                } else {
-                    eprintln!("Failed to download GRID corpus: {}", response.status());
-                }
-            }
-            Err(e) => { eprintln!("Error parsing URL: {}", e); }
-        }
-    } else { println!("GRID corpus already exists, downloading skipped"); }
-}
-
-
-
 /// extract SLR corpus externally to a given path
 pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
     let root_path = root_path.as_ref();
@@ -255,125 +189,4 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
             Err(e) => { eprintln!("Error parsing URL: {}", e); }
         }
     } else { println!("SLR corpus already exists, downloading skipped"); }
-}
-
-
-
-/// takes in a frames path and outputs a list of floats
-pub fn load_grid_frames<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, Box<dyn Error>> {
-    let path = path.as_ref().to_str().ok_or("Non-UTF8 path")?;
-
-    match VideoCapture::from_file(path, CAP_ANY) {
-        Ok(mut cap) => {
-            let mut frames: Vec<u8> = Vec::with_capacity(75 * 150 * 50);
-            let mut frame = Mat::default();
-            let mut gray_frame = Mat::default();
-
-            while cap.read(&mut frame).expect("Error reading frame") {
-                let size = frame.size().expect("Failed to get frame size");
-                if size.width == 0 || size.height == 0 { break; } // end of frames
-
-                // convert frame to grayscale
-                imgproc::cvt_color(
-                    &frame,
-                    &mut gray_frame,
-                    imgproc::COLOR_BGR2GRAY,
-                    0,
-                    AlgorithmHint::ALGO_HINT_DEFAULT,
-                )
-                .expect("Failed to convert frame to grayscale");
-
-                // crop frame to where mouth is (in future this will be replaced by dynamic tracking)
-                let roi = Rect::new(80, 190, 150, 50);
-                let temp = Mat::roi(&gray_frame, roi).expect("Failed to crop frame");
-                let mut mouth_frame = Mat::default();
-                temp.copy_to(&mut mouth_frame)
-                    .expect("Failed to copy ROI to a continuous Mat");
-
-                // store frames as bytes (u8) to save memory
-                // will be converted to f32 and standardized later in the pipeline
-                frames.extend(mouth_frame.data_bytes()?);
-            }
-
-            assert!(!frames.is_empty(), "No frames read from video");
-            Ok(frames)
-        }
-        Err(e) => {
-            eprintln!("Error opening video file: {}", e);
-            Err(Box::new(e))
-        }
-    }
-}
-
-
-
-/// takes in an alignments path (as well as TokenMap struct) and outputs a list of char IDs (as indices)
-pub fn load_grid_alignments<P: AsRef<Path>>(
-    path: P,
-    token_map: &TokenMap,
-) -> Result<Vec<usize>, Box<dyn Error>> {
-    let path = path.as_ref();
-
-    match File::open(path) {
-        Ok(file) => {
-            let mut tokens: Vec<String> = vec![];
-            let lines = BufReader::new(file).lines();
-
-            for line in lines.map_while(Result::ok) {
-                let line_group = line.split_whitespace().collect::<Vec<_>>();
-                assert!(line_group.len() >= 3, "Malformed alignment line: {:?}", line_group);
-                if line_group[2] != "sil" { tokens.push(line_group[2].to_string()); }
-            }
-            assert!(!tokens.is_empty(), "No non-silence tokens found in alignment file");
-
-            Ok(tokens
-                .iter()
-                .flat_map(|token| token.chars())
-                .filter_map(|ch| token_map.id_of(ch))
-                .collect())
-        }
-        Err(e) => {
-            eprintln!("Error opening alignments file: {}", e);
-            Err(Box::new(e))
-        }
-    }
-}
-
-
-
-/// function to load GRID data (takes in a data path and outputs frames and alignments)
-pub fn load_grid_corpus<P: AsRef<Path>>(
-    root_path: P,
-    entry_name: &str,
-    token_map: &TokenMap,
-) -> Result<(Vec<u8>, Vec<usize>), Box<dyn Error>> {
-    let root_path = root_path.as_ref();
-    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
-
-     // entry_name in the form of "s1/bbaf2n"
-    if entry_name.trim().is_empty() {
-        eprintln!("Error: Provided entry_name is empty.");
-        return Err("Failed to extract filename: entry_name was empty.".into());
-    }
-
-    // join project root with LR data path for an absolute path
-    let grid_dataset_path = root_path.join("data/grid-lr-corpus");
-
-    let frames_path = grid_dataset_path
-        .join("frames")
-        .join(entry_name)
-        .with_extension("mpg");
-    assert!(frames_path.exists(), "Video file not found: {}", frames_path.to_string_lossy());
-
-    let alignments_path = grid_dataset_path
-        .join("alignments")
-        .join(entry_name)
-        .with_extension("align");
-    assert!(alignments_path.exists(), "Alignment file not found: {}", alignments_path.to_string_lossy());
-
-    let frames = load_grid_frames(&frames_path)?;
-    let alignments = load_grid_alignments(&alignments_path, token_map)?;
-    assert!(!frames.is_empty() && !alignments.is_empty(), "Loaded empty GRID sample");
-
-    Ok((frames, alignments))
 }

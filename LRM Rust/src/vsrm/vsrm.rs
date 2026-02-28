@@ -1,4 +1,9 @@
-// Lip Reading Model architecture implementation
+//! Visual Speech Recognition Model (VSRM) architecture.
+//! 
+//! This module implements the core neural network, which consists of:
+//! - 3D CNN Frontend: Spatio-temporal convolutional layers for feature extraction.
+//! - TCN Backend: Stacked temporal convolutional blocks for sequence modeling.
+//! - Iteration Counter: Custom Atomic iteration tracker for training progress.
 
 
 
@@ -13,7 +18,6 @@ use burn::{
         ModuleVisitor,
         ModuleDisplay,
         ModuleDisplayDefault,
-        DisplaySettings,
         Content,
         AutodiffModule,
     },
@@ -286,9 +290,9 @@ impl<B: Backend> VsrModel<B> {
         let (p_t, p_h, p_w) = (1, 1, 1);
 
         // Conv3D out channel values for each layer
-        let conv1_out = out_channels;
-        let conv2_out = out_channels * 2;
-        let conv3_out = out_channels;
+        let conv1_out = out_channels;       // 128 (default)
+        let conv2_out = out_channels * 2;   // 256 (default)
+        let conv3_out = out_channels / 2;   // 64  (default)
 
         // precompute spatial dim downsample output sizes after each Conv3D layer
         let downsample = |size: usize, stride: usize, kernel: usize, pad: usize| {

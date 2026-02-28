@@ -1,6 +1,8 @@
-// Connectionist Temporal Classification (CTC) loss implementation
-
-// CTC is used for sequence-to-sequence tasks where input and output alignments is unknown
+//! Connectionist Temporal Classification (CTC) loss implementation.
+//! 
+//! This module implements the forward algorithm for CTC loss, which helps to train
+//! sequence-to-sequence (Seq2Seq) models where the alignment between input frames
+//! and target sequences is unknown.
 
 
 
@@ -66,10 +68,10 @@ impl CtcLoss {
     /// returns: scalar loss (if reduction is mean or sum)
     pub fn forward<B: Backend>(
         &self,
-        inputs: Tensor<B, 3>,       // [N, T_max, Vocab] (logits from model)
-        targets: Tensor<B, 2, Int>, // [N, L_max] (target sequences)
-        input_lengths: Tensor<B, 1, Int>, // [N]
-        target_lengths: Tensor<B, 1, Int>, // [N]
+        inputs: Tensor<B, 3>,
+        targets: Tensor<B, 2, Int>,
+        input_lengths: Tensor<B, 1, Int>,
+        target_lengths: Tensor<B, 1, Int>,
     ) -> Tensor<B, 1> {
         let tensor = self.forward_no_reduction(inputs, targets, input_lengths, target_lengths);
         match &self.reduction.0 {
@@ -280,7 +282,12 @@ impl CtcLoss {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use burn::{backend::ndarray::NdArray, nn::loss::Reduction, prelude::Int, tensor::Tensor};
+    use burn::{
+        backend::ndarray::NdArray,
+        nn::loss::Reduction,
+        prelude::Int,
+        tensor::Tensor,
+    };
 
     type B = NdArray<f32>;
 
@@ -302,7 +309,7 @@ mod tests {
     #[test]
     fn debug_roll_dim_shift_directionality() {
         let device = Default::default();
-        
+
         // dummy 1D-like tensor: [[0, 1, 2, 3, 4]]
         let data = Tensor::<B, 2>::from_floats([[0.0, 1.0, 2.0, 3.0, 4.0]], &device);
         println!("\nOriginal: {:?}\n", data.to_data().convert::<f32>().into_vec::<f32>().unwrap());

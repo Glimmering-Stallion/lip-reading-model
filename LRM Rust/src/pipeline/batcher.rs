@@ -1,4 +1,9 @@
-// Source-agnostic data handler pipeline for VSRM data ingestion (dataset item, batching strategies, and tensor collation)
+//! Source-agnostic data collation and tensor batching.
+//! 
+//! This module implements the ```VsrmBatcher```, which standardizes varied dataset samples
+//! into GPU-ready tensors. It handles dynamic temporal padding for video frames and
+//! sequence padding for transcripts. This padding allows rectangular-ization of tensors for
+//! compatibility with CTC-loss calculations.
 
 
 

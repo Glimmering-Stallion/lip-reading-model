@@ -1,55 +1,58 @@
-// VSRM dedicated training pipeline and orchestrator using Burn (handles auto-checkpointing, logging, and validation sets)
+//! VSRM dedicated training orchestrator and lifecycle management.
+//! 
+//! This module defines the training and inference steps for the Burn framework, which
+//! provides auto-checkpointing and logging. It manages the model's forward pass,
+//! CTC-loss calculation, and gradient backpropagation. The module serves as the bridge
+//! between the dataset loaders, the VSRM architecture, and the training loop.
 
 
 
 // custom imports
 use crate::{
-    vocab::{VOCAB, VOCAB_SIZE, BLANK_ID, TokenMap},
-    pipeline::{
-        batcher::{
-            Batch,
-            VsrmBatcher,
-        },
-        dataset::{
-            DatasetSplit,
-            DatasetSource,
-        },
-        adapters::grid::GridDataset,
-    },
-    training::{
-        metrics::{
-            CtcCharErrorRate,
-            CtcWordErrorRate,
-            VsrmStepOutput,
-        },
-    },
-    vsrm::{
-        VsrModel,
-        VsrModelConfig,
-    },
-    ctc::{
-        ctc_loss::CtcLossConfig,
+    context::Context, ctc::{
         ctc_decode::{
             CtcDecodeType,
             CtcDecoderConfig,
-        },
-        lm::{
+        }, ctc_loss::CtcLossConfig, lm::{
             LanguageModelConfig,
             NgramConfig,
-        },
-    },
+        }
+    }, pipeline::{
+        adapters::grid::GridDataset, batcher::{
+            Batch,
+            VsrmBatcher,
+        }, dataset::{
+            DatasetSource, DatasetSplit
+        }
+    }, training::metrics::{
+            CtcCharErrorRate,
+            CtcWordErrorRate,
+            VsrmStepOutput,
+        }, vocab::{BLANK_ID, TokenMap, VOCAB, VOCAB_SIZE}, vsrm::{
+        VsrModel,
+        VsrModelConfig,
+    }
 };
 
 // imports
 use burn::{
     config::Config,
-    data::{dataloader::{DataLoader, DataLoaderBuilder}, dataset::Dataset},
-    lr_scheduler::{composed::ComposedLrSchedulerConfig, cosine::CosineAnnealingLrSchedulerConfig, linear::LinearLrSchedulerConfig, noam::NoamLrSchedulerConfig},
+    data::{
+        dataloader::{DataLoader, DataLoaderBuilder},
+        dataset::Dataset,
+    },
+    lr_scheduler::{
+        composed::ComposedLrSchedulerConfig,
+        cosine::CosineAnnealingLrSchedulerConfig,
+        linear::LinearLrSchedulerConfig,
+    },
     module::Module,
     optim::AdamConfig,
     record::CompactRecorder,
     tensor::{
-        ElementConversion, activation::log_softmax, backend::{
+        ElementConversion,
+        activation::log_softmax,
+        backend::{
             AutodiffBackend,
             Backend,
         }
@@ -67,10 +70,7 @@ use burn::{
     },
 };
 use std::{
-    sync::{
-        Arc,
-        atomic::Ordering,
-    },
+    sync::Arc,
     path::Path,
     fs,
     io::{self, Write},
@@ -246,26 +246,20 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
 
 
 
-pub fn train<B, PR, PO>(
+pub fn train<B>(
     device: B::Device,
+    context: &Context,
     dataset_src: DatasetSource,
     model_config: VsrModelConfig,
     learner_config: VsrmLearnerConfig ,
     token_map: TokenMap,
-    root_path: PR,
-    output_path: PO,
 )
 where
     B: AutodiffBackend,
-    PR: AsRef<Path>,
-    PO: AsRef<Path>,
     VsrmStepOutput<B>: Adaptor<LossInput<B>>,
     VsrmStepOutput<B::InnerBackend>: Adaptor<LossInput<B::InnerBackend>>,
 {
-    let root_path = root_path.as_ref();
-    let output_path = output_path.as_ref();
-    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
-    assert!(output_path.exists(), "Output path {:?} does not exist", output_path);
+    let output_path = context.models_path.clone();
 
     // create model experiment/artifacts directory
     let model_dir = format!("vsrm_{}", dataset_src.tag());
@@ -286,10 +280,10 @@ where
     // obtain train/validation data loader instances
     let (train_dataloader, valid_dataloader) = create_dataloaders(
         &device,
+        context,
         dataset_src,
         &learner_config,
         token_map.clone(),
-        &root_path,
     );
 
     // ------------------------ Training learner, LR scheduling, and optimizer setup ------------------------
@@ -329,9 +323,7 @@ where
 
     // -------------------------------------- CTC decoder and LM setup --------------------------------------
 
-    let ngram_lm_path = Path::new(&root_path)
-        .join("models")
-        .join("ngram_lm.bin");
+    let ngram_lm_path = context.models_path.join("ngram_lm.bin");
     assert!(ngram_lm_path.exists(), "N-gram LM at {:?} does not exist", ngram_lm_path);
 
     // N-gram LM instance
@@ -393,23 +385,19 @@ where
 
 
 
-fn create_dataloaders<B, P>(
+fn create_dataloaders<B>(
     device: &B::Device,
+    context: &Context,
     dataset_src: DatasetSource,
     learner_config: &VsrmLearnerConfig ,
     token_map: TokenMap,
-    root_path: &P,
 ) -> (
     TrainLoader<B>,
     ValidLoader<B>,
 )
 where
     B: AutodiffBackend,
-    P: AsRef<Path>,
 {
-    let root_path = root_path.as_ref();
-    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
-
     // (train/validation boundary, validation/test boundary)
     // total data:                  |---------------------------train---------------------------|-valid-|--test--|
     // train/eval split point:      |----------------------------80%--------------------------->|<---------------|
@@ -419,7 +407,7 @@ where
     match dataset_src {
         DatasetSource::Grid => {
             // dataset instance
-            let dataset = Arc::new(GridDataset::new(root_path, token_map));
+            let dataset = Arc::new(GridDataset::new(context, token_map, None));
 
             // train/validation dataset instances
             let (train_dataset, valid_dataset, _) = DatasetSplit::split(
@@ -461,7 +449,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::pipeline::dataset;
+    use crate::{context::Context, pipeline::dataset};
 
     use super::*;
     use burn::{
@@ -483,7 +471,6 @@ mod tests {
             Optimizer,
         },
     };
-    use std::path::PathBuf;
     use rand::{Rng, SeedableRng, rngs::StdRng};
 
     type TestBackend = Autodiff<Wgpu<f32, i32>>;
@@ -632,7 +619,6 @@ mod tests {
     fn test_overfit_real_sample() {
         // test if a randomly initialized model can overfit a sample of real data (loss should drop significantly after 100 training steps)
 
-        let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let vocab = VOCAB;
         let vocab_size = VOCAB_SIZE;
         let blank_id = BLANK_ID;
@@ -650,7 +636,7 @@ mod tests {
         let frame_dims = (50, 150);
 
         // grab single real sample from our actual dataset (GRID)
-        let dataset = GridDataset::new(root_path, token_map.clone());
+        let dataset = GridDataset::new(&Context::new(), token_map.clone(), None);
         let dataset_item = dataset
             .get(rng.random_range(0..dataset.len()))
             .expect("Failed to get first item from dataset");
@@ -751,7 +737,6 @@ mod tests {
     fn test_overfit_real_batch() {
         // test if a randomly initialized model can overfit a batch of real data
 
-        let root_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let vocab = VOCAB;
         let vocab_size = VOCAB_SIZE;
         let blank_id = BLANK_ID;
@@ -770,7 +755,7 @@ mod tests {
         let frame_dims = (50, 150);
 
         // grab 16 real samples from our actual dataset (GRID again)
-        let dataset = GridDataset::new(root_path, token_map.clone());
+        let dataset = GridDataset::new(&Context::new(), token_map.clone(), None);
         let mut items = Vec::with_capacity(n);
         for _ in 0..n { items.push(dataset.get(rng.random_range(0..dataset.len())).unwrap()); }
         let batch = VsrmBatcher::<TestBackend>::new(device.clone())

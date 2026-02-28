@@ -1,4 +1,15 @@
-// Connectionist Temporal Classification (CTC) decoder implementation
+//! Connectionist Temporal Classification (CTC) decoder implementation.
+//! 
+//! This module implements methods to transform raw model logits into
+//! final discrete token sequences. It supports two decoding search strategies:
+//! - Greedy Search: A fast, best-path decoder that selects the most probable
+//! token at each timestep and collapses the resulting path.
+//! - Prefix Beam Search: A more complex, strategy that builds upon multiple
+//! best prefix sequence candidate paths(hypotheses) and selects the highest
+//! scoring final sequence path.
+//! 
+//! For Prefix Beam Search, there is support for shallow fusion with an external
+//! ```LanguageModel``` to rescore hypothesis paths during the search process.
 
 // if using prefix beam search as the decoder, expect O(DWB * log(WB)) complexity
 // where D = depth (timesteps), W = beam width (# of kept hypotheses), B = branch factor (vocab size)
@@ -434,7 +445,11 @@ mod tests {
     };
     use burn::{
         backend::ndarray::NdArray,
-        tensor::{backend::Backend, Distribution, Tensor},
+        tensor::{
+            backend::Backend,
+            Distribution,
+            Tensor,
+        },
     };
 
     type B = NdArray<f32>;
@@ -901,8 +916,7 @@ mod tests {
         ]];
         let logits = Tensor::<B, 3>::from_data(logits, &device);
 
-        let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-        let ngram_lm_path = Path::new(&rust_root)
+        let ngram_lm_path = Path::new(&Context::new().rust_root)
             .join("models")
             .join("ngram_lm.bin");
 
@@ -961,8 +975,7 @@ mod tests {
         ]];
         let logits = Tensor::<B, 3>::from_data(logits, &device);
 
-        let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-        let ngram_lm_path = Path::new(&rust_root)
+        let ngram_lm_path = Path::new(&Context::new().rust_root)
             .join("models")
             .join("ngram_lm.bin");
 

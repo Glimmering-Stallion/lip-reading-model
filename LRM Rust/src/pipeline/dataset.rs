@@ -1,4 +1,8 @@
-// Dataset source abstraction/management for VSRM data ingestion
+//! Dataset source abstractions and partitioning logic.
+//! 
+//! This module provides the ```DatasetSplit``` utility to create deterministic training,
+//! validation, and testing sets from a base dataset, as well as the ```DatasetSource```
+//! enum to manage various data origins (e.g., GRID, LRW, etc.)
 
 
 

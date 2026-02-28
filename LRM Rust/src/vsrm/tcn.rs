@@ -1,4 +1,11 @@
-// Temporal Convolutional Network (TCN) implementation in Rust using Burn framework
+//! Temporal Convolutional Network (TCN) implementation.
+//! 
+//! This module provides causal, dilated 1D convolutions that provides the
+//! temporal receptive field for the VSRM.
+//! Features of the TCN include:
+//! - Causality: Padding logic makes sure the output at present timestep only depends on inputs from previous timesteps.
+//! - Exponential Dilation: Increases lookback range that doubles with each layer.
+//! - Residual Blocks: The dual-stack dilated causal convolution layers that enable the large receptive field.
 
 
 

@@ -77,7 +77,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Deployment simplicity
 - Built modular TCN blocks featuring:
   - Dilated causal convolutions
-  - Residual connections
+  - Residual blocks
   - Dropout and non-linear activations
 - Added a projection head mapping features to per-time-step character logits.
 
@@ -172,7 +172,7 @@ Lip Reading Model
 │  │  ├─ general_utils.py
 │  │  ├─ lipread.py
 │  │  ├─ model_utils.py
-│  │  └─ test_video.mp4
+│  │  └─ test_video.mpg
 │  ├─ lipread.ipynb
 │  ├─ main.py
 │  └─ requirements.txt
@@ -196,6 +196,7 @@ Lip Reading Model
 │  ├─ rust-toolchain.toml
 │  ├─ rustfmt.toml
 │  ├─ src
+│  │  ├─ context.rs
 │  │  ├─ ctc
 │  │  │  ├─ ctc_decode.rs
 │  │  │  ├─ ctc_loss.rs
@@ -207,13 +208,14 @@ Lip Reading Model
 │  │  ├─ lib.rs
 │  │  ├─ main.rs
 │  │  ├─ pipeline
+│  │  │  ├─ adapters
+│  │  │  │  ├─ grid.rs
+│  │  │  │  └─ mod.rs
 │  │  │  ├─ batcher.rs
 │  │  │  ├─ dataset.rs
 │  │  │  ├─ io.rs
 │  │  │  ├─ mod.rs
-│  │  │  └─ adapters
-│  │  │     ├─ grid.rs
-│  │  │     └─ mod.rs
+│  │  │  └─ tracker.rs
 │  │  ├─ training
 │  │  │  ├─ learner.rs
 │  │  │  ├─ metrics.rs
@@ -225,12 +227,8 @@ Lip Reading Model
 │  │     ├─ mod.rs
 │  │     ├─ tcn.rs
 │  │     └─ vsrm.rs
-│  └─ target
-│     ├─ .rustc_info.json
-│     ├─ debug
-│     └─ flycheck0
-│        ├─ stderr
-│        └─ stdout
+│  ├─ target
+│  └─ tests
 ├─ NOTES.md
 ├─ README.md
 └─ papers

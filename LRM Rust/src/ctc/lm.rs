@@ -1,7 +1,8 @@
-// Language Model (LM) for CTC decoding with beam search
-
-// implement N-gram LM with backoff (e.g. Kneser-Ney smoothing)
-// allow a configurable n
+//! Language Model (LM) abstractions and N-gram implementations for CTC beam search decoding。
+//! 
+//! This module provides the infrastructure for incorporating linquistic priors into CTC
+//! decoding. It defines the ```LanguageModel``` trait to allow for interchangeable scoring
+//! backends (e.g., N-grams, or future Neural LMs) during prefix beam search.
 
 
 
@@ -253,12 +254,14 @@ impl Ngram {
 // tests
 #[cfg(test)]
 mod tests {
-    use std::{env, path::Path};
-
-    use crate::vocab::{
-        TokenMap,
-        VOCAB,
-        VOCAB_SIZE,
+    use std::path::Path;
+    use crate::{
+        context::Context,
+        vocab::{
+            TokenMap,
+            VOCAB,
+            VOCAB_SIZE,
+        },
     };
     use super::*;
 
@@ -311,8 +314,7 @@ mod tests {
 
     #[test]
     fn test_ngram_lm_load_and_score_saved_model() {
-        let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-        let ngram_lm_path = Path::new(&rust_root)
+        let ngram_lm_path = Path::new(&Context::new().rust_root)
             .join("models")
             .join("ngram_lm.bin");
 

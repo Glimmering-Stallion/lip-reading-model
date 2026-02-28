@@ -83,21 +83,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // ------------------------------------------- Initial setup --------------------------------------------
     
+    // obtain terminal arg values, filesystem context, and token map
     let args = Args::parse();
-
-    // create data dir if it doesn't exist
-    fs::create_dir_all("data")?;
-
-    // dynamically get Rust project root and relevant dir paths
-    let rust_root = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
-    let models_path = Path::new(&rust_root).join("models");
-    let data_path = Path::new(&rust_root).join("data");
-    let tests_path = Path::new(&rust_root).join("tests");
-
-    if !models_path.exists() { fs::create_dir(&models_path).expect("Failed to create output directory for models") }
-    if !data_path.exists() { fs::create_dir(&data_path).expect("Failed to create output directory for data") }
-    if !tests_path.exists() { fs::create_dir(&tests_path).expect("Failed to create tests directory") }
-
+    let context = Context::new();
     let token_map = Arc::new(TokenMap::new(VOCAB)); // bidirectional char to ID mapping
     // let token_map = TokenMap::new(VOCAB); // bidirectional char to ID mapping
 
@@ -110,18 +98,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // ------------------------------------- Load data for N-gram model -------------------------------------
 
-    let corpus_path = data_path
+    let corpus_path = context.data_path
         .join("librispeech-lm-norm")
         .join("librispeech-lm-norm.txt");
 
     let corpus = corpus_path.to_string_lossy().to_string();
 
     // using extract_slr_dataset function in data_handler.rs to download + extract N-Gram corpus if needed
-    extract_slr_corpus(rust_root.as_str());
+    extract_slr_corpus(&context.rust_root);
 
     // --------------------------------- N-Gram model training/evaluation -----------------------------------
 
-    let lm_output_path = models_path.join(&args.output); // output path for where LM resides
+    let lm_output_path = context.models_path.join(&args.output); // output path for where LM resides
     
     // does an LM already exist?
     let lm = if !lm_output_path.exists() {
@@ -186,8 +174,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let accumulation = 1;
     let seed = 42;
     let device = DefaultDevice;
-    let root_path = rust_root;
-    let vsrm_output_path = models_path;
 
     let dataset_src = DatasetSource::Grid;
 
@@ -211,14 +197,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         seed,
     };
 
-    train::<MyBackend, _, _>(
+    train::<MyBackend>(
         device,
+        &context,
         dataset_src,
         model_config,
         learner_config,
         (*token_map).clone(),
-        root_path,
-        vsrm_output_path,
     );
 
     Ok(())

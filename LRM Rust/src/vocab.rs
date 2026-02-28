@@ -1,5 +1,9 @@
-// Define vocabulary and bidirectional token-ID mapping
-
+//! Vocabulary definitions and character-to-index mappings.
+//! 
+//! This module handles the bidirectional mapping between natural language characters
+//! and numerical IDs used by the model. It includes the character set for the
+//! Visual Speech Recognition (VSR) task and a ```TokenMap``` utility for 
+//! sequence conversion.
 
 
 // imports
