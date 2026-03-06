@@ -3,11 +3,9 @@
 Objective:
 Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering data ingestion, model architecture, training, loss computation, decoding, and language model integration, with a long-term goal of live camera inference using a dynamically tracking mouth-cropped ROI.
 
----
-
 ## Accomplishments to Date
 
-### Data Ingestion (```pipeline/io.rs``` and ```pipeline/adapters/grid.rs```)
+### Data Ingestion (`pipeline/io.rs` and `pipeline/adapters/grid.rs`)
 
 - For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") data organized into "frames" and "alignments" directories under a self created "data/grid-lr-corpus").
 - In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
@@ -15,39 +13,39 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Infer file name stems automatically.
   - Pair videos with alignment annotations.
   - Download and extract compressed datasets when missing.
-- Implemented a video pipeline using OpenCV in ```io.rs``` that:
+- Implemented a video pipeline using OpenCV in `grid.rs` that:
   - Decodes video files frame by frame.
   - Converts frames to grayscale.
-  - Crops a fixed mouth region of interest (ROI).
-  - Flattens pixel data into contiguous ```Vec<u8>``` tensors.
-  - In future, might consider using pre-trained Haar Cascade or a DNN-based Face Detector to find face, then estimate mouth region.
+  - Uses pre-trained Haar Cascade detectors for face and mouth localization (see [Attributions](#attributions)).
+  - Crops a dynamic mouth ROI per frame.
+  - Flattens pixel data into contiguous `Vec<u8>` tensors.
 
-### Data Standardization (```adapters/```)
+### Data Standardization (`adapters/`)
 
-- Implemented dataset adapter ```adapters/``` that:
-  - Contains source-specific logic to map raw datasets (GRID, LRW, etc.) into a standardized ```VsrmItem``` format.
-  - Relies on the more abstract ```DatasetSplit``` utility in ```pipeline/dataset.rs``` for train/val/test partitioning.
+- Implemented dataset adapter `adapters/` that:
+  - Contains source-specific logic to map raw datasets (GRID, LRW, etc.) into a standardized `VsrmItem` format.
+  - Relies on the more abstract `DatasetSplit` utility in `pipeline/dataset.rs` for train/val/test partitioning.
 - In future, will consider FPS standardization to a target FPS (25) as well (frame dropping preferred over interpolation due to simplicity and avoidance of ghost data).
 
-### Data Batching (```pipeline/batcher.rs```)
+### Data Batching (`pipeline/batcher.rs`)
 
-- Developed a custom ```VsrmBatcher``` that standardizes and pads data:
+- Developed a custom `VsrmBatcher` that standardizes and pads data:
 - Standardization handled by:
   - Scaling pixel values to [0, 1].
   - Centering pixel values to zero mean and unit variance.
 - Padding handled by:
-  - Finding longest video-frames/transcript-sequences among a batch of sequences (as ```max_t```/```max_l```).
-  - Padding variable-length video frames in that batch to ```max_t``` with $0$.
-  - Padding variable-length transcript sequences in that batch to ```max_l``` with ```BLANK_ID```.
-- Uses a CPU-to-GPU staging strategy, where tensors are collated on the ```NdArray``` CPU backend before a single-shot move to the ```Wgpu``` GPU backend for minimizing PCIe bus latency.
+  - Finding longest video-frames/transcript-sequences among a batch of sequences (as `max_t`/`max_l`).
+  - Padding variable-length video frames in that batch to `max_t` with $0$.
+  - Padding variable-length transcript sequences in that batch to `max_l` with `BLANK_ID`.
+- Uses a CPU-to-GPU staging strategy, where tensors are collated on the `NdArray` CPU backend before a single-shot move to the `Wgpu` GPU backend for minimizing PCIe bus latency.
 
-### Data Partitioning (```pipeline/dataset.rs```)
+### Data Partitioning (`pipeline/dataset.rs`)
 
-- Dataset splitting policy is delegated to a generic and source-agnostic ```DatasetSplit``` wrapper, to allow any dataset (GRID, LRW, etc.) to be partitioned through index-mapping without modifying the more specialized adapter logic.
+- Dataset splitting policy is delegated to a generic and source-agnostic `DatasetSplit` wrapper, to allow any dataset (GRID, LRW, etc.) to be partitioned through index-mapping without modifying the more specialized adapter logic.
 - Applies a random but deterministic shuffle to the index-mapping. 
 - Then partitions dataset instances into train/val/test splits.
 
-### Alignment & Vocabulary Handling (```vocab.rs```)
+### Alignment & Vocabulary Handling (`vocab.rs`)
 
 - Implemented parsing of .align files.
 - Filters out silence tokens ("sil").
@@ -63,7 +61,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Never appears in training targets.
   - Is removed during decoding.
 
-### VSR Model Architecture (```vsrm/vsrm.rs``` and ```vsrm/tcn.rs```)
+### VSR Model Architecture (`vsrm/vsrm.rs` and `vsrm/tcn.rs`)
 
 - Implemented a full spatiotemporal VSRM in Rust.
 - Uses a 3D convolutional (Conv3D) front-end for joint spatial–temporal feature extraction.
@@ -71,7 +69,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - Uses GroupNorm following Conv3D layers for mitigating internal covariance shift during forward/backward passes. GroupNorm chosen over:
   - BatchNorm because BatchNorm struggles with small batches and larger batches is memory-heavy against high-dim video data.
   - LayerNorm because LayerNorm globalizes its averaging across all channels, pixels, and timesteps, leading to "washing-out" of localized variations in spatial data.
-- Replaced BiLSTMs with a Temporal Convolutional Network (TCN) to improve:
+- Replaced BiLSTMs with Temporal Convolutional Networks (TCN) to improve:
   - Parallelism
   - Inference latency
   - Deployment simplicity
@@ -81,22 +79,22 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Dropout and non-linear activations
 - Added a projection head mapping features to per-time-step character logits.
 
-### Training Pipeline (```training/learner.rs``` and ```training/trainer.rs```)
+### Training Pipeline (`training/learner.rs` and `training/trainer.rs`)
 
-- Keeping a legacy ```trainer.rs``` file implementing a manual training loop to test model convergence on dummy data.
-- Implemented a complete training and validation pipeline using Burn's ```Learner``` API in Rust as ```learner.rs```.
+- Keeping a legacy `trainer.rs` file implementing a manual training loop to test model convergence on dummy data.
+- Implemented a complete training and validation pipeline using Burn's `Learner` API in Rust as `learner.rs`.
 - Supports:
   - Batching
   - Epoch-based training
   - Auto-checkpointing
   - Metric logging
   - Train/validation dataset splitting
-- Handles dynamic train/eval mode switching implicitly with Burn's ```Autodiff``` and ```Module``` traits (which allows gradient tracking).
+- Handles dynamic train/eval mode switching implicitly with Burn's `Autodiff` and `Module` traits (which allows gradient tracking).
 - Integrated the Adam optimizer with configurable learning rates.
 - Implemented Noam-style learning rate warmup and scheduling.
 - Added numerical utility functions (mean, standard deviation, normalization).
 
-### Custom CTC Loss (```ctc/ctc_loss.rs```)
+### Custom CTC Loss (`ctc/ctc_loss.rs`)
 
 - Implemented Connectionist Temporal Classification (CTC) loss from scratch.
 - Uses forward-backward dynamic programming.
@@ -104,7 +102,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - Correctly handles blank symbols, repeated labels, and variable-length input/target sequences
 - Designed to be framework-agnostic within Burn.
 
-### Custom CTC Decoding & Inference (```ctc/ctc_decoder.rs```)
+### Custom CTC Decoding & Inference (`ctc/ctc_decoder.rs`)
 
 - Implemented CTC decoding (greedy and prefix beam search methods) from scratch.
 - Prefix beam search decoding has:
@@ -113,7 +111,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Beam pruning and prefix merging
 - Decoder architecture designed to support incremental/streaming inference.
 
-### Language Model Integration (```ctc/lm.rs```)
+### Language Model Integration (`ctc/lm.rs`)
 
 - Incorporated a dedicated language model interface for CTC decoder's prefix beam search.
 - Designed for character-level N-gram scoring.
@@ -141,8 +139,6 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Dynamic mouth tracking via face detection and landmarks
   - Portable deployment via ONNX or native Rust runtimes (e.g., Tract)
 
----
-
 ## Current Status
 
 - I/O and data aqcuisition helper functions are finished.
@@ -151,15 +147,35 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - Greedy decoding and Beam Search decoding with a char-level N-gram language model both work end-to-end.
 - Training and validation pipeline is implemented and wired into Burn's learner framework.
 - Correctness of pipeline dataflow plus mathematical convergence of model verified through single-batch overfit unit tests.
+- Dynamic mouth tracking using haar cascades implemented.
 - Pending official VSRM train/eval using Burn's Learner framework.
-- Dynamic mouth tracking planned but not implemented yet.
+- Need to implement "train model from scratch" or "resume training on existing model" behavior in main.
+- Need to figure out about spaces between words for WER metric to be effective.
 - Planning FPS video standardization to unify potentially varying frame-rates between different video-transcript dataset sources.
 
----
+## Attributions
 
-## Summary
+### Face and Mouth Detection (Haar Cascades)
 
-This project represents a full end-to-end implementation of a VSRM lip-reading system in Rust, covering data processing, model architecture, training, loss computation, and decoding. The system is designed with real-time deployment in mind and avoids reliance on Python-based ML frameworks, emphasizing performance, safety, and extensibility.
+Mouth tracking uses pre-trained Haar cascade classifiers:
+
+- **Face detection:** `haarcascade_frontalface_alt2.xml`
+- **Mouth detection:** `haarcascade_mcs_mouth.xml`
+
+These cascade files are obtained from [opencv-processing/cascade-files](https://github.com/atduskgreg/opencv-processing/tree/master/lib/cascade-files).
+
+**Research use:** If you use these detectors or related ideas, please cite one of the following papers:
+
+- Castrillón Santana, M., Déniz Suárez, O., Hernández Tejera, M., & Guerra Artal, C. (2007). **ENCARA2: Real-time Detection of Multiple Faces at Different Resolutions in Video Streams.** *Journal of Visual Communication and Image Representation*, 18(2), 130–140.
+- Castrillón Santana, M., Déniz Suárez, O., Hernández Sosa, D., & Lorenzo Navarro, J. (2007). **Using Incremental Principal Component Analysis to Learn a Gender Classifier Automatically.** *1st Spanish Workshop on Biometrics*, Girona, Spain.
+- Castrillón-Santana, M., Déniz-Suárez, O., Antón-Canalís, L., & Lorenzo-Navarro, J. (2008). **Face and Facial Feature Detection Evaluation.** *Third International Conference on Computer Vision Theory and Applications (VISAPP)*.
+
+## References / Further Reading
+Resources that informed the implementation of concepts in this project:
+- **CTC loss:** [Sequence Modeling with CTC](https://distill.pub/2017/ctc/) (Hannun, 2017, Distill)
+- **CTC (original):** Graves et al. (2006). Connectionist Temporal Classification. ICML. [PDF](https://www.cs.toronto.edu/~graves/icml_2006.pdf)
+- **N-gram language models, smoothing (Witten-Bell, etc.):** Jurafsky, D. & Martin, J. H. *Speech and Language Processing* (3rd ed.), Ch. 3. [PDF](https://web.stanford.edu/~jurafsky/slp3/3.pdf)
+- **LipNet:** Assael et al. (2016). End-to-End Sentence-level Lipreading. [PDF](https://arxiv.org/abs/1611.01599)
 
 ## Project Tree
 
@@ -225,6 +241,8 @@ Lip Reading Model
 │  │  ├─ vocab.rs
 │  │  └─ vsrm
 │  │     ├─ mod.rs
+│  │     ├─ residual.rs
+│  │     ├─ summary.rs
 │  │     ├─ tcn.rs
 │  │     └─ vsrm.rs
 │  ├─ target

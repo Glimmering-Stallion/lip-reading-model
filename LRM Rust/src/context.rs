@@ -1,6 +1,6 @@
 //! Global project configuration and filesystem context.
 //! 
-//! This module provides a centralized ```Context``` struct that acts as the source of truth for
+//! This module provides a centralized `Context` struct that acts as the source of truth for
 //! relevant directory paths (data, models, tests) and handles the initialization
 //! of the project workspace.
 

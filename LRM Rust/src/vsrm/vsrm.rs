@@ -1,8 +1,8 @@
 //! Visual Speech Recognition Model (VSRM) architecture.
 //! 
 //! This module implements the core neural network, which consists of:
-//! - 3D CNN Frontend: Spatio-temporal convolutional layers for feature extraction.
-//! - TCN Backend: Stacked temporal convolutional blocks for sequence modeling.
+//! - 3D ResBlock Frontend: Spatio-temporal convolutional layers for feature extraction.
+//! - TCN Backend: Stacked temporal Conv1D blocks for sequence modeling.
 //! - Iteration Counter: Custom Atomic iteration tracker for training progress.
 
 
@@ -12,38 +12,42 @@ use burn::{
     backend::Autodiff,
     config::Config,
     module::{
+        AutodiffModule,
+        Content,
         Module,
-        ParamId,
-        Param,
-        ModuleVisitor,
         ModuleDisplay,
         ModuleDisplayDefault,
-        Content,
-        AutodiffModule,
+        ModuleVisitor,
+        Param,
+        ParamId,
     },
     nn::{
-        conv::{
-            Conv3d,
-            Conv3dConfig,
-        },
         GroupNorm,
         GroupNormConfig,
         Initializer,
         Linear,
         LinearConfig,
         PaddingConfig3d,
+        conv::{
+            Conv3d,
+            Conv3dConfig,
+        },
+        pool::{
+            AdaptiveAvgPool2d,
+            AdaptiveAvgPool2dConfig,
+        }
     },
     optim::GradientsParams,
+    prelude::TensorData,
     tensor::{
-        activation,
-        backend::{
-            Backend,
-            AutodiffBackend,
-        },
         Shape,
         Tensor,
-    },
-    prelude::TensorData
+        activation,
+        backend::{
+            AutodiffBackend,
+            Backend,
+        }
+    }
 };
 
 
@@ -51,7 +55,16 @@ use burn::{
 #[cfg(test)]
 use std::sync::Once;
 use std::sync::{Arc, atomic::AtomicU64};
-use crate::vsrm::tcn::{TemporalConvNet, TemporalConvNetConfig};
+use crate::vsrm::{
+    residual::{
+        ResidualBlock,
+        ResidualBlockConfig,
+    },
+    tcn::{
+        TemporalConvNet,
+        TemporalConvNetConfig,
+    }
+};
 
 #[cfg(test)]
 static PRINT_ONCE: Once = Once::new();
@@ -110,15 +123,22 @@ impl<B: Backend> Module<B> for IterationCounter {
 
 // ------------------------------------------ Debugging For Model Gradients -------------------------------------------
 
+pub struct ParamIds {
+    pub rb1_w: ParamId,
+    pub rb2_w: ParamId,
+    pub rb3_w: ParamId,
+    pub fc_w: ParamId,
+}
+
 /// helper that computes and prints basic distribution statistics for a given tensor
 /// used for identifying vanishing/exploding gradients or activations
 /// params:
 /// - name: label for console output
 /// - t: tensor to analyze [D-dimensional]
 #[cfg(test)]
-fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(
+fn stats_any<B: Backend, const D: usize>(
     name: &str,
-    t: &burn::tensor::Tensor<B, D>,
+    t: &Tensor<B, D>,
 ) {
     let data = t.clone().to_data().convert::<f32>();
     let s = data.as_slice::<f32>().unwrap();
@@ -145,18 +165,17 @@ fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(
     println!("{name} | mean = {mean:.6} min = {min:.6} max = {max:.6} NaNs = {nans} Infs = {infs} len = {}", s.len());
 }
 #[cfg(not(test))]
-fn stats_any<B: burn::tensor::backend::Backend, const D: usize>(
+fn stats_any<B: Backend, const D: usize>(
     _name: &str,
-    _t: &burn::tensor::Tensor<B, D>,
-) {
-}
+    _t: &Tensor<B, D>,
+) {}
 
 /// specific helper for logging gradient magnitudes during backpropagation
 /// params:
 /// - label: name of the parameter layer
 /// - t: 1D tensor containing flattened gradient values
 #[cfg(test)]
-fn print_grad_stats<B: Backend>(label: &str, t: &Tensor<B, 1>) {
+fn print_grad_stats<B: Backend, const D: usize>(label: &str, t: &Tensor<B, D>) {
     let v = t.clone().to_data().convert::<f32>();
     let s = v.as_slice::<f32>().unwrap();
     let (mut min, mut max, mut sum, mut n_nan, mut n_inf) =
@@ -192,26 +211,24 @@ fn print_grad_stats<B: Backend>(label: &str, t: &Tensor<B, 1>) {
 #[derive(Config, Debug)]
 pub struct VsrModelConfig {
     #[config(default = 1)]
-    pub in_channels: usize,
+    pub in_channels: usize,           // initial channel width input for the first ResBlock layer (typically 1 for grayscale)
 
-    // base channel width for frontend CNN layers (the feature extractors)
     #[config(default = 128)]
-    pub out_channels: usize,
+    pub out_channels: usize,          // base channel width output for frontend 3D-CNN layers (the feature extractors)
 
-    // latent dimension for backend TCN layers (the sequence processors)
-    #[config(default = 128)]
-    pub hidden_dim: usize,
+    #[config(default = 512)]
+    pub hidden_dim: usize,            // latent dimension for backend TCN layers (the sequence processors)
 
-    // default for now should be (50, 150)
-    pub frame_dims: (usize, usize), // (height, width)
+    #[config(default = "(50, 100)")]
+    pub frame_dims: (usize, usize),   // initial frame dimensions used to precompute 3D-CNN downsampled spatial sizes (height, width)
     
     #[config(default = 8)]
-    pub norm_groups: usize,
+    pub norm_groups: usize,           // number of groups for GroupNorm
     
-    #[config(default = 28)] // default assumes 0-25 for alphabet, 26 for space, 27 for blank ID
+    #[config(default = 28)]           // default assumes 0-25 for alphabet, 26 for space, 27 for blank ID
     pub vocab_size: usize,
 
-    #[config(default = 27)] // default assumes blank ID is at last position in char vocab
+    #[config(default = 27)]           // default assumes blank ID is at last position in char vocab
     pub blank_id: usize,
 }
 
@@ -237,9 +254,12 @@ impl VsrModelConfig {
 // define model architecture
 #[derive(Module, Debug)]
 pub struct VsrModel<B: Backend> {
-    conv1: Conv3d<B>, gn1: GroupNorm<B>,
-    conv2: Conv3d<B>, gn2: GroupNorm<B>,
-    conv3: Conv3d<B>, gn3: GroupNorm<B>,
+    rb1: ResidualBlock<B>,
+    rb2: ResidualBlock<B>,
+    rb3: ResidualBlock<B>,
+
+    aap: AdaptiveAvgPool2d,
+    proj: Linear<B>,
 
     tcn1: TemporalConvNet<B>,
     tcn2: TemporalConvNet<B>,
@@ -274,25 +294,25 @@ impl<B: Backend> VsrModel<B> {
         device: &B::Device,
     ) -> Self {
         let iterations = IterationCounter::default();
-
-        // number of Conv3D/GroupNorm layers
-        let frontend_layers = 3;
-
-        // Conv3D kernel size values: [temporal, height, width]
+        // ResBlock internal Conv3D kernel size values: [temporal, height, width]
         let (k_t, k_h, k_w) = (3, 3, 3);
         let kernel_size = [k_t, k_h, k_w];
 
-        // Conv3D stride length values: [temporal, height, width]
+        // ResBlock internal Conv3D stride length values: [temporal, height, width]
         let (s_t, s_h, s_w) = (1, 2, 2);
         let stride = [s_t, s_h, s_w];
 
-        // Conv3D padding values: [temporal, height, width]
+        // ResBlock internal Conv3D padding values: [temporal, height, width]
         let (p_t, p_h, p_w) = (1, 1, 1);
+        let padding = [p_t, p_h, p_w];
 
-        // Conv3D out channel values for each layer
-        let conv1_out = out_channels;       // 128 (default)
-        let conv2_out = out_channels * 2;   // 256 (default)
-        let conv3_out = out_channels / 2;   // 64  (default)
+        // ResBlock output channel values for each layer
+        let rb1_out = out_channels;       // 128 (default)
+        let rb2_out = out_channels * 2;   // 256 (default)
+        let rb3_out = out_channels * 4;   // 512  (default)
+
+        // AdaptiveAvgPool2D output size: [height, width]
+        let (aap_h, aap_w) = (4, 4);
 
         // precompute spatial dim downsample output sizes after each Conv3D layer
         let downsample = |size: usize, stride: usize, kernel: usize, pad: usize| {
@@ -312,106 +332,102 @@ impl<B: Backend> VsrModel<B> {
             downsample(w2, s_w, k_w, p_w),
         );
 
-        assert!(conv1_out.is_multiple_of(norm_groups), "First Conv3D layer output ({}) must be divisible by Norm Groups ({})", conv1_out, norm_groups);
-        assert!(conv2_out.is_multiple_of(norm_groups), "Second Conv3D layer output ({}) must be divisible by Norm Groups ({})", conv2_out, norm_groups);
-        assert!(conv3_out.is_multiple_of(norm_groups), "Third Conv3D layer output ({}) must be divisible by Norm Groups ({})", conv3_out, norm_groups);
+        assert!(rb1_out.is_multiple_of(norm_groups), "First Conv3D layer output ({}) must be divisible by Norm Groups ({})", rb1_out, norm_groups);
+        assert!(rb2_out.is_multiple_of(norm_groups), "Second Conv3D layer output ({}) must be divisible by Norm Groups ({})", rb2_out, norm_groups);
+        assert!(rb3_out.is_multiple_of(norm_groups), "Third Conv3D layer output ({}) must be divisible by Norm Groups ({})", rb3_out, norm_groups);
 
         assert!(frame_dims.0 >= 40 && frame_dims.1 >= 40, "Frame dimensions must be >= 40, got H = {}, W = {}", frame_dims.0, frame_dims.1);
         if h3 < 4 || w3 < 4 { eprintln!("Warning: downsampled feature map is very small ({}x{}); representation quality may suffer", h3, w3); }
 
         assert!(out_channels >= 32, "Out channels ({}) must be >= 32", out_channels);
-        if conv3_out < 64 { eprintln!("Warning: third Conv3D channels ({}) is very small; representation quality may suffer", conv3_out); }
+        if rb3_out < 64 { eprintln!("Warning: third Conv3D channels ({}) is very small; representation quality may suffer", rb3_out); }
 
-
-        let conv1 = Conv3dConfig::new([in_channels, conv1_out], kernel_size)
+        let rb1 = ResidualBlockConfig::new([in_channels, rb1_out], kernel_size)
             .with_stride(stride)
-            .with_padding(PaddingConfig3d::Explicit(p_t, p_h, p_w))
-            .with_initializer(Initializer::KaimingUniform {
-                gain: 1.0,
-                fan_out_only: false,
-            })
+            .with_padding(padding)
+            .with_norm_groups(norm_groups)
             .init(device);
-        let gn1 = GroupNormConfig::new(norm_groups, conv1_out)
-            .with_epsilon(1e-5)
-            .with_affine(true)
-            .init(device);
-
-        let conv2 = Conv3dConfig::new([conv1_out, conv2_out], kernel_size)
+        let rb2 = ResidualBlockConfig::new([rb1_out, rb2_out], kernel_size)
             .with_stride(stride)
-            .with_padding(PaddingConfig3d::Explicit(p_t, p_h, p_w))
-            .with_initializer(Initializer::KaimingUniform {
-                gain: 1.0,
-                fan_out_only: false,
-            })
+            .with_padding(padding)
+            .with_norm_groups(norm_groups)
             .init(device);
-        let gn2 = GroupNormConfig::new(norm_groups, conv2_out)
-            .with_epsilon(1e-5)
-            .with_affine(true)
-            .init(device);
-
-        let conv3 = Conv3dConfig::new([conv2_out, conv3_out], kernel_size)
+        let rb3 = ResidualBlockConfig::new([rb2_out, rb3_out], kernel_size)
             .with_stride(stride)
-            .with_padding(PaddingConfig3d::Explicit(p_t, p_h, p_w))
+            .with_padding(padding)
+            .with_norm_groups(norm_groups)
+            .init(device);
+
+        let aap = AdaptiveAvgPool2dConfig::new([aap_h, aap_w])
+            .init();
+
+        let proj = LinearConfig::new((rb3_out * aap_h * aap_w), hidden_dim)
             .with_initializer(Initializer::KaimingUniform {
-                gain: 1.0,
-                fan_out_only: false,
-            })
-            .init(device);
-        let gn3 = GroupNormConfig::new(norm_groups, conv3_out)
-            .with_epsilon(1e-5)
-            .with_affine(true)
-            .init(device);
-
-        let tcn1 = TemporalConvNetConfig::new([(conv3_out * h3 * w3), hidden_dim])
-            .with_layers(3)
-            .with_dropout_prob(0.5)
-            .init(device);
-
-        let tcn2 = TemporalConvNetConfig::new([hidden_dim, hidden_dim])
-            .with_layers(3)
-            .with_dropout_prob(0.5)
-            .init(device);
-
-        let mut fc = LinearConfig::new(hidden_dim, vocab_size)
-            .with_initializer(Initializer::KaimingUniform {
-                gain: 1.0,
+                gain: 2.0f64.sqrt(),
                 fan_out_only: false,
             })
             .with_bias(true)
             .init(device);
 
+        let tcn1 = TemporalConvNetConfig::new([hidden_dim, hidden_dim])
+            .with_layers(3)
+            .with_dropout_prob(0.1)
+            .init(device);
+        let tcn2 = TemporalConvNetConfig::new([hidden_dim, hidden_dim])
+            .with_layers(3)
+            .with_dropout_prob(0.1)
+            .init(device);
+
+        let mut fc = LinearConfig::new(hidden_dim, vocab_size)
+            .with_initializer(Initializer::XavierUniform { gain: 1.0 }) // possibly need to init final layer even smaller (like 0.1 or 0.01)
+            .with_bias(true)
+            .init(device);
+
         // apply negative biasing for blank ID
         if let Some(bias_param) = &fc.bias {
+            // FC layer outputs logits shaped [N, T, Vocab]
+            // with external softmax, we have probabilites:
+            // P(blank) = exp(bias) / (Vocab * exp(0) + exp(bias))
+            // P(char) = exp(0) / (Vocab * exp(0) + exp(bias))
+
+            // example, with Vocab (chars and space only) = 27:
+            // bias (for blank) = 0.0: P(blank) = 1/28 ≈ 3.6%
+            // bias (for blank) = 1.0: P(blank) = e^1/(27 + e^1) ≈ 9.1%
+            // bias (for blank) = 2.0: P(blank) = e^2/(27 + e^2) ≈ 21.4%
+            // bias (for blank) = 3.0: P(blank) = e^3/(27 + e^3) ≈ 42.6%
+            // bias (for blank) = 4.0: P(blank) = e^4/(27 + e^4) ≈ 66.9%
+
             let mut data = bias_param.val().to_data();
             
-            // force initial blank prob down so other chars can breathe
-            if let Ok(values) = data.as_mut_slice::<f32>() { values[blank_id] = 0.0; }
+            // optionally force initial blank prob down here so other chars can breathe
+            if let Ok(values) = data.as_mut_slice::<f32>() { values[blank_id] = 5.0; }
             
             // re-upload to device and update layer
             let new_bias = Tensor::<B, 1>::from_data(data, device);
             fc.bias = Some(Param::from_tensor(new_bias));
         }
 
-        // compute total receptive field from:
-        // - frontend (3 Conv3D + GroupNorm) layers  RF = 1 + Σ_{i = (0..layers-1)} (k_t - 1) * s_t^i
-        // - backend (2 TCN) layers                  RF = 1 + 2 * (k - 1) * (2^layers - 1)
-        let rf_frontend = 1 + (0..frontend_layers).map(|i| (k_t - 1) * s_t.pow(i as u32)).sum::<usize>();
-        let rf_backend = (tcn1.receptive_field() - 1) + (tcn2.receptive_field() - 1); // Note: why minus 1 each time? sequential temporal modules stack additively minus overlapping center frame
-        let total_rf = rf_frontend + rf_backend;
-
         let min_viable_rf = 25;
         let max_viable_rf = 3 * 75;
+        let mut total_rf = 1;
+
+        // sum contributions from frontend ResBlocks
+        total_rf += rb1.receptive_field_contribution();
+        total_rf += rb2.receptive_field_contribution();
+        total_rf += rb3.receptive_field_contribution();
+
+        // sum contributions from backend TCNs
+        total_rf += tcn1.receptive_field_contribution() - 1;
+        total_rf += tcn2.receptive_field_contribution() - 1;
 
         println!("Model initialized with temporal receptive field of {} frames\n", total_rf);
         debug_assert!(total_rf > min_viable_rf, "Vision too narrow: {} frames", total_rf);
         debug_assert!(total_rf < max_viable_rf, "Vision too wide: {} frames", total_rf);
 
         Self {
-            conv1, gn1,
-            conv2, gn2,
-            conv3, gn3,
-            tcn1,
-            tcn2,
+            rb1, rb2, rb3,
+            aap, proj,
+            tcn1, tcn2,
             fc,
             iterations,
         }
@@ -425,135 +441,100 @@ impl<B: Backend> VsrModel<B> {
     pub fn forward(&self, input: Tensor<B, 5>) -> Tensor<B, 3> {
         // note: N is samples per batch (batch size), C is channels, T is timesteps (number of frames), H is height (frame dim y), W is width (frame dim x)
 
-        // three 3D convolutional layers with ReLU activation and strided downsampling
-        // input shape: (batch, channels, timesteps, height, width)
-        // output shape: (batch, channels, timesteps, height/(2^3), width/(2^3))
-        let x = activation::relu(self.gn1.forward(self.conv1.forward(input)));
-        let x = activation::relu(self.gn2.forward(self.conv2.forward(x)));
-        let x = activation::relu(self.gn3.forward(self.conv3.forward(x)));
+        // three custom ResBlock3D layers (with strided downsampling and ReLU internally applied)
+        let x = self.rb1.forward(input);     // [N, C, T, (H / 2), (W / 2)]
+        let x = self.rb2.forward(x);  // [N, C, T, (H / 4), (W / 4)]
+        let x = self.rb3.forward(x);  // [N, C, T, (H / 8), (W / 8)]
 
-        // reshape input to rank 3 as NCT format for TCN layers (bringing timesteps to last dim)
-        // input shape: (batch, channels, timesteps, height/(2^3), width/(2^3))
-        // output shape: (batch, channels * height/(2^3) * width/(2^3), timesteps)
-        let [batch, channels, timesteps, height, width] = x.dims();
-        let x = x.reshape(Shape::new([batch, channels * height * width, timesteps]));
+        // reshape input to rank 4 for spatial Adaptive Average Pooling (AAP)
+        let [n, c, t, h, w] = x.dims();
+        let x = x
+            .swap_dims(1, 2)           // [N, T, C, H, W]
+            .reshape([n * t, c, h, w]);                 // [(N * T), C, H, W]
 
-        debug_assert!(channels * height * width > 0);
-        debug_assert!(timesteps > 0);
+        // AAP layer for downsampling spatial dims, then reshape input to rank 3
+        let x = self.aap
+            .forward(x)                     // [(N * T), C, 4, 4]
+            .reshape([n, t, c * 4 * 4]);                // [N, T, (C * 4 * 4)]
 
-        // two custom TCN layers with ReLU activation
-        // input shape: (batch, channels * height/(2^3) * width/(2^3), timesteps)
-        // output shape: (batch, channels * height/(2^3) * width/(2^3), timesteps)
-        let x: Tensor<B, 3> = activation::relu(self.tcn1.forward(x));
-        let x: Tensor<B, 3> = activation::relu(self.tcn2.forward(x));
+        // projection layer right before TCN layers
+        // for compressing large flattened features to hidden dim
+        // reshape input to NDT format for subsequent TCN layers
+        let x = activation::relu(self.proj.forward(x));  // [N, T, D]
+        let x = x.swap_dims(1, 2);                          // [N, D, T]
 
-        // reshape input to NTC format for FC layer (bringing features to last dim)
-        // input shape: (batch, channels * height/(2^3) * width/(2^3), timesteps)
-        // output shape: (batch, timesteps, channels * height/(2^3) * width/(2^3))
-        let x = x.swap_dims(1, 2);
+        // two custom TCN layers (ReLU internally applied)
+        let x: Tensor<B, 3> = self.tcn1.forward(x);        // [N, D, T]
+        let x: Tensor<B, 3> = self.tcn2.forward(x);        // [N, D, T]
 
-        // single FC layer
-        // input shape: (batch, timesteps, channels * height/(2^3) * width/(2^3))
-        // output shape: (batch, timesteps, vocab_size)
-        let y = self.fc.forward(x);
+        // reshape input to NTD format for FC layer (bringing features to last dim)
+        let x = x.swap_dims(1, 2);   // [N, T, D]
+        let y = self.fc.forward(x);      // [N, T, V]
 
         y
     }
-}
 
+    /// compute total receptive field of VSR model
+    pub fn total_receptive_field(&self) -> usize {
+        let mut total_rf = 1;
 
+        // sum contributions from frontend ResBlocks
+        total_rf += self.rb1.receptive_field_contribution();
+        total_rf += self.rb2.receptive_field_contribution();
+        total_rf += self.rb3.receptive_field_contribution();
 
-#[cfg(test)]
-pub struct ParamIds {
-    pub conv1_w: ParamId,
-    pub conv2_w: ParamId,
-    pub conv3_w: ParamId,
-    pub fc_w: ParamId,
+        // sum contributions from backend TCNs
+        // Note: why minus 1 each time?
+        // sequential temporal modules stack additively
+        // minus overlapping center frame
+        total_rf += self.tcn1.receptive_field_contribution() - 1;
+        total_rf += self.tcn2.receptive_field_contribution() - 1;
+
+        total_rf
+    }
+
+    /// maps parameter IDs for weight inspection in autodiff mode
+    /// returns: container of IDs for ResBlock and Linear layers
+    pub fn param_ids(&self) -> ParamIds {
+        ParamIds {
+            rb1_w: self.rb1.primary_weight_id(),
+            rb2_w: self.rb2.primary_weight_id(),
+            rb3_w: self.rb3.primary_weight_id(),
+            fc_w: self.fc.weight.id,
+        }
+    }
 }
 
 
 
 #[cfg(test)]
 impl<B0: Backend> VsrModel<Autodiff<B0>> {
-    /// maps parameter IDs for weight inspection in autodiff mode
-    /// returns: container of IDs for Conv3D and Linear layers
-    pub fn param_ids(&self) -> ParamIds {
-        ParamIds {
-            conv1_w: self.conv1.weight.id,
-            conv2_w: self.conv2.weight.id,
-            conv3_w: self.conv3.weight.id,
-            fc_w: self.fc.weight.id,
-        }
-    }
-
     /// prints statistical summaries of current gradients across major layers
     /// params:
     /// - grads: gradient container from current training iteration
     pub fn debug_print_grads(&self, grads: &GradientsParams) {
         let ids = self.param_ids();
-        // tiny helper
-        fn print_grad_stats<B: burn::tensor::backend::Backend, const D: usize>(
-            name: &str,
-            t: &burn::tensor::Tensor<B, D>,
-        ) {
-            let data = t.clone().to_data().convert::<f32>();
-            let s = data.as_slice::<f32>().unwrap();
-            let (mut min, mut max, mut sum, mut nans, mut infs) =
-                (f32::INFINITY, f32::NEG_INFINITY, 0.0, 0, 0);
-            for &v in s {
-                if v.is_nan() {
-                    nans += 1;
-                }
-                if v.is_infinite() {
-                    infs += 1;
-                }
-                if v.is_finite() {
-                    if v < min {
-                        min = v
-                    }
-                    if v > max {
-                        max = v
-                    }
-                    sum += v;
-                }
-            }
-            let mean = sum / (s.len().max(1) as f32);
-            println!(
-                "{name} | mean={mean:.6} min={min:.6} max={max:.6} NaNs={nans} Infs={infs} len={}",
-                s.len()
-            );
-        }
-
-        if let Some(g) = grads.get::<B0, 5>(ids.conv1_w) {
-            print_grad_stats("grad conv1.weight", &g);
-        }
-        if let Some(g) = grads.get::<B0, 5>(ids.conv2_w) {
-            print_grad_stats("grad conv2.weight", &g);
-        }
-        if let Some(g) = grads.get::<B0, 5>(ids.conv3_w) {
-            print_grad_stats("grad conv3.weight", &g);
-        }
-        if let Some(g) = grads.get::<B0, 2>(ids.fc_w) {
-            print_grad_stats("grad fc.weight", &g);
-        }
+        if let Some(g) = grads.get::<B0, 5>(ids.rb1_w) { print_grad_stats("grad rb1.weight", &g); }
+        if let Some(g) = grads.get::<B0, 5>(ids.rb2_w) { print_grad_stats("grad rb2.weight", &g); }
+        if let Some(g) = grads.get::<B0, 5>(ids.rb3_w) { print_grad_stats("grad rb3.weight", &g); }
+        if let Some(g) = grads.get::<B0, 2>(ids.fc_w) { print_grad_stats("grad fc.weight", &g); }
     }
 
     /// logs exact tensor shapes at every stage of the forward pass
     /// execution is guarded by PRINT_ONCE to prevent console flooding
     /// params:
     /// - input: [N, C, T, H, W] sample input tensor
-    #[cfg(test)]
     pub fn inspect_shapes_once(&self, input: Tensor<Autodiff<B0>, 5>) {
         PRINT_ONCE.call_once(|| {
             println!("IN (N, C, T, H, W): {:?}", input.dims());
 
-            let x = activation::relu(self.conv1.forward(input));
+            let x = activation::relu(self.rb1.forward(input));
             println!("C1 (N, C, T, H, W): {:?}", x.dims());
 
-            let x = activation::relu(self.conv2.forward(x));
+            let x = activation::relu(self.rb2.forward(x));
             println!("C2 (N, C, T, H, W): {:?}", x.dims());
 
-            let x = activation::relu(self.conv3.forward(x));
+            let x = activation::relu(self.rb3.forward(x));
             println!("C3 (N, C, T, H, W): {:?}", x.dims());
 
             let [batch, channels, timesteps, height, width] = x.dims();
@@ -603,7 +584,8 @@ mod tests {
         let norm_groups = 8;
 
         let device = Default::default();
-        let model = VsrModelConfig::new((h, w))
+        let model = VsrModelConfig::new()
+            .with_frame_dims((h, w))
             .with_in_channels(c)
             .with_out_channels(out_channels)
             .with_norm_groups(norm_groups)

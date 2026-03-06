@@ -184,7 +184,8 @@ mod tests {
             .unwrap();
 
         // dummy model
-        let model = VsrModelConfig::new((h, w))
+        let model = VsrModelConfig::new()
+            .with_frame_dims((h, w))
             .with_in_channels(c)
             .with_out_channels(out_channels)
             .with_norm_groups(norm_groups)

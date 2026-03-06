@@ -9,7 +9,7 @@
 //! scoring final sequence path.
 //! 
 //! For Prefix Beam Search, there is support for shallow fusion with an external
-//! ```LanguageModel``` to rescore hypothesis paths during the search process.
+//! `LanguageModel` to rescore hypothesis paths during the search process.
 
 // if using prefix beam search as the decoder, expect O(DWB * log(WB)) complexity
 // where D = depth (timesteps), W = beam width (# of kept hypotheses), B = branch factor (vocab size)
@@ -72,24 +72,24 @@ pub enum CtcDecodeType {
 #[derive(Config, Debug)]
 pub struct CtcDecoderConfig {
     #[config(default = "0")]
-    pub blank_id: usize, // ID of blank token in vocab
+    pub blank_id: usize,                  // ID of blank token in vocab
 
     #[config(default = "CtcDecodeType::GreedySearch")]
-    pub search_type: CtcDecodeType, // search type to use within CTC decoder (greedy/beam)
+    pub search_type: CtcDecodeType,       // search type to use within CTC decoder (greedy/beam)
 
     // rest are beam search params (ignored for greedy)
 
     #[config(default = "5")]
-    pub beam_width: usize, // beam width for beam search
+    pub beam_width: usize,                // beam width for beam search
 
     #[config(default = "None")]
-    pub lm: Option<LanguageModelConfig>, // optional language model to supplement beam search
+    pub lm: Option<LanguageModelConfig>,  // optional language model to supplement beam search
     
-    #[config(default = 0.0)] // with LM, default should be between [0.2, 3.0]
-    pub lm_alpha: f32, // weight of language model score when combining with acoustic model score
+    #[config(default = 0.0)]              // with LM, default should be between [0.2, 3.0]
+    pub lm_alpha: f32,                    // weight of language model score when combining with acoustic model score
     
-    #[config(default = 0.0)] // with LM, default should be between [1.5, 5.0]
-    pub lm_beta: f32, // length normalization factor for beam search (to avoid short sequence bias)
+    #[config(default = 0.0)]              // with LM, default should be between [1.5, 5.0]
+    pub lm_beta: f32,                     // length normalization factor for beam search (to avoid short sequence bias)
 }
 
 

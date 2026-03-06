@@ -1,8 +1,8 @@
 //! GRID-specific corpus adapter for audio-visual sentence processing.
 //! 
-//! This module implements the ```GridDataset``` adapter, which standardizes raw
+//! This module implements the `GridDataset` adapter, which standardizes raw
 //! GRID videos (as .mpg files) and alignments (as .align files) into a common
-//! ```VsrmItem``` format. It also orchestrates frame loading, grayscale conversion,
+//! `VsrmItem` format. It also orchestrates frame loading, grayscale conversion,
 //! and lip-region extraction.
 
 
@@ -23,6 +23,7 @@ use burn::{
     data::dataset::Dataset,
     tensor::TensorData,
 };
+use indicatif::{ProgressBar, ProgressStyle};
 use opencv::{
     core::{
         AlgorithmHint,
@@ -50,7 +51,7 @@ use std::{
 
 
 pub struct GridDataset {
-    grid_path: PathBuf,
+    pub grid_path: PathBuf,
     entries: Vec<String>,
     token_map: TokenMap,
     tracker_config: Option<LipTrackerConfig>,
@@ -118,7 +119,7 @@ impl GridDataset {
         }
         entries.sort(); // sort for deterministic order
         assert!(!entries.is_empty(), "Dataset instance resulted in 0 samples\nCheck if path {:?} contains .mpg files", grid_path);
-        println!("\nInitialized GridDataset instance with {} samples from speakers {:?}\n", entries.len(), avail_speakers);
+        println!("\nInitialized GridDataset: {} samples from speakers {:?}\n", entries.len(), avail_speakers);
 
         Self {
             grid_path,
@@ -126,6 +127,101 @@ impl GridDataset {
             token_map,
             tracker_config,
         }
+    }
+
+    /// attempt to load a single dataset entry by index
+    /// file IO performed by loader helper functions
+    /// ROI cropping performed by `tracker.rs`
+    /// params:
+    /// - index: dataset entry index
+    /// returns: standardized `VsrmItem` with [C, T, H, W] frames / transcript IDs, or `None` on any failure (IO, tracking, CTC constraint, etc.)
+    fn try_load(&self, index: usize) -> Option<VsrmItem> {
+        let entry = self.entries.get(index)?;
+
+        let transcript_ids = self.load_alignment(entry).ok()?;
+        let frames = match &self.tracker_config {
+            Some(config) => {
+                // --------------- mode (A): lip tracking and cropping ---------------
+                LipTracker::with_local(config, |tracker| {
+                    tracker.reset_state(); // clear smoothing state from last video
+                    self.load_frames(entry, |frame| tracker.process_frame(frame))
+                }).ok()?
+            }
+            None => {
+                // -------------------- mode (B) full sized frames -------------------
+                self.load_frames(entry, |frames| {
+                    Ok(frames.clone())
+                }).ok()?
+            }
+        };
+
+        if frames.data.is_empty() { return None; }
+
+        // isolate dims
+        let (c, h, w) = (1, frames.height, frames.width);
+        if !frames.data.len().is_multiple_of(c * h * w) { return None; }
+
+        let t = frames.data.len() / (c * h * w);
+        let l = transcript_ids.len();
+        if t == 0 || l == 0 { return None; }
+
+        // enforce CTC constraint: T must be greater than L
+        // (ideally 2x greater, for chars plus possible blanks)
+        if t < (2 * l) { return None; }
+
+        // convert frames into 4D TensorData buffer
+        let frames = TensorData::new(
+            frames.data,
+            vec![c, t, h, w],
+        );
+
+        Some(VsrmItem {
+            frames,
+            transcript_ids,
+            item_id: entry.clone(),
+        })
+    }
+
+    /// iterates through the entire GRID corpus to calculate
+    /// global mean and std dev of video pixel values for input normalization
+    pub fn calc_global_stats(&self) -> (f32, f32) {
+        let mut total_sum = 0.0f64;
+        let mut total_sum_sq = 0.0f64;
+        let mut total_pix = 0u64;
+        let entry_count = self.len();
+
+        println!("Calculating global stats for {} samples from the GRID corpus", entry_count);
+
+        let prog_bar = ProgressBar::new(entry_count as u64);
+        prog_bar.set_style(
+            ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) (ETA: {eta})")
+                .unwrap()
+                .progress_chars("#>-")
+        );
+
+        for i in 0..entry_count {
+            if let Some(entry) = self.get(i) {
+                if i.is_multiple_of(100) { prog_bar.set_message(format!("Processing: {}", entry.item_id)); }
+
+                let data = entry.frames.as_slice::<u8>().expect("Failed to get u8 frame pixel data");
+                for &pixel in data {
+                    let p = (pixel as f64) / 255.0;
+                    total_sum += p;
+                    total_sum_sq += p * p;
+                    total_pix += 1;
+                }
+            }
+
+            prog_bar.inc(1);
+        }
+
+        let mean = total_sum / (total_pix as f64);
+        let var = (total_sum_sq / (total_pix as f64)) - (mean * mean);
+        let std_dev = var.sqrt();
+
+        prog_bar.finish_with_message("Global stats calculated successfully\n");
+
+        (mean as f32, std_dev as f32)
     }
 
     /// helper for parsing a GRID specific .align transcript file
@@ -147,7 +243,9 @@ impl GridDataset {
                 for line in lines.map_while(Result::ok) {
                     let line_group = line.split_whitespace().collect::<Vec<_>>();
                     assert!(line_group.len() >= 3, "Malformed alignment line: {:?}", line_group);
-                    if line_group[2] != "sil" { tokens.push(line_group[2].to_string()); }
+                    if line_group[2] != "sil" && line_group[2] != "sp" {
+                        tokens.push(line_group[2].to_string());
+                    }
                 }
                 assert!(!tokens.is_empty(), "No non-silence tokens found in alignment file");
 
@@ -222,75 +320,27 @@ impl GridDataset {
                 Err(Box::new(e))
             }
         }
-
     }
 }
 
 
 
 impl Dataset<VsrmItem> for GridDataset {
-    /// load and normalize a specific dataset sample obtained by index
-    /// file IO and ROI cropping performed by a loader helper function from "io.rs"
-    /// performs per-sample pixel normalization [0, 1] and tensorization
-    /// params:
-    /// - index: dataset entry index
-    /// returns: standardized item with [C, T, H, W] frames and transcript IDs, or None if invalid
+    /// load a dataset sample by index with fallback to adjacent entries
+    /// only returns `None` when `index >= len()`, so Burn's dataloader
+    /// never sees a mid-dataset `None` that would terminate epoch early
     fn get(&self, index: usize) -> Option<VsrmItem> {
-        let entry = self.entries.get(index)?;
+        if index >= self.entries.len() { return None; }
 
-        let transcript_ids = self.load_alignment(entry).ok()?;
-        let frames = match &self.tracker_config {
-            Some(config) => {
-                // --------------- mode (A): lip tracking and cropping ---------------
-                LipTracker::with_local(config, |tracker| {
-                    tracker.reset_state(); // clear smoothing state from last video
-                    self.load_frames(entry, |frame| tracker.process_frame(frame))
-                }).ok()?
-            }
-            None => {
-                // -------------------- mode (B) full sized frames -------------------
-                self.load_frames(entry, |frames| {
-                    Ok(frames.clone())
-                }).ok()?
-            }
-        };
-
-        assert!(!frames.data.is_empty(), "No frames loaded");
-        assert!(! transcript_ids.is_empty(), "No transcripts loaded");
-
-        // isolate dims
-        let (c, h, w) = (1, frames.height, frames.width);
-        let (t, l) = (
-            frames.data.len() / (c * h * w),
-            transcript_ids.len(),
-        );
-        assert!(frames.data.len().is_multiple_of(c * h * w), "Frame buffer size {} is not divisible by frame dimensions", frames.data.len());
-        assert!(t > 0, "Computed zero frames for item {}", entry);
-
-        // enforce CTC constraint: T must be greater than L
-        // (ideally 2x greater, for chars plus possible blanks)
-        if t < (2 * l) {
-            // eprintln!("\nSkipping sample {}: T = {} is too short for L = {}", entry_name, t, l);
-            return None;
+        for offset in 0..self.entries.len() {
+            let try_idx = (index + offset) % self.entries.len();
+            if let Some(item) = self.try_load(try_idx) { return Some(item); }
         }
 
-        assert!(frames.data.len() == (c * t * h * w), "Tensor shape mismatch: len={} expected={}", frames.data.len(), (c * t * h * w));
-
-        // convert frames into 4D tensor
-        let frames = TensorData::new(
-            frames.data,
-            // frames.into_iter().map(|b| b as f32).collect(), // temp f32 conversion if Burn doesn't support u8 tensors yet
-            vec![c, t, h, w],
-        );
-
-        Some(VsrmItem {
-            frames,
-            transcript_ids,
-            item_id: entry.clone(),
-        })
+        None
     }
 
-    /// get the total number of samples in the dataset split
+    /// get total number of samples in the dataset split
     /// params: none
     /// returns: count of valid video entries
     fn len(&self) -> usize {
@@ -315,8 +365,9 @@ mod tests {
         rngs::StdRng,
     };
 
-    const SEED: u64 = 70;
+    const SEED: u64 = 69;
 
+    // helper function for saving frames
     fn save_item_frames(item: &VsrmItem, context: &Context, prefix: &str) {
         let item_id = item.item_id.replace("/", "_");
         let output_dir = context.tests_path.join(format!("{}_{}", prefix, &item_id));
@@ -383,13 +434,18 @@ mod tests {
         let context = Context::new();
         let mut rng = StdRng::seed_from_u64(SEED);
 
-        let tracker_config = Some(LipTrackerConfig::new(
-            context.models_path.join("haarcascade_mcs_mouth.xml"),
-            (50, 100),
-        ));
+        let face_cascade_path = context.models_path.join("haarcascade_frontalface_alt2.xml");
+        let mouth_cascade_path = context.models_path.join("haarcascade_mcs_mouth.xml");
+        let target_dims = (50, 100);
+
+        let tracker_config = LipTrackerConfig::new(
+            face_cascade_path,
+            mouth_cascade_path,
+            target_dims,
+        ).with_smoothing_alpha(0.8);
 
         // GRID dataset instance
-        let dataset = GridDataset::new(&context, TokenMap::new(VOCAB), tracker_config);
+        let dataset = GridDataset::new(&context, TokenMap::new(VOCAB), Some(tracker_config));
 
         // obtain first valid GRID dataset item
         let item = dataset.get(rng.random_range(0..dataset.len()))

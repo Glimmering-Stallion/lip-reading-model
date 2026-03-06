@@ -10,11 +10,13 @@ use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 use reqwest::blocking::Client;
+use serde::{Serialize, de::DeserializeOwned};
 // use serde_json::Value;
 use std::{
     fs::{self, File},
     io::{self, BufRead, BufReader},
     path::Path,
+    error::Error,
     sync::{
         atomic::{
             AtomicU64,
@@ -25,6 +27,24 @@ use std::{
 };
 use zip::ZipArchive;
 use tar::Archive;
+
+
+
+/// general purpose JSON saver
+pub fn save_json<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> Result<(), Box<dyn Error>> {
+    let file = File::create(path)?;
+    serde_json::to_writer_pretty(file, data)?;
+    Ok(())
+}
+
+
+
+/// general purpose JSON loader
+pub fn load_json<P: AsRef<Path>, T: DeserializeOwned>(path: P) -> Result<T, Box<dyn Error>> {
+    let file = File::open(path)?;
+    let data = serde_json::from_reader(file)?;
+    Ok(data)
+}
 
 
 
@@ -46,7 +66,7 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
     prog_bar.set_style(
         ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({msg}) (ETA: {eta})")
             .unwrap()
-            .progress_chars("#>-"),
+            .progress_chars("#>-")
     );
     let kept_count = Arc::new(AtomicU64::new(0));
 

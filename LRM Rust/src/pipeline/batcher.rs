@@ -1,6 +1,6 @@
 //! Source-agnostic data collation and tensor batching.
 //! 
-//! This module implements the ```VsrmBatcher```, which standardizes varied dataset samples
+//! This module implements the `VsrmBatcher`, which standardizes varied dataset samples
 //! into GPU-ready tensors. It handles dynamic temporal padding for video frames and
 //! sequence padding for transcripts. This padding allows rectangular-ization of tensors for
 //! compatibility with CTC-loss calculations.
@@ -8,7 +8,7 @@
 
 
 // custom imports
-use crate::{vocab::BLANK_ID};
+use crate::{pipeline::dataset::DatasetStats, vocab::BLANK_ID};
 
 // imports
 use burn::{
@@ -49,16 +49,20 @@ pub struct VsrmItem {
 
 
 
+// VSRM Batcher containing backend device and normalization stats
+// these stats contain global frame pixel mean and std dev metadata
+// across videos of entire dataset of interest
 #[derive(Clone, Debug)]
 pub struct VsrmBatcher<B: Backend> {
     pub device: B::Device,
+    pub norm_stats: Option<DatasetStats>,
 }
 
 
 
 impl<B: Backend> VsrmBatcher<B> {
-    pub fn new(device: B::Device) -> Self {
-        Self { device }
+    pub fn new(device: B::Device, norm_stats: Option<DatasetStats>) -> Self {
+        Self { device, norm_stats}
     }
 }
 
@@ -119,15 +123,23 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
 
             let frames: Tensor<CpuB, 4> = Tensor::from_data(item.frames, &Default::default()); // [C, T, H, W] frames of the video
 
-            // preprocess frames
-            // 1. scale pixel values to [0, 1] range
-            // 2. calc mean and var with var_mean_bias on reshaped frames to get single mean and var across all pixels in video; reshape back to [C, T, H, W] for broadcasting
-            // 3. calc st dev from var, add small epsilon for numerical stability
-            // 4. standardize frames (by centering to zero mean and scaling to unit variance)
+            // preprocess and standardize frames by:
+            // - scaling pixel values to [0, 1] range
+            // - centering to zero mean
+            // - scaling to unit variance
             let frames = frames.div_scalar(255.0);
-            let (var, mean) = frames.clone().reshape([1, c * t * h * w]).var_mean_bias(1);
-            let st_dev = var.sqrt().add_scalar(1e-7);
-            let frames = frames.sub(mean.reshape([c, 1, 1, 1])).div(st_dev.reshape([c, 1, 1, 1]));
+            let frames = match self.norm_stats {
+                Some(stats) => {
+                    // global frame normalization when possible
+                    frames.sub_scalar(stats.mean).div_scalar(stats.std_dev)
+                }
+                None => {
+                    // per-sample frame normalization for unit tests / fallback
+                    let (var, mean) = frames.clone().reshape([1, c * t * h * w]).var_mean_bias(1);
+                    let st_dev = var.sqrt().add_scalar(1e-7);
+                    frames.sub(mean.reshape([c, 1, 1, 1])).div(st_dev.reshape([c, 1, 1, 1]))
+                }
+            };
 
             // if curr item's num frames are shorter than max timesteps, pad it
             let padded_frames = if t < max_t {

@@ -1,7 +1,7 @@
 //! Language Model (LM) abstractions and N-gram implementations for CTC beam search decoding。
 //! 
 //! This module provides the infrastructure for incorporating linquistic priors into CTC
-//! decoding. It defines the ```LanguageModel``` trait to allow for interchangeable scoring
+//! decoding. It defines the `LanguageModel` trait to allow for interchangeable scoring
 //! backends (e.g., N-grams, or future Neural LMs) during prefix beam search.
 
 

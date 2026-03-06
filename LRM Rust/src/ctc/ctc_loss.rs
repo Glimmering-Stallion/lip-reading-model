@@ -29,10 +29,10 @@ use burn::{
 #[derive(Debug, Config)]
 pub struct CtcLossConfig {
     #[config(default = "0")]
-    pub blank_id: usize, // ID of blank token in vocab
+    pub blank_id: usize,       // ID of blank token in vocab
 
     #[config(default = "Reduction::Mean")]
-    pub reduction: Reduction, // Burn's reduction method (mean, sum, auto)
+    pub reduction: Reduction,  // Burn's reduction method (mean, sum, auto)
 }
 
 

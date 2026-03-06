@@ -9,28 +9,35 @@
 
 // custom imports
 use crate::{
-    context::Context, ctc::{
+    context::Context,
+    ctc::{
         ctc_decode::{
             CtcDecodeType,
             CtcDecoderConfig,
-        }, ctc_loss::CtcLossConfig, lm::{
+        },
+        ctc_loss::CtcLossConfig,
+        lm::{
             LanguageModelConfig,
             NgramConfig,
         }
-    }, pipeline::{
+    },
+    pipeline::{
         adapters::grid::GridDataset, batcher::{
             Batch,
             VsrmBatcher,
         }, dataset::{
-            DatasetSource, DatasetSplit
-        }
-    }, training::metrics::{
-            CtcCharErrorRate,
-            CtcWordErrorRate,
-            VsrmStepOutput,
-        }, vocab::{BLANK_ID, TokenMap, VOCAB, VOCAB_SIZE}, vsrm::{
-        VsrModel,
-        VsrModelConfig,
+            DatasetSource,
+            DatasetSplit, DatasetStats,
+        }, io::{load_json, save_json}, tracker::LipTrackerConfig
+    },
+    training::metrics::{
+        CtcCharErrorRate,
+        CtcWordErrorRate,
+        VsrmStepOutput,
+    },
+    vocab::{BLANK_ID, TokenMap, VOCAB, VOCAB_SIZE},
+    vsrm::{
+        SummaryVisitor, VsrModel, VsrModelConfig
     }
 };
 
@@ -42,13 +49,14 @@ use burn::{
         dataset::Dataset,
     },
     lr_scheduler::{
-        composed::ComposedLrSchedulerConfig,
+        composed::{ComposedLrSchedulerConfig, SchedulerReduction},
         cosine::CosineAnnealingLrSchedulerConfig,
         linear::LinearLrSchedulerConfig,
     },
     module::Module,
     optim::AdamConfig,
     record::CompactRecorder,
+    Tensor,
     tensor::{
         ElementConversion,
         activation::log_softmax,
@@ -64,18 +72,14 @@ use burn::{
         TrainStep,
         metric::{
             Adaptor,
+            LearningRateMetric,
             LossInput,
             LossMetric,
         }
     },
 };
 use std::{
-    sync::Arc,
-    path::Path,
-    fs,
-    io::{self, Write},
-    time::Duration,
-    thread,
+    fs, io::{self, Write}, ops::Sub, path::Path, sync::Arc, thread, time::Duration
 };
 use log;
 
@@ -89,6 +93,9 @@ type ValidLoader<B> = Arc<dyn DataLoader<<B as AutodiffBackend>::InnerBackend, B
 
 #[derive(Config, Debug)]
 pub struct VsrmLearnerConfig  {
+    #[config(default = "(50, 100)")]
+    pub frame_dims: (usize, usize), // (height, width)
+
     #[config(default = 50)]
     pub num_epochs: usize,
 
@@ -140,10 +147,9 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
         let first_pred_chars = token_map.ids_to_chars(&first_pred_ids);
 
         // log to experiment.log
-        log::info!("--- TRAIN SAMPLE ---");
+        log::info!("=== TRAIN SAMPLE ===");
         if let Some(chars) = first_targ_chars { log::info!("  Target: {:?}", chars); }
         if let Some(chars) = first_pred_chars { log::info!("  Preds : {:?}", chars); }
-
 
         // ---------------------------------------------------------------------------------------
 
@@ -162,16 +168,18 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
             panic!("Loss contains non-finite values");
         }
 
-        // // ------------------------------- Entropy Regularization --------------------------------
+        // ------------------------------- Entropy Regularization --------------------------------
 
-        // // apply entropy regularization to loss to improve model generalization
-        // let lambda = 0.05; // scaling factor
-        // let log_probs = log_softmax(logits.clone(), 2);
-        // let probs = log_probs.clone().exp();
-        // let entropy = (probs * log_probs).sum_dim(2).mean().neg();
-        // let loss = loss - (entropy * lambda);
+        // let lambda = 20.0;                 // penalty scaling factor
+        // let min_entropy_threshold = 2.6;  // min threshold before entropy starts to penalize
+        // let penalty = calc_entropy_penalty(
+        //     logits.clone(),
+        //     lambda,
+        //     min_entropy_threshold,
+        // );
+        // let loss = loss.add(penalty);
 
-        // // ---------------------------------------------------------------------------------------
+        // ---------------------------------------------------------------------------------------
 
         let grads = loss.backward();
 
@@ -217,7 +225,7 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
         let first_pred_chars = token_map.ids_to_chars(&first_pred_ids);
 
         // log to experiment.log
-        log::info!("--- VALIDATION SAMPLE ---");
+        log::info!("=== VALIDATION SAMPLE ===");
         if let Some(chars) = first_targ_chars { log::info!("  Target: {:?}", chars); }
         if let Some(chars) = first_pred_chars { log::info!("  Pred  : {:?}", chars); }
 
@@ -288,30 +296,27 @@ where
 
     // ------------------------ Training learner, LR scheduling, and optimizer setup ------------------------
 
-    // find warmup steps for scheduler
     let num_items = train_dataloader.num_items();
     let num_batches = num_items.div_ceil(learner_config.batch_size);
     let total_steps = num_batches * learner_config.num_epochs;
-    let warmup_steps = (0.07 * total_steps as f64).floor() as usize;
-    let decay_steps = total_steps.saturating_sub(warmup_steps);
+    let warmup_steps = num_batches; // warmup over first epoch
 
     assert!(num_batches > 0, "Computed 0 batches for training");
     assert!(total_steps > 0, "Total training steps is 0");
     assert!(warmup_steps < total_steps, "Warmup steps ({}) must be less than total steps ({})", warmup_steps, total_steps);
 
-    // init warup and decay phase schedulers
-    // then init scheduler combining both for Linear + Cosine-Annealing
-    let warmup_scheduler = LinearLrSchedulerConfig::new(1e-10, learner_config.learning_rate, warmup_steps);
-    let decay_scheduler = CosineAnnealingLrSchedulerConfig::new(learner_config.learning_rate, decay_steps).with_min_lr(1e-6);
+    let lr = learner_config.learning_rate;
     let scheduler = ComposedLrSchedulerConfig::new()
-        .linear(warmup_scheduler)
-        .cosine(decay_scheduler)
+        .linear(LinearLrSchedulerConfig::new(0.01, 1.0, warmup_steps))
+        .cosine(CosineAnnealingLrSchedulerConfig::new(lr, total_steps).with_min_lr(lr / 10.0))
+        .with_reduction(SchedulerReduction::Prod)
         .init()
         .expect("Failed to initialize Composed Scheduler");
 
     // init optimizer and model
     let optimizer = learner_config.optimizer.init();
     let model = model_config.init::<B>(&device);
+    SummaryVisitor::summarize(&model);
 
     // learner instance (and move model to device)
     let mut learner = Learner::new(
@@ -354,7 +359,18 @@ where
 
     // -------------------------------------- VSRM training and saving --------------------------------------
 
-    println!("Training model {}", model_dir);
+    // ------------------------ Diagnostics ------------------------
+    println!("=== SCHEDULER DIAGNOSTICS ===");
+    println!("  Num Items:      {}",      num_items);
+    println!("  Num Batches:    {}",      num_batches);
+    println!("  Total Steps:    {}",      total_steps);
+    println!("  Warmup Steps:   {}",      warmup_steps);
+    println!("  Target LR:      {:.9}",   learner_config.learning_rate);
+    println!("  Accumulation:   {}",      learner_config.accumulation);
+    println!("=============================\n");
+    // -------------------------------------------------------------
+
+    println!("Training model: {}\n", model_dir);
 
     // trainer instance
     let trained_model = SupervisedTraining::new(
@@ -363,9 +379,10 @@ where
         valid_dataloader,
     )
         .metric_train_numeric(LossMetric::new())
+        .metric_train_numeric(LearningRateMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_valid_numeric(CtcCharErrorRate::new(greedy_decoder.clone()))
-        .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map))
+        // .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map))
         .with_file_checkpointer(CompactRecorder::new())
         .num_epochs(learner_config.num_epochs)
         .grads_accumulation(learner_config.accumulation)
@@ -406,8 +423,27 @@ where
 
     match dataset_src {
         DatasetSource::Grid => {
+            // mouth tracker instance
+            let tracker_config = LipTrackerConfig::new(
+                context.models_path.join("haarcascade_frontalface_alt2.xml"),
+                context.models_path.join("haarcascade_mcs_mouth.xml"),
+                learner_config.frame_dims,
+            );
+
             // dataset instance
-            let dataset = Arc::new(GridDataset::new(context, token_map, None));
+            let dataset = Arc::new(GridDataset::new(context, token_map, Some(tracker_config)));
+
+            // find global mean and std dev stats of all video frame pixels in GRID dataset (to use as input normalization)
+            let grid_stats_filename = format!("{}_stats.json", dataset_src.tag());
+            let grid_stats_path = dataset.grid_path.join(grid_stats_filename);
+            let grid_stats: DatasetStats = if grid_stats_path.exists() {
+                load_json(&grid_stats_path).expect("Failed to load cached GRID global mean and std dev stats")
+            } else {
+                let (mean, std_dev) = dataset.calc_global_stats();
+                let stats = DatasetStats::new(mean, std_dev);
+                save_json(&grid_stats_path, &stats).expect("Failed to cache GRID global mean and std dev stats");
+                stats
+            };
 
             // train/validation dataset instances
             let (train_dataset, valid_dataset, _) = DatasetSplit::split(
@@ -421,8 +457,8 @@ where
             assert!(valid_dataset.len() > 0, "Validation dataset is empty");
 
             // train/validation data batcher instances (train uses Autodiff B, while valid uses InnerBackend raw B)
-            let train_batcher = VsrmBatcher::<B>::new(device.clone());
-            let valid_batcher = VsrmBatcher::<B::InnerBackend>::new(device.clone());
+            let train_batcher = VsrmBatcher::<B>::new(device.clone(), Some(grid_stats));
+            let valid_batcher = VsrmBatcher::<B::InnerBackend>::new(device.clone(), Some(grid_stats));
 
             // train/validation data loader instances
             let train_dataloader = DataLoaderBuilder::new(train_batcher)
@@ -447,9 +483,49 @@ where
 
 
 
+/// apply entropy regularization to loss to improve model generalization
+/// goal: penalize model when it becomes too confident too fast (such as collapsing to repeating chars/blanks)
+/// formula: loss + lambda * max(0, (threshold - entropy))
+/// params:
+/// - logits: raw unnormalized model output scores over vocabulary
+/// - lambda: penalty scaling factor
+/// - min_entropy_threshold: min allowable entropy value before penalty increases overall loss
+/// returns: the final net penalty contribution towards model's output loss
+fn calc_entropy_penalty<B: Backend>(
+    logits: Tensor<B, 3>,
+    lambda: f32,
+    min_entropy_threshold: f32,
+) -> Tensor<B, 1> {
+    // find entropy (or rather negative entropy in this case)
+    // rule of thumb: (low entropy --> overconfident model --> higher penalty)
+    let log_probs = log_softmax(logits.clone(), 2); // negative log-probs
+    let probs = log_probs.clone().exp();                        // standard (0, 1] probs
+    let neg_entropy = (probs * log_probs).sum_dim(2).mean();
+
+    // find net entropy penalty
+    let penalty = neg_entropy
+        .add_scalar(min_entropy_threshold)     // (-entropy + threshold)
+        .clamp(0.0, f32::MAX)             // max(0, (-entropy + threshold))
+        .mul_scalar(lambda);                               // lambda * max(0, (-entropy + threshold))
+
+    // debugging: Log entropy stats
+    let log_probs = log_softmax(logits.clone(), 2);
+    let probs = log_probs.clone().exp();
+    let entropy_raw = (probs * log_probs).sum_dim(2).neg();           // [N, T] entropy per timestep
+    let entropy_mean = entropy_raw.clone().mean().into_scalar().elem::<f32>(); // average entropy (positive)
+    let entropy_min = entropy_raw.clone().min().into_scalar().elem::<f32>();   // min entropy (most confident)
+    let entropy_max = entropy_raw.clone().max().into_scalar().elem::<f32>();   // max entropy (least confident)
+    let penalty_val = penalty.clone().into_scalar().elem::<f32>();
+    log::info!("Entropy: mean = {:.3}, min = {:.3}, max = {:.3}, penalty = {:.4}", entropy_mean, entropy_min, entropy_max, penalty_val);
+
+    penalty
+}
+
+
+
 #[cfg(test)]
 mod tests {
-    use crate::{context::Context, pipeline::dataset};
+    use crate::context::Context;
 
     use super::*;
     use burn::{
@@ -491,7 +567,7 @@ mod tests {
         // let device = NdArrayDevice::Cpu;
 
         let lr = 1e-3;
-        let steps = 200;
+        let steps = 300;
         let mut initial_loss = 0.0;
         let mut current_loss = 0.0;
         let loss_threshold = 0.1;
@@ -525,8 +601,8 @@ mod tests {
         ).reshape([n, l]);
 
         // establish input/target lengths tensors
-        let input_lengths = Tensor::from_ints([t as i32, t as i32], &device);
-        let target_lengths = Tensor::from_ints([l as i32, l as i32], &device);
+        let input_lengths = Tensor::from_ints([t as i32], &device);
+        let target_lengths = Tensor::from_ints([l as i32], &device);
 
         // init optimizer
         let mut optim = AdamConfig::new()
@@ -536,7 +612,8 @@ mod tests {
             .init();
 
         // init VSR model
-        let mut model: VsrModel<TestBackend> = VsrModelConfig::new(frame_dims)
+        let mut model: VsrModel<TestBackend> = VsrModelConfig::new()
+            .with_frame_dims(frame_dims)
             .with_vocab_size(vocab_size)
             .with_blank_id(blank_id)
             .init(&device);
@@ -552,7 +629,7 @@ mod tests {
             .with_blank_id(blank_id)
             .init();
 
-        println!("--- OVERFITTING SYNTHETIC SAMPLE ---\n");
+        println!("=== OVERFITTING SYNTHETIC SAMPLE ===\n");
 
         // ------------------------- Debugging: Print Out Target Sequence ------------------------
 
@@ -619,6 +696,7 @@ mod tests {
     fn test_overfit_real_sample() {
         // test if a randomly initialized model can overfit a sample of real data (loss should drop significantly after 100 training steps)
 
+        let context = Context::new();
         let vocab = VOCAB;
         let vocab_size = VOCAB_SIZE;
         let blank_id = BLANK_ID;
@@ -629,18 +707,25 @@ mod tests {
         let seed = 69;
         let mut rng = StdRng::seed_from_u64(seed);
         let lr = 1e-3;
-        let steps = 200;
+        let steps = 300;
         let mut initial_loss = 0.0;
         let mut current_loss = 0.0;
         let loss_threshold = 0.1;
-        let frame_dims = (50, 150);
+        let frame_dims = (50, 100);
+
+        // init mouth tracker
+        let tracker_config = LipTrackerConfig::new(
+            context.models_path.join("haarcascade_frontalface_alt2.xml"),
+            context.models_path.join("haarcascade_mcs_mouth.xml"),
+            frame_dims,
+        );
 
         // grab single real sample from our actual dataset (GRID)
-        let dataset = GridDataset::new(&Context::new(), token_map.clone(), None);
+        let dataset = GridDataset::new(&context, token_map.clone(), Some(tracker_config));
         let dataset_item = dataset
             .get(rng.random_range(0..dataset.len()))
             .expect("Failed to get first item from dataset");
-        let batch = VsrmBatcher::<TestBackend>::new(device.clone())
+        let batch = VsrmBatcher::<TestBackend>::new(device.clone(), None)
             .batch(vec![dataset_item], &device.clone());
 
         // init optimizer
@@ -651,7 +736,8 @@ mod tests {
             .init();
 
         // init VSR model
-        let mut model: VsrModel<TestBackend> = VsrModelConfig::new(frame_dims)
+        let mut model: VsrModel<TestBackend> = VsrModelConfig::new()
+            .with_frame_dims(frame_dims)
             .with_vocab_size(vocab_size)
             .with_blank_id(blank_id)
             .init(&device);
@@ -667,7 +753,7 @@ mod tests {
             .with_blank_id(blank_id)
             .init();
 
-        println!("--- OVERFITTING REAL SAMPLE ---\n");
+        println!("=== OVERFITTING REAL SAMPLE ===\n");
 
         // check normalization on the fly
         let min = batch.inputs.clone().min().into_scalar().elem::<f32>();
@@ -737,6 +823,7 @@ mod tests {
     fn test_overfit_real_batch() {
         // test if a randomly initialized model can overfit a batch of real data
 
+        let context = Context::new();
         let vocab = VOCAB;
         let vocab_size = VOCAB_SIZE;
         let blank_id = BLANK_ID;
@@ -748,17 +835,28 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(seed);
         let n = 16; // batch size
         let lr = 1e-3;
-        let steps = 200;
+        let steps = 300;
         let mut initial_loss = 0.0;
         let mut current_loss = 0.0;
         let loss_threshold = 0.5;
         let frame_dims = (50, 150);
 
+        // init mouth tracker
+        let tracker_config = LipTrackerConfig::new(
+            context.models_path.join("haarcascade_frontalface_alt2.xml"),
+            context.models_path.join("haarcascade_mcs_mouth.xml"),
+            frame_dims,
+        );
+
         // grab 16 real samples from our actual dataset (GRID again)
-        let dataset = GridDataset::new(&Context::new(), token_map.clone(), None);
+        let dataset = GridDataset::new(&context, token_map.clone(), Some(tracker_config));
         let mut items = Vec::with_capacity(n);
-        for _ in 0..n { items.push(dataset.get(rng.random_range(0..dataset.len())).unwrap()); }
-        let batch = VsrmBatcher::<TestBackend>::new(device.clone())
+        while items.len() < n {
+            let idx = rng.random_range(0..dataset.len());
+            if let Some(valid_item) = dataset.get(idx) { items.push(valid_item); }
+            else { println!("Skipped invalid dataset item at index {}", idx) }
+        }
+        let batch = VsrmBatcher::<TestBackend>::new(device.clone(), None)
             .batch(items, &device.clone());
 
         // init optimizer
@@ -769,7 +867,8 @@ mod tests {
             .init();
 
         // init VSR model
-        let mut model: VsrModel<TestBackend> = VsrModelConfig::new(frame_dims)
+        let mut model: VsrModel<TestBackend> = VsrModelConfig::new()
+            .with_frame_dims(frame_dims)
             .with_vocab_size(vocab_size)
             .with_blank_id(blank_id)
             .init(&device);
@@ -785,7 +884,7 @@ mod tests {
             .with_blank_id(blank_id)
             .init();
 
-        println!("--- OVERFITTING REAL BATCH (16 SAMPLES) ---\n");
+        println!("=== OVERFITTING REAL BATCH (16 SAMPLES) ===\n");
 
         // check normalization on the fly
         let min = batch.inputs.clone().min().into_scalar().elem::<f32>();

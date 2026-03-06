@@ -1,7 +1,7 @@
 //! Dataset source abstractions and partitioning logic.
 //! 
-//! This module provides the ```DatasetSplit``` utility to create deterministic training,
-//! validation, and testing sets from a base dataset, as well as the ```DatasetSource```
+//! This module provides the `DatasetSplit` utility to create deterministic training,
+//! validation, and testing sets from a base dataset, as well as the `DatasetSource`
 //! enum to manage various data origins (e.g., GRID, LRW, etc.)
 
 
@@ -12,6 +12,7 @@ use rand::{
     SeedableRng,
     rngs::StdRng,
 };
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 
@@ -20,6 +21,14 @@ use std::sync::Arc;
 pub struct DatasetSplit<I> {
     dataset: Arc<dyn Dataset<I>>,
     indices: Vec<usize>,
+}
+
+
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct DatasetStats {
+    pub mean: f32,
+    pub std_dev: f32,
 }
 
 
@@ -80,6 +89,14 @@ impl<I: Send + Sync> Dataset<I> for DatasetSplit<I> {
 
     fn len(&self) -> usize {
         self.indices.len()
+    }
+}
+
+
+
+impl DatasetStats {
+    pub fn new(mean: f32, std_dev: f32) -> Self {
+        Self { mean, std_dev }
     }
 }
 

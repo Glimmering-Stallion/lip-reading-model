@@ -1,3 +1,5 @@
+#![recursion_limit = "2048"]
+
 // create new Rust project with cargo (separate dir name from package name):             cargo new "[dir name]" --name [package_name]
 // create new Rust project with cargo (but without auto creating new Git repo):          cargo new [dir name] --vcs none
 
@@ -26,14 +28,13 @@
 
 // imports
 use burn::{
-    optim::{
-        AdamConfig,
-        optim::decay::WeightDecayConfig,
-    },
     backend::{
-        {Autodiff, Wgpu},
+        Autodiff,
+        Wgpu,
         wgpu::WgpuDevice::DefaultDevice,
     },
+    grad_clipping::GradientClippingConfig,
+    optim::AdamConfig,
 };
 use lrm_rust::{
     ctc::lm::{LanguageModel},
@@ -92,7 +93,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // debugging
     println!("\nVocabulary: {:?}", VOCAB);
     println!("Vocabulary size: {}", VOCAB_SIZE);
-    println!("Blank token ID: {}\n", BLANK_ID);
+    println!("Blank token ID: {}", BLANK_ID);
+    println!("Blank token char: {}\n", VOCAB.chars().nth(BLANK_ID).unwrap());
     assert!(BLANK_ID < VOCAB_SIZE, "Blank ID ({}) is out of vocabulary size bounds ({})", BLANK_ID, VOCAB_SIZE);
     assert!(args.n > 0, "N-gram order ({}) must be greater than one", args.n);
 
@@ -158,7 +160,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .take(10000);
 
     let perplexity = lm.perplexity(Box::new(eval_sequences));
-    println!("N-gram LM perplexity on eval set: {:.3}", perplexity);
+    println!("N-gram LM perplexity on eval set: {:.3}\n", perplexity);
     assert!(perplexity.is_finite(), "LM perplexity ({}) is non-finite", perplexity);
 
     // ------------------------------------------- VSRM training --------------------------------------------
@@ -166,12 +168,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // define hyperparameters
     let vocab_size = VOCAB_SIZE;
     let blank_id = BLANK_ID;
-    let frame_dims = (50, 150); // height, width
-    let num_epochs = 30;
-    let batch_size = 8;
-    let learning_rate = 1e-4;
+    let frame_dims = (50, 100); // height, width
+    let num_epochs = 50;
+    let batch_size = 4;
+    let learning_rate = 3e-4;
     let num_workers = 4;
-    let accumulation = 1;
+    let accumulation = 2;
     let seed = 42;
     let device = DefaultDevice;
 
@@ -181,13 +183,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         .with_beta_1(0.9)
         .with_beta_2(0.999)
         .with_epsilon(1e-8)
-        .with_weight_decay(Some(WeightDecayConfig::new(1e-4)));
+        .with_weight_decay(None)
+        .with_grad_clipping(Some(GradientClippingConfig::Norm(5.0)));
 
-    let model_config = VsrModelConfig::new(frame_dims)
+    let model_config = VsrModelConfig::new()
+        .with_frame_dims(frame_dims)
         .with_vocab_size(vocab_size)
         .with_blank_id(blank_id);
 
     let learner_config = VsrmLearnerConfig {
+        frame_dims,
         num_epochs,
         batch_size,
         learning_rate,
