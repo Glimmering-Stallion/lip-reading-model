@@ -1,6 +1,6 @@
-//! Language Model (LM) abstractions and N-gram implementations for CTC beam search decoding。
-//! 
-//! This module provides the infrastructure for incorporating linquistic priors into CTC
+//! Language Model (LM) abstractions and N-gram implementations for CTC beam search decoding.
+//!
+//! This module provides the infrastructure for incorporating linguistic priors into CTC
 //! decoding. It defines the `LanguageModel` trait to allow for interchangeable scoring
 //! backends (e.g., N-grams, or future Neural LMs) during prefix beam search.
 
@@ -12,9 +12,10 @@ use burn::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    fs::File,
+    fs::{self, File},
     fmt::Debug,
     error::Error,
+    path::Path,
 };
 use bincode::{self, config};
 use serde::{
@@ -100,12 +101,17 @@ pub struct Ngram {
 
 
 impl LanguageModel for Ngram {
-    /// score a complete sequence using probability chain rule
-    /// sums log-probabilities of each character given its history
-    /// reminder: in log space for numerical stability
-    /// params:
-    /// - sequence: list of token IDs to evaluate
-    /// returns: total log-probability of the sequence
+    /// Scores a complete sequence using the probability chain rule.
+    /// 
+    /// Sums log-probabilities of each character given its history.
+    /// 
+    /// Reminder: in log space for numerical stability.
+    ///
+    /// ### Params:
+    /// - `sequence`: List of token IDs to evaluate.
+    ///
+    /// ### Returns:
+    /// Total log-probability of the sequence.
     fn score(&self, sequence: &[usize]) -> f32 {
         if sequence.is_empty() { return 0.0; } // log-prob of empty sequence is 0
 
@@ -122,13 +128,17 @@ impl LanguageModel for Ngram {
         total_log_prob
     }
 
-    /// calculate perplexity of LM on a dataset
-    /// by finding average neg log-prob and exponentiates it
-    /// metric for how well the probability distribution predicts a sample
-    /// params:
-    /// - data: iterator over validation sequences
-    /// returns: perplexity score (lower means more confidence in unseen data)
-    /// note: confidence ≠ accuracy
+    /// Calculates perplexity of LM on a dataset by finding average neg log-prob and exponentiating it.
+    /// 
+    /// Metric for how well the probability distribution predicts a sample.
+    ///
+    /// ### Params:
+    /// - `data`: Iterator over validation sequences.
+    ///
+    /// ### Returns:
+    /// Perplexity score (lower means more confidence in unseen data).
+    /// 
+    /// Note: confidence ≠ accuracy.
     fn perplexity(&self, data: Box<dyn Iterator<Item = Vec<usize>>>) -> f32 {
         let mut total_log_prob = 0.0;
         let mut total_tokens = 0;
@@ -149,13 +159,18 @@ impl LanguageModel for Ngram {
         (-avg_log_prob).exp()
     }
 
-    /// compute smoothed log-probability of a token given a prefix
-    /// uses Witten-Bell smoothing to interpolate between MLE and backoff probs
-    /// note: mutually recursive with "prob_backoff" to walk down N-gram orders
-    /// params:
-    /// - prefix: sequence of preceding token IDs
-    /// - next: candidate next token ID
-    /// returns: log-probability of 'next' following 'prefix'
+    /// Computes smoothed log-probability of a token given a prefix.
+    /// 
+    /// Uses Witten-Bell smoothing to interpolate between MLE and backoff probs.
+    /// 
+    /// Note: mutually recursive with `prob_backoff` to walk down N-gram orders.
+    ///
+    /// ### Params:
+    /// - `prefix`: Sequence of preceding token IDs.
+    /// - `next`: Candidate next token ID.
+    ///
+    /// ### Returns:
+    /// Log-probability of `next` following `prefix`.
     fn next_log_prob(&self, prefix: &[usize], next: usize) -> f32 {
         // get N-gram (prefix + next)
         let mut n_gram = prefix.to_vec();
@@ -195,11 +210,15 @@ impl Ngram {
         Ok(lm)
     }
 
-    /// train N-gram model on some corpus of text
-    /// accumulates counts for all N-grams, prefixes, and unique followers
-    /// params:
-    /// - data: iterator over training sequences
-    /// returns: none (updates internal state)
+    /// Trains N-gram model on some corpus of text.
+    /// 
+    /// Accumulates counts for all N-grams, prefixes, and unique followers.
+    ///
+    /// ### Params:
+    /// - `data`: Iterator over training sequences.
+    ///
+    /// ### Returns:
+    /// None (updates internal state).
     pub fn train(&mut self, data: Box<dyn Iterator<Item = Vec<usize>>>) {
         // map of prefix keys and unique follower sets
         let mut uf_container: HashMap<Vec<usize>, HashSet<usize>> = HashMap::new();
@@ -229,14 +248,20 @@ impl Ngram {
             .collect();
     }
 
-    /// calculate backoff probability for a token
-    /// used when a higher-order N-gram has insufficient data or to smooth MLE
-    /// provides "fallback" probability by calling "next_log_prob" with a reduced prefix
-    /// falls back from N-gram -> (n-1)-gram -> ... -> uniform unigram distribution
-    /// params:
-    /// - prefix: the current context being reduced
-    /// - next: the target token to score
-    /// returns: probability (f32) in linear space (0.0 to 1.0)
+    /// Calculates backoff probability for a token.
+    /// 
+    /// Used when a higher-order N-gram has insufficient data or to smooth MLE.
+    /// 
+    /// Provides "fallback" probability by calling `next_log_prob` with a reduced prefix.
+    /// 
+    /// Falls back from N-gram -> (n-1)-gram -> ... -> uniform unigram distribution.
+    ///
+    /// ### Params:
+    /// - `prefix`: The current context being reduced.
+    /// - `next`: The target token to score.
+    ///
+    /// ### Returns:
+    /// Probability (f32) in linear space (0.0 to 1.0).
     fn prob_backoff(&self, prefix: &[usize], next: usize) -> f32 {
         if prefix.is_empty() {
             // unigram base case
@@ -246,6 +271,57 @@ impl Ngram {
             let shorter_prefix = if prefix.len() > 1 { &prefix[1..] } else { &[] }; // drop first char
             self.next_log_prob(shorter_prefix, next).exp()
         }
+    }
+}
+
+
+
+/// Loads N-gram LM from disk if it exists; otherwise builds from training sequences and saves.
+/// - If `output_path` exists: load and return saved model.
+/// - If not: create fresh N-gram model, train on `train_sequences`, save to `output_path`, and return.
+///
+/// ### Params:
+/// - `output_path`: Path to the `.bin` file (load from here or save to here).
+/// - `n`: N-gram order (1–5).
+/// - `vocab_size`: Vocabulary size (including blank).
+/// - `train_sequences`: Iterator of token-ID sequences used for training when building from scratch.
+///
+/// ### Returns:
+/// The loaded or newly built `Ngram` model.
+pub fn build_or_load_ngram_lm<I>(
+    output_path: &Path,
+    n: usize,
+    vocab_size: usize,
+    train_sequences: I,
+) -> Result<Ngram, Box<dyn Error>>
+where
+    I: IntoIterator<Item = Vec<usize>>,
+    I::IntoIter: 'static,
+{
+    // does an LM already exist?
+    if output_path.exists() {
+        let path_str = output_path.to_str().ok_or("Invalid output path")?;
+        let lm = Ngram::load(path_str)?;
+        Ok(lm)
+    } else {
+        // init, train, and save N-gram LM
+        let mut lm = Ngram {
+            n,
+            vocab_size,
+            n_gram_counts: HashMap::new(),
+            prefix_counts: HashMap::new(),
+            unique_followers: HashMap::new(),
+        };
+
+        // safety check: make sure parent dir exists one more time just in case
+        if let Some(parent) = output_path.parent() { fs::create_dir_all(parent)?; }
+
+        lm.train(Box::new(train_sequences.into_iter()));
+        let path_str = output_path.to_str().ok_or("Invalid output path")?;
+        lm.save(path_str)?;
+
+        println!("Saved N-gram LM to {}\n", path_str);
+        Ok(lm)
     }
 }
 

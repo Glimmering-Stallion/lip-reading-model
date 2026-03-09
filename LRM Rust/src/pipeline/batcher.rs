@@ -71,12 +71,16 @@ impl<B: Backend> VsrmBatcher<B> {
 // stack data on CPU tensor first, then move that singular final Batch Tensor to GPU for model ingestion
 // (cheaper to move one big tensor to GPU than many small tensors)
 impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
-    /// create a batch from a list of dataset items
-    /// handles dynamic padding for both video frames and transcript sequences
-    /// params:
-    /// - items: list of [C, T, H, W] frames and sequence IDs
-    /// - device: backend device to load final tensors onto
-    /// returns: batch containing padded inputs [N, C, max_T, H, W] and targets [N, max_L]
+    /// Creates a batch from a list of dataset items.
+    /// 
+    /// Handles dynamic padding for both video frames and transcript sequences.
+    ///
+    /// ### Params:
+    /// - `items`: List of [C, T, H, W] frames and sequence IDs.
+    /// - `device`: Backend device to load final tensors onto.
+    ///
+    /// ### Returns:
+    /// Batch containing padded inputs [N, C, max_T, H, W] and targets [N, max_L].
     fn batch(&self, items: Vec<VsrmItem>, device: &B::Device) -> Batch<B> {
         assert!(!items.is_empty(), "VsrmBatcher received an empty batch");
 

@@ -137,11 +137,15 @@ impl Clone for CtcDecoder {
 
 
 impl CtcDecoder {
-    /// apply CTC decode for batch of samples
-    /// inputs assumed to be padded to max length in batch
-    /// params:
-    /// - inputs: [N, T, Vocab] logits from model
-    /// returns: sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L]
+    /// Applies CTC decode for batch of samples.
+    /// 
+    /// Inputs assumed to be padded to max timesteps length in batch.
+    ///
+    /// ### Params:
+    /// - `inputs`: [N, T, Vocab] logits from model.
+    ///
+    /// ### Returns:
+    /// Sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L].
     pub fn forward<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,
@@ -152,11 +156,15 @@ impl CtcDecoder {
         }
     }
 
-    /// greedy search decode for batch of samples
-    /// inputs assumed to be padded to max length in batch
-    /// params:
-    /// - inputs: [N, T, Vocab] logits from model
-    /// returns: sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L]
+    /// Greedy search decode for batch of samples.
+    /// 
+    /// Inputs assumed to be padded to max timesteps length in batch.
+    ///
+    /// ### Params:
+    /// - `inputs`: [N, T, Vocab] logits from model.
+    ///
+    /// ### Returns:
+    /// Sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L].
     fn greedy_search_decode<B: Backend>(
         &self,
         inputs: Tensor<B, 3>
@@ -180,11 +188,15 @@ impl CtcDecoder {
             .collect::<Vec<Vec<i64>>>()
     }
 
-    /// beam search decode for batch of samples
-    /// inputs assumed to be padded to max length in batch
-    /// params:
-    /// - inputs: [N, T, Vocab] logits from model
-    /// returns: sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L]
+    /// Beam search decode for batch of samples.
+    /// 
+    /// Inputs assumed to be padded to max timesteps length in batch.
+    ///
+    /// ### Params:
+    /// - `inputs`: [N, T, Vocab] logits from model.
+    ///
+    /// ### Returns:
+    /// Sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L].
     fn beam_search_decode<B: Backend>(
         &self,
         inputs: Tensor<B, 3>
@@ -209,15 +221,20 @@ impl CtcDecoder {
         top_seq_ids
     }
 
-    /// beam search decode for single sample
-    /// decoding obtained via: logits --> log softmax --> prefix beam search
-    /// works by:
-    /// - iteratively building prefix sequences of symbol IDs per timestep
-    /// - tracking their log-probabilities of ending in blank/non-blank (from VSRM and optional LM)
-    /// - pruning to top K most probable prefixes and vocab candidates for keeping search tractable
-    /// params:
-    /// - log_probs: log-probabilities for each vocab symbol per-timestep given by model [T, Vocab]
-    /// returns: sequence of predicted symbol IDs (collapsed path) [L]
+    /// Beam search decode for single sample.
+    /// 
+    /// Decoding obtained via: logits --> log softmax --> prefix beam search.
+    /// 
+    /// Works by:
+    /// - iteratively building prefix sequences of symbol IDs per timestep,
+    /// - tracking their log-probabilities of ending in blank/non-blank (from VSRM and optional LM),
+    /// - pruning to top K most probable prefixes and vocab candidates for keeping search tractable.
+    ///
+    /// ### Params:
+    /// - `log_probs`: Log-probabilities for each vocab symbol per-timestep given by model [T, Vocab].
+    ///
+    /// ### Returns:
+    /// Sequence of predicted symbol IDs (collapsed path) [L].
     #[inline]
     fn per_sample_decode<B: Backend>(
         &self,
@@ -410,14 +427,17 @@ impl CtcDecoder {
 
 
 
-/// helper function for greedy search to collapse a path by:
-/// - removing blanks and false duplicates (repeated chars between blanks)
-/// - keeping true duplicates (repeated chars separated by blanks)
-/// this helps to align time-based predictions with text-based targets
-/// params:
-/// - path: sequence of symbol int IDs deemed most probable by model (with blanks and duplicates) [T]
-/// - blank_id: id of blank token in vocab
-/// returns: collapsed sequence of symbol int IDs (without blanks or duplicates) [L]
+/// Helper function for greedy search to collapse a path by:
+/// - removing blanks and false duplicates (repeated chars between blanks),
+/// - keeping true duplicates (repeated chars separated by blanks).
+/// This helps to align time-based predictions with text-based targets.
+///
+/// ### Params:
+/// - `path`: Sequence of symbol int IDs deemed most probable by model (with blanks and duplicates) [T].
+/// - `blank_id`: ID of blank token in vocab.
+///
+/// ### Returns:
+/// Collapsed sequence of symbol int IDs (without blanks or duplicates) [L].
 pub fn collapse_path<T: PartialEq + Copy>(path: &[T], blank_id: T) -> Vec<T> {
     let mut collapsed_path = Vec::with_capacity(path.len());
     let mut prev = None;
@@ -438,6 +458,7 @@ pub fn collapse_path<T: PartialEq + Copy>(path: &[T], blank_id: T) -> Vec<T> {
 mod tests {
     use super::*;
     use crate::prelude::*;
+    use crate::ctc::lm::LanguageModelConfig;
     use std::{
         array,
         env,
@@ -454,8 +475,6 @@ mod tests {
 
     type B = NdArray<f32>;
 
-    use crate::prelude::*;
-    use crate::ctc::lm::LanguageModelConfig;
 
     // helper to create one-hot logits array of vocab size for testing
     fn one_hot_logits<const V: usize>(hot: usize, hi: f32, lo: f32) -> [f32; V] {
@@ -481,7 +500,7 @@ mod tests {
         let blank_id = BLANK_ID;
         let token_map = TokenMap::new(vocab);
 
-        let path = vec![7, 4, 4, blank_id, 11, blank_id, 11, 11, 14, 14, 28];
+        let path = vec![7, 4, 4, blank_id, 11, blank_id, 11, 11, 14, 14, 14]; // "h e e _ l _ l l o o o"
         let collapsed_path = collapse_path(&path, blank_id);
 
         println!("\nOriginal path IDs: {:?}", path);
@@ -489,7 +508,7 @@ mod tests {
         println!("Original path chars: {:?}", token_map.ids_to_chars(&path.clone()));
         println!("Collapsed path chars: {:?}\n", token_map.ids_to_chars(&collapsed_path.clone()));
 
-        assert_eq!(collapsed_path, vec![7, 4, 11, 11, 14, 28]);
+        assert_eq!(collapsed_path, vec![7, 4, 11, 11, 14]);
     }
 
     #[test]
@@ -539,8 +558,8 @@ mod tests {
         let token_map = TokenMap::new(VOCAB);
         let device = Default::default();
 
-        let ids_1 = [7, 4, 4, 40, 11, 40, 11, 11, 14, 14, 28]; // "h e e _ l _ l l o o !"
-        let ids_2 = [22, 22, 14, 40, 17, 17, 40, 11, 11, 3, 28]; // "w w o _ r r _ l l d !"
+        let ids_1 = [7, 4, 4, blank_id, 11, blank_id, 11, 11, 14, 14, 14]; // "h e e _ l _ l l o o o"
+        let ids_2 = [22, 22, 14, blank_id, 17, 17, blank_id, 11, 11, 3, 3]; // "w w o _ r r _ l l d d"
 
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
@@ -573,8 +592,8 @@ mod tests {
         println!("Decoded char sequences: {:?}\n", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
-        assert_eq!(decoded_id_sequences[0], vec![7, 4, 11, 11, 14, 28]); // expected collapsed path for sample 1
-        assert_eq!(decoded_id_sequences[1], vec![22, 14, 17, 11, 3, 28]); // expected collapsed path for sample 2
+        assert_eq!(decoded_id_sequences[0], vec![7, 4, 11, 11, 14]); // expected collapsed path for sample 1
+        assert_eq!(decoded_id_sequences[1], vec![22, 14, 17, 11, 3]); // expected collapsed path for sample 2
     }
 
     #[test]
@@ -625,8 +644,8 @@ mod tests {
         let token_map = TokenMap::new(VOCAB);
         let device = Default::default();
 
-        let ids_1 = [7, 4, 4, 40, 11, 40, 11, 11, 14, 14, 28];    // "h e e _ l _ l l o o !"
-        let ids_2 = [22, 22, 14, 40, 17, 17, 40, 11, 11, 3, 28];  // "w w o _ r r _ l l d !"
+        let ids_1 = [7, 4, 4, blank_id, 11, blank_id, 11, 11, 14, 14, 14];   // "h e e _ l _ l l o o o"
+        let ids_2 = [22, 22, 14, blank_id, 17, 17, blank_id, 11, 11, 3, 3];  // "w w o _ r r _ l l d d"
 
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
@@ -660,8 +679,8 @@ mod tests {
         println!("Decoded char sequences: {:?}\n", decoded_char_sequences);
 
         assert_eq!(decoded_id_sequences.len(), 2);
-        assert_eq!(decoded_id_sequences[0], vec![7, 4, 11, 11, 14, 28]);  // expected collapsed path for sample 1
-        assert_eq!(decoded_id_sequences[1], vec![22, 14, 17, 11, 3, 28]); // expected collapsed path for sample 2
+        assert_eq!(decoded_id_sequences[0], vec![7, 4, 11, 11, 14]);  // expected collapsed path for sample 1
+        assert_eq!(decoded_id_sequences[1], vec![22, 14, 17, 11, 3]); // expected collapsed path for sample 2
     }
 
     #[test]
@@ -677,8 +696,8 @@ mod tests {
         let token_map = TokenMap::new(VOCAB);
         let device = Default::default();
 
-        let ids_1 = [12, 0, 0, 40, 40, 19, 2, 2, 7, 7, 7];     // "m a a _ _ t c c h h h "
-        let ids_2 = [18, 20, 2, 40, 2, 4, 4, 18, 40, 18, 18];  // "s u c _ c e e s _ s s"
+        let ids_1 = [12, 0, 0, blank_id, blank_id, 19, 2, 2, 7, 7, 7];     // "m a a _ _ t c c h h h"
+        let ids_2 = [18, 20, 2, blank_id, 2, 4, 4, 18, blank_id, 18, 18];  // "s u c _ c e e s _ s s"
 
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
@@ -745,11 +764,11 @@ mod tests {
         let token_map = TokenMap::new(VOCAB);
         let device = Default::default();
 
-        let ids_1 = [6, 14, 40, 14, 3, 39, 6, 14, 14, 3, 40, 40, 40, 40];       // "g o _ o d   g o o d - - -"
-        let ids_2 = [11, 0, 19, 40, 19, 4, 17, 39, 11, 0, 19, 19, 4, 17];       // "l a t _ t e r   l a t t e r"
-        let ids_3 = [3, 8, 13, 40, 13, 4, 17, 39, 3, 8, 13, 13, 4, 17];         // "d i n _ n e r   d i n n e r"
-        let ids_4 = [18, 20, 15, 40, 15, 4, 17, 39, 18, 20, 15, 15, 4, 17];     // "s u p _ p e r   s u p p e r"
-        let ids_5 = [7, 14, 15, 40, 15, 4, 3, 39, 7, 14, 15, 15, 4, 3];         // "h o p _ p e d   h o p p e d"
+        let ids_1 = [6, 14, 27, 14, 3, 26, 6, 14, 14, 3, 27, 27, 27, 27];    // "g o _ o d   g o o d _ _ _"
+        let ids_2 = [11, 0, 19, 27, 19, 4, 17, 26, 11, 0, 19, 19, 4, 17];    // "l a t _ t e r   l a t t e r"
+        let ids_3 = [3, 8, 13, 27, 13, 4, 17, 26, 3, 8, 13, 13, 4, 17];      // "d i n _ n e r   d i n n e r"
+        let ids_4 = [18, 20, 15, 27, 15, 4, 17, 26, 18, 20, 15, 15, 4, 17];  // "s u p _ p e r   s u p p e r"
+        let ids_5 = [7, 14, 15, 27, 15, 4, 3, 26, 7, 14, 15, 15, 4, 3];      // "h o p _ p e d   h o p p e d"
 
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
@@ -758,11 +777,11 @@ mod tests {
         let chars_5 = token_map.ids_to_chars(&ids_5).unwrap();
 
         let expected_outputs = [
-            vec![6, 14, 14, 3, 39, 6, 14, 3],                     // "g o o d   g o d"
-            vec![11, 0, 19, 19, 4, 17, 39, 11, 0, 19, 4, 17],     // "l a t t e r   l a t e r"
-            vec![3, 8, 13, 13, 4, 17, 39, 3, 8, 13, 4, 17],       // "d i n n e r   d i n e r"
-            vec![18, 20, 15, 15, 4, 17, 39, 18, 20, 15, 4, 17],   // "s u p p e r   s u p e r"
-            vec![7, 14, 15, 15, 4, 3, 39, 7, 14, 15, 4, 3],       // "h o p p e d   h o p e d"
+            vec![6, 14, 14, 3, 26, 6, 14, 3],                     // "g o o d   g o d"
+            vec![11, 0, 19, 19, 4, 17, 26, 11, 0, 19, 4, 17],     // "l a t t e r   l a t e r"
+            vec![3, 8, 13, 13, 4, 17, 26, 3, 8, 13, 4, 17],       // "d i n n e r   d i n e r"
+            vec![18, 20, 15, 15, 4, 17, 26, 18, 20, 15, 4, 17],   // "s u p p e r   s u p e r"
+            vec![7, 14, 15, 15, 4, 3, 26, 7, 14, 15, 4, 3],       // "h o p p e d   h o p e d"
         ];
 
         // dummy logits for 5 samples, 14 timesteps, V vocab symbols (manually biased high blanks)

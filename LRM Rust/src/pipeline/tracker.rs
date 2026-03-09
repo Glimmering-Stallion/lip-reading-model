@@ -38,7 +38,7 @@ pub struct LipTrackerConfig {
     pub target_dims: (usize, usize),      // final target dimensions to rescale base frame to for mouth ROI (height, width)
 
     #[config(default = "25.0")]
-    pub max_gating_threshold: f32,            // max allowable Euclidean pixel distance that the mouth ROI center position can move between frames before we reject it as a glitch
+    pub max_gating_threshold: f32,        // max allowable Euclidean pixel distance that the mouth ROI center position can move between frames before we reject it as a glitch
 
     #[config(default = "3.0")]
     pub min_gating_threshold: f32,        // min allowable Euclidean pixel distance that the mouth ROI center position can move between frames before we reject it as noise
@@ -82,15 +82,19 @@ impl LipTrackerConfig {
 
 
 impl LipTracker {
-    /// function to hierarchically crop a given frame down to mouth region
-    /// works by:
-    /// - finding a valid ROI box over a detected face in the full frame
-    /// - reducing frame by narrowing search region to lower half of face
-    /// - finding a valid ROI box over a detected mouth in the reduced frame
-    /// - applying necessary scaling and cropping on that retected mouth region to match a given target dim
-    /// params:
-    /// - frame: the frame to process
-    /// returns: a frame cropped to the detected mouth region
+    /// Hierarchically crops a given frame down to mouth region.
+    /// 
+    /// Works by:
+    /// - finding a valid ROI box over a detected face in the full frame,
+    /// - reducing frame by narrowing search region to lower half of face,
+    /// - finding a valid ROI box over a detected mouth in the reduced frame,
+    /// - applying necessary scaling and cropping on that detected mouth region to match a given target dim.
+    ///
+    /// ### Params:
+    /// - `frame`: The frame to process.
+    ///
+    /// ### Returns:
+    /// A frame cropped to the detected mouth region.
     pub fn process_frame(&mut self, frame: &Mat) -> Result<Mat, Box<dyn Error>> {
         // obtain face ROI detection box from given frame
         let face_roi = match self.detect_face_roi(frame) {
@@ -151,12 +155,17 @@ impl LipTracker {
         Ok(self.rescale_to_target_dims(frame, final_roi))
     }
 
-    /// applies Kalman gating and temporal smoothing (EMA) to a given position in relation to a previous position in time to reduce small jittering and large jumps
-    /// first filters out a given position if the positional change relative to the previous change is beyond a threshold
-    /// then applies smoothing to the positional changes between current point and previous point using Exponential Moving Average
-    /// params:
-    /// - curr_point: the current position to evaluate
-    /// returns: a tamer filtered position
+    /// Applies Kalman gating and temporal smoothing (EMA) to a given position in relation to a previous position in time to reduce small jittering and large jumps.
+    /// 
+    /// First filters out a given position if the positional change relative to the previous change is beyond a threshold.
+    /// 
+    /// Then applies smoothing to the positional changes between current point and previous point using Exponential Moving Average.
+    ///
+    /// ### Params:
+    /// - `curr_point`: The current position to evaluate.
+    ///
+    /// ### Returns:
+    /// A filtered position.
     fn stabilize_position(&mut self, curr_point: Point2f) -> Point2f {
         match self.prev_center {
             Some(prev_point) => {
@@ -184,11 +193,15 @@ impl LipTracker {
         }
     }
 
-    /// looks for a face within a given full sized frame and applies a bounding box to it
-    /// this provides a reduced search region for the mouth ROI detection
-    /// params:
-    /// - frame: the given frame to determine the bounding box
-    /// returns: the best found bounding box rectangle
+    /// Looks for a face within a given full-sized frame and applies a bounding box to it.
+    /// 
+    /// This provides a reduced search region for the mouth ROI detection.
+    ///
+    /// ### Params:
+    /// - `frame`: The given frame to determine the bounding box.
+    ///
+    /// ### Returns:
+    /// The best found bounding box rectangle, or `None` if no face detected.
     pub fn detect_face_roi(&mut self, frame: &Mat) -> Option<Rect> {
         let mut face_detections = Vector::<Rect>::new();   // container for detected candidate face positions, given current frame
         let scale_factor = 1.1;                                           // how much image size is reduced at varying scales
@@ -214,11 +227,15 @@ impl LipTracker {
         face_detections.iter().max_by_key(|r| r.width * r.height)
     }
 
-    /// looks for a mouth within a given face frame and applies a bounding box to it
-    /// this enables position invariance for the video data that will be fed to the VSRM
-    /// params:
-    /// - frame: the given frame to determine the bounding box
-    /// returns: the best found bounding box rectangle
+    /// Looks for a mouth within a given face frame and applies a bounding box to it.
+    /// 
+    /// This enables position invariance for the video data that will be fed to the VSRM.
+    ///
+    /// ### Params:
+    /// - `frame`: The given frame to determine the bounding box.
+    ///
+    /// ### Returns:
+    /// The best found bounding box rectangle, or `None` if no mouth detected.
     pub fn detect_mouth_roi(&mut self, frame: &Mat) -> Option<Rect> {
         let mut mouth_detections = Vector::<Rect>::new();  // container for detected candidate mouth positions, given current frame
         let scale_factor = 1.1;                                           // how much image size is reduced at varying scales
@@ -244,12 +261,16 @@ impl LipTracker {
         mouth_detections.iter().max_by_key(|r| r.width * r.height)
     }
 
-    /// takes a frame and a rectangle, crops, clamps, and resizes it to the tracker struct's given target dims
-    /// this provides scale invariance
-    /// params:
-    /// - frame: the frame contents to apply processing to
-    /// - roi: the bounding box used to base the processing on
-    /// returns: a Mat array representing the newly processed frame
+    /// Takes a frame and a rectangle, crops, clamps, and resizes it to the tracker struct's given target dims.
+    /// 
+    /// This provides scale invariance.
+    ///
+    /// ### Params:
+    /// - `frame`: The frame contents to apply processing to.
+    /// - `roi`: The bounding box used to base the processing on.
+    ///
+    /// ### Returns:
+    /// A `Mat` array representing the newly processed frame.
     pub fn rescale_to_target_dims(&self, frame: &Mat, roi: Rect) -> Mat {
         // obtain base frame dims and target dims
         let (frame_height, frame_width, target_height, target_width) = (
@@ -299,11 +320,16 @@ impl LipTracker {
         resized_frame
     }
 
-    /// executes a given closure operation using current thread's local tracker
-    /// this hides the RefCell and thread_local logic from other files
-    /// params:
-    /// - tracker_config: the current thread's lip tracker config to initialize if it doesn't exist
-    /// - f: the closure to execute with a mutable reference to the tracker
+    /// Executes a given closure operation using current thread's local tracker.
+    /// 
+    /// This hides the `RefCell` and `thread_local` logic from other files.
+    ///
+    /// ### Params:
+    /// - `tracker_config`: The current thread's lip tracker config to initialize if it doesn't exist.
+    /// - `f`: The closure to execute with a mutable reference to the tracker.
+    ///
+    /// ### Returns:
+    /// The result of the closure `f`.
     pub fn with_local<F, R>(tracker_config: &LipTrackerConfig, f: F) -> R
     where
         F: FnOnce(&mut LipTracker) -> R,
@@ -317,7 +343,7 @@ impl LipTracker {
         })
     }
 
-    /// resets temporal smoothing state for a new video
+    /// Resets temporal smoothing state for a new video.
     pub fn reset_state(&mut self) { self.prev_center = None; }
 }
 

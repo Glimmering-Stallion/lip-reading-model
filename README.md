@@ -141,17 +141,55 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Current Status
 
-- I/O and data aqcuisition helper functions are finished.
-- Data adapting (at least for GRID), preprocessing, splitting, and batching pipeline is officially done.
-- Offline lip-reading inference and language model integration is functionally complete.
-- Greedy decoding and Beam Search decoding with a char-level N-gram language model both work end-to-end.
-- Training and validation pipeline is implemented and wired into Burn's learner framework.
-- Correctness of pipeline dataflow plus mathematical convergence of model verified through single-batch overfit unit tests.
-- Dynamic mouth tracking using haar cascades implemented.
-- Pending official VSRM train/eval using Burn's Learner framework.
-- Need to implement "train model from scratch" or "resume training on existing model" behavior in main.
-- Need to figure out about spaces between words for WER metric to be effective.
-- Planning FPS video standardization to unify potentially varying frame-rates between different video-transcript dataset sources.
+- **I/O and data acquisition:** Helper functions are finished.
+- **Data pipeline:** Adapting (at least for GRID corpus), preprocessing, splitting, and batching are done.
+- **Offline inference:** Lip-reading inference and LM integration are functionally complete.
+- **Decoding:** Greedy and Beam Search with char-level N-gram LM work end-to-end.
+- **Training:** Training and validation pipeline implemented and wired into Burn's learner framework.
+- **Verification:** Pipeline dataflow correctness and model convergence verified via single-batch overfit unit tests.
+- **Mouth tracking:** Dynamic mouth tracking using Haar cascades implemented.
+- **CLI:** Subcommands for build-lm, train (new/resume), and infer (stub, for now) are in place.
+
+## Pending / Future Work
+
+- **Standardized inference framework:** Add an inference path with a standardization component that mirrors the batcher's preprocessing (reuse `VsrmBatcher`, `DatasetStats`, `TokenMap` or other components where necessary; avoid creating unnecessary files).
+- **Inference subcommand wiring:** Wire inference subcommand to predictor (video loading + VSRM forward + CTC decode).
+- **Word separation in targets:** Decide whether alignment extraction should insert spaces between words and how to represent word boundaries for WER metrics.
+- **FPS video standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
+- **TCN normalization for causality:** Consider per-time-step normalization or Weight Normalization (WeightNorm) for TCN blocks. The TCN paper (Bai et al., 2018) used WeightNorm instead of BatchNorm or LayerNorm. WeightNorm normalizes convolution filter weights during the forward pass rather than activations; it requires no statistics over T or C at runtime, is strictly causal, and could be fast for live inference.
+
+## CLI Usage
+
+From the `LRM Rust` directory (project root):
+
+```
+# Build N-gram LM (trains if missing, else loads and evaluates perplexity)
+cargo run -- build-lm --model [lm.bin] --corpus [path/to/corpus.txt] --n [N-gram order]
+
+# Preprocess a specific dataset for the VSRM:
+cargo run -- preprocess --dataset [dataset_src]
+
+# Train new VSRM with default model ID "vsrm_{dataset_src}" (error if ID alr exists):
+cargo run -- train --model
+
+# Train new VSRM with custom model ID (error if ID alr exists):
+cargo run -- train --model [my_vsrm]
+
+# Resume training from latest checkpoint (uses last completed epoch):
+cargo run -- train --model [my_vsrm] --resume
+
+# Resume training from specified epoch checkpoint:
+cargo run -- train --model [my_vsrm] --resume [epoch]
+
+# Train using a subset of the dataset (e.g. fraction = 0.1 for 10%):
+cargo run -- train --model [...] --subset [fraction]
+
+# Keep all checkpoints (default: keep most recent only; enables resume from earlier epochs):
+cargo run -- train --model [...] --keep-all-checkpoints [on|off]
+
+# Inference on a specified video and write predictions to file (stub for now, predictor not yet wired)
+cargo run -- infer --model [my_model] --input [path/to/video.mpg] --output [predictions.txt]
+```
 
 ## Attributions
 
@@ -171,11 +209,15 @@ These cascade files are obtained from [opencv-processing/cascade-files](https://
 - Castrillón-Santana, M., Déniz-Suárez, O., Antón-Canalís, L., & Lorenzo-Navarro, J. (2008). **Face and Facial Feature Detection Evaluation.** *Third International Conference on Computer Vision Theory and Applications (VISAPP)*.
 
 ## References / Further Reading
+
 Resources that informed the implementation of concepts in this project:
 - **CTC loss:** [Sequence Modeling with CTC](https://distill.pub/2017/ctc/) (Hannun, 2017, Distill)
 - **CTC (original):** Graves et al. (2006). Connectionist Temporal Classification. ICML. [PDF](https://www.cs.toronto.edu/~graves/icml_2006.pdf)
 - **N-gram language models, smoothing (Witten-Bell, etc.):** Jurafsky, D. & Martin, J. H. *Speech and Language Processing* (3rd ed.), Ch. 3. [PDF](https://web.stanford.edu/~jurafsky/slp3/3.pdf)
-- **LipNet:** Assael et al. (2016). End-to-End Sentence-level Lipreading. [PDF](https://arxiv.org/abs/1611.01599)
+- **LipNet:** Assael et al. (2016). End-to-End Sentence-level Lipreading. [arXiv](https://arxiv.org/abs/1611.01599)
+- **Temporal Convolutional Networks (original):** Lea et al. (2016). Temporal Convolutional Networks for Action Segmentation and Detection. [arXiv](https://arxiv.org/abs/1611.05267)
+- **TCNs for sequence modeling (popularized):** Bai et al. (2018). An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling. [arXiv](https://arxiv.org/abs/1803.01271)
+- **AdamW optimizer** Loshchilov, I. & Hutter, F. (2019). Decoupled Weight Decay Regularization. ICLR. [arXiv](https://arxiv.org/abs/1711.05101)
 
 ## Project Tree
 
@@ -212,6 +254,7 @@ Lip Reading Model
 │  ├─ rust-toolchain.toml
 │  ├─ rustfmt.toml
 │  ├─ src
+│  │  ├─ cli.rs
 │  │  ├─ context.rs
 │  │  ├─ ctc
 │  │  │  ├─ ctc_decode.rs
@@ -231,7 +274,8 @@ Lip Reading Model
 │  │  │  ├─ dataset.rs
 │  │  │  ├─ io.rs
 │  │  │  ├─ mod.rs
-│  │  │  └─ tracker.rs
+│  │  │  ├─ tracker.rs
+│  │  │  └─ video.rs
 │  │  ├─ training
 │  │  │  ├─ learner.rs
 │  │  │  ├─ metrics.rs
@@ -248,8 +292,5 @@ Lip Reading Model
 │  ├─ target
 │  └─ tests
 ├─ NOTES.md
-├─ README.md
-└─ papers
-   ├─ 2006-Graves-CTC.pdf
-   └─ 2016-Assael-LipNet.pdf
+└─ README.md
 ```

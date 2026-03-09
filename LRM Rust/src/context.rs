@@ -24,6 +24,9 @@ pub struct Context {
 
 
 impl Context {
+    /// Creates a new `Context` with paths derived from `CARGO_MANIFEST_DIR`.
+    ///
+    /// Makes sure `models/`, `data/`, and `tests/` directories exist under project root.
     pub fn new() -> Self {
         // dynamically get Rust project root and relevant dir paths
         let rust_root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into()));

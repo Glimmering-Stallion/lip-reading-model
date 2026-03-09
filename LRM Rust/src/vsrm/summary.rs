@@ -20,7 +20,7 @@ use burn::{
     },
 };
 
-/// visitor that prints a summary table of module parameters (path, shape, count)
+/// Visitor that prints a summary table of module parameters (path, shape, count).
 ///
 /// Burn's Module::visit calls `visit_float`/`visit_int` (not the `_with_path` variants),
 /// so we override those and build path from `enter_module`/`exit_module`.

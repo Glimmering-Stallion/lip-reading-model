@@ -100,11 +100,15 @@ impl ResidualBlockConfig {
 
 
 impl<B: Backend> ResidualBlock<B> {
-    /// forward pass of a 3D Residual Block
-    /// applies: Conv3D --> GN --> ReLU --> Conv3D --> GN --> Res Sum --> ReLU
-    /// params:
-    /// - input: [N, C_in, T, H, W] the spatio-temporal tensor input
-    /// returns: [N, C_out, T', H', W'] where T', H', W' depend on stride S
+    /// Forward pass of a 3D Residual Block.
+    /// 
+    /// Applies: Conv3D --> GN --> ReLU --> Conv3D --> GN --> Res Sum --> ReLU.
+    ///
+    /// ### Params:
+    /// - `input`: [N, C_in, T, H, W] the spatio-temporal tensor input.
+    ///
+    /// ### Returns:
+    /// [N, C_out, T', H', W'] where T', H', W' depend on stride S.
     pub fn forward(&self, input: Tensor<B, 5>) -> Tensor<B, 5> {
         let residual = match &self.proj {
             Some(path) => path.forward(input.clone()),
@@ -124,10 +128,14 @@ impl<B: Backend> ResidualBlock<B> {
         x // post activation residual sum
     }
 
-    /// calculate how many additional frames of temporal context this ResBlock adds
-    /// since each block has two Conv3D layers with temporal stride 1:
-    /// formula: (k1_t - 1) + (k2_t - 1)
-    /// returns: temporal context as total number of frames
+    /// Calculates how many additional frames of temporal context this ResBlock adds.
+    /// 
+    /// Since each block has two Conv3D layers with temporal stride 1:
+    /// 
+    /// formula: (k1_t - 1) + (k2_t - 1).
+    ///
+    /// ### Returns:
+    /// Temporal context as total number of frames.
     pub fn receptive_field_contribution(&self) -> usize {
         let k1 = self.conv1.kernel_size[0];
         let k2 = self.conv2.kernel_size[0];
@@ -135,7 +143,8 @@ impl<B: Backend> ResidualBlock<B> {
         (k1 - 1) + (k2 - 1)
     }
 
-    /// returns: ID of the primary convolutional weight
-    /// useful for gradient tracking and per-layer optim stats
+    /// Returns ID of the primary convolutional weight.
+    /// 
+    /// Useful for gradient tracking and per-layer optim stats.
     pub fn primary_weight_id(&self) -> ParamId { self.conv1.weight.id.clone() }
 }

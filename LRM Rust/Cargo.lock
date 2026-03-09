@@ -3650,6 +3650,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "burn",
+ "bytemuck",
  "clap",
  "flate2",
  "image",

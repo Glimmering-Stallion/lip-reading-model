@@ -57,15 +57,19 @@ pub struct CtcLoss {
 
 
 impl CtcLoss {
-    /// compute CTC loss for batch of samples
-    /// since inputs/targets are padded to max length found in batch,
-    /// needs separate input/target lengths info for true lengths
-    /// params:
-    /// - inputs: [N, T_max, Vocab] (time-padded logits from model)
-    /// - targets: [N, L_max] (length-padded target sequences)
-    /// - input_lengths: [N] (non-padded lengths of inputs)
-    /// - target_lengths: [N] (non-padded lengths of targets)
-    /// returns: scalar loss (if reduction is mean or sum)
+    /// Computes CTC loss for a batch of samples.
+    ///
+    /// Since inputs/targets are padded to max length found in batch,
+    /// requires separate input/target lengths for true lengths.
+    ///
+    /// ### Params:
+    /// - `inputs`: [N, T_max, Vocab] (time-padded logits from model)
+    /// - `targets`: [N, L_max] (length-padded target sequences)
+    /// - `input_lengths`: [N] (non-padded lengths of inputs)
+    /// - `target_lengths`: [N] (non-padded lengths of targets)
+    ///
+    /// ### Returns:
+    /// Scalar loss (if reduction is mean or sum).
     pub fn forward<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,
@@ -81,18 +85,23 @@ impl CtcLoss {
         }
     }
 
-    /// like `forward`, but without reduction
-    /// since inputs/targets are padded to max length found in batch, needs separate input/target lengths info for true lengths
-    /// works by:
+    /// Like `forward`, but without reduction.
+    ///
+    /// Since inputs/targets are padded to max length found in batch, needs separate input/target lengths for true lengths.
+    /// Works by:
     /// - computing log-probs from logits via log softmax
     /// - modifying target sequences by interleaving blanks between symbols
-    /// - iteratively computing accummulated log-probabilities of all possible paths through time-sequence grid that align with the modified target sequence
-    /// params:
-    /// - inputs: [N, T_max, Vocab] (time-padded logits from model)
-    /// - targets: [N, L_max] (length-padded target sequences)
-    /// - input_lengths: [N] (non-padded lengths of inputs)
-    /// - target_lengths: [N] (non-padded lengths of targets)
-    /// returns: [N] (loss per sample in batch)
+    /// - iteratively computing accumulated log-probabilities of all possible paths through
+    /// time-sequence grid that align with the modified target sequence
+    ///
+    /// ### Params:
+    /// - `inputs`: [N, T_max, Vocab] (time-padded logits from model)
+    /// - `targets`: [N, L_max] (length-padded target sequences)
+    /// - `input_lengths`: [N] (non-padded lengths of inputs)
+    /// - `target_lengths`: [N] (non-padded lengths of targets)
+    ///
+    /// ### Returns:
+    /// [N] (loss per sample in batch)
     pub fn forward_no_reduction<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,
@@ -202,11 +211,14 @@ impl CtcLoss {
     }
 
 
-    /// interleave blank IDs into target sequences in batch for CTC loss computation
-    /// params:
-    /// - targets: [N, L_max] (length-padded target sequences)
-    /// - device: backend device to create tensors on
-    /// returns: [N, (2L + 1)] (target sequences with blanks interleaved, where L is original target length without blanks)
+    /// Interleaves blank IDs into target sequences in batch for CTC loss computation.
+    ///
+    /// ### Params:
+    /// - `targets`: [N, L_max] (length-padded target sequences)
+    /// - `device`: Backend device to create tensors on.
+    ///
+    /// ### Returns:
+    /// [N, (2L + 1)] (target sequences with blanks interleaved, where L is original target length without blanks)
     fn interleave_targets_with_blanks<B: Backend>(
         &self,
         targets: Tensor<B, 2, Int>, // [N, L_max]
@@ -238,11 +250,15 @@ impl CtcLoss {
         interleaved
     }
 
-    /// compute batch-wise skip validity masks for 1-pos and 2-pos jumps in time-sequence DP grid
-    /// params:
-    /// - interleaved_targets: [N, 2L + 1] (length-padded target sequences with blanks interleaved)
-    /// - device: backend device to create tensors on
-    /// returns: tuple of masks, where each is a [N, 2L + 1] bool tensor indicating whether it's valid to skip by 1 or 2 positions in DP grid at a position in blank-interleaved target sequence
+    /// Computes batch-wise skip validity masks for 1-pos and 2-pos jumps in time-sequence DP grid.
+    ///
+    /// ### Params:
+    /// - `interleaved_targets`: [N, 2L + 1] (length-padded target sequences with blanks interleaved)
+    /// - `device`: Backend device to create tensors on.
+    ///
+    /// ### Returns:
+    /// Tuple of masks, where each is a [N, 2L + 1] bool tensor indicating whether it's valid to skip by 1
+    /// or 2 positions in DP grid at a position in blank-interleaved target sequence.
     fn compute_skip_validity_masks<B: Backend>(
         &self,
         interleaved_targets: Tensor<B, 2, Int>,

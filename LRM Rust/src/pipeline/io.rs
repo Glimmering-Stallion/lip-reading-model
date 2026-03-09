@@ -14,7 +14,7 @@ use serde::{Serialize, de::DeserializeOwned};
 // use serde_json::Value;
 use std::{
     fs::{self, File},
-    io::{self, BufRead, BufReader},
+    io::{self, BufRead, BufReader, Read, Write},
     path::Path,
     error::Error,
     sync::{
@@ -30,7 +30,76 @@ use tar::Archive;
 
 
 
-/// general purpose JSON saver
+/// Generic 3D tensor serializer.
+///
+/// Saves a 3D sequence (e.g., video, mouth crops) to a structured binary file.
+/// Format: [u32: H] [u32: W] [u32: T] [raw bytes...]
+///
+/// T can be u8, f32, i32, etc. (must implement `bytemuck::Pod`).
+pub fn write_tensor_3d<T, P>(
+    path: P,
+    data: &[T],
+    shape: (usize, usize, usize),
+) -> Result<(), Box<dyn Error>>
+where
+    T: bytemuck::Pod,
+    P: AsRef<Path>,
+{
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = File::create(path)?;
+    let (h, w, t) = shape;
+
+    // write header metadata ([H, W, T] dims)
+    file.write_all(&(h as u32).to_le_bytes())?;
+    file.write_all(&(w as u32).to_le_bytes())?;
+    file.write_all(&(t as u32).to_le_bytes())?;
+
+    // write raw bytes of generic tensor data slice
+    let bytes: &[u8] = bytemuck::cast_slice(data);
+    file.write_all(bytes)?;
+
+    Ok(())
+}
+
+/// Generic 3D tensor deserializer.
+///
+/// Loads a 3D sequence from a structured binary file.
+/// Returns (data, (H, W, T)).
+pub fn read_tensor_3d<T, P>(path: P) -> Result<(Vec<T>, (usize, usize, usize)), Box<dyn Error>>
+where
+    T: bytemuck::Pod,
+    P: AsRef<Path>,
+{
+    let mut file = File::open(path)?;
+    let mut header = [0u8; 12];
+    file.read_exact(&mut header)?;
+
+    let h = u32::from_le_bytes(header[0..4].try_into()?) as usize;
+    let w = u32::from_le_bytes(header[4..8].try_into()?) as usize;
+    let t = u32::from_le_bytes(header[8..12].try_into()?) as usize;
+
+    let expected_bytes = h * w * t * std::mem::size_of::<T>();
+    let mut buf = vec![0u8; expected_bytes];
+    file.read_exact(&mut buf)?;
+
+    let data: Vec<T> = bytemuck::cast_slice(buf.as_slice()).to_vec();
+
+    Ok((data, (h, w, t)))
+}
+
+
+
+/// General-purpose JSON saver.
+///
+/// ### Params:
+/// - `path`: Path to write the JSON file.
+/// - `data`: Serializable data to save.
+///
+/// ### Returns:
+/// `Ok(())` on success, or an error on I/O or serialization failure.
 pub fn save_json<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> Result<(), Box<dyn Error>> {
     let file = File::create(path)?;
     serde_json::to_writer_pretty(file, data)?;
@@ -39,7 +108,13 @@ pub fn save_json<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> Result<(), 
 
 
 
-/// general purpose JSON loader
+/// General-purpose JSON loader.
+///
+/// ### Params:
+/// - `path`: Path to the JSON file to read.
+///
+/// ### Returns:
+/// Deserialized value of type `T`, or an error on I/O or deserialization failure.
 pub fn load_json<P: AsRef<Path>, T: DeserializeOwned>(path: P) -> Result<T, Box<dyn Error>> {
     let file = File::open(path)?;
     let data = serde_json::from_reader(file)?;
@@ -48,7 +123,14 @@ pub fn load_json<P: AsRef<Path>, T: DeserializeOwned>(path: P) -> Result<T, Box<
 
 
 
-/// stream all text lines under a corpus line by line while applying sampling and basic preprocessing (takes in a file path as String for ownership)
+/// Streams all text lines under a corpus line by line while applying sampling and basic preprocessing.
+///
+/// ### Params:
+/// - `file_path`: Path to the corpus file.
+/// - `sample_rate`: Fraction of lines to keep (0.0, 1.0]; each line is kept with this probability.
+///
+/// ### Returns:
+/// An iterator yielding preprocessed `String` lines.
 pub fn stream_corpus_lines<P: AsRef<Path>>(
     file_path: P,
     sample_rate: f64
@@ -107,7 +189,11 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
 
 
 
-/// extract zip file to a given path
+/// Extracts a zip file to a given path.
+///
+/// ### Params:
+/// - `zip_path`: Path to the zip file.
+/// - `extract_to`: Destination directory for extracted contents.
 pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
     let zip_path = zip_path.as_ref();
     let extract_to = extract_to.as_ref();
@@ -139,7 +225,11 @@ pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
 
 
 
-/// extract gzip file to a given path
+/// Extracts a gzip file to a given path.
+///
+/// ### Params:
+/// - `gzip_path`: Path to the gzip file.
+/// - `extract_to`: Destination path for the decompressed file.
 pub fn extract_gzip<P: AsRef<Path>, Q: AsRef<Path>>(gzip_path: P, extract_to: Q) {
     let gzip_path = gzip_path.as_ref();
     let extract_to = extract_to.as_ref();
@@ -162,7 +252,11 @@ pub fn extract_gzip<P: AsRef<Path>, Q: AsRef<Path>>(gzip_path: P, extract_to: Q)
 
 
 
-/// extract SLR corpus externally to a given path
+/// Extracts SLR corpus externally to a given path.
+/// Downloads from OpenSLR if not already present, then decompresses to `data/librispeech-lm-norm/librispeech-lm-norm.txt`.
+///
+/// ### Params:
+/// - `root_path`: Project root path (must contain or will create `data/librispeech-lm-norm`).
 pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
     let root_path = root_path.as_ref();
     let data_dir = root_path.join("data");

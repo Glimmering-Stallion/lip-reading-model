@@ -42,15 +42,18 @@ pub enum DatasetSource {
 
 
 impl<I> DatasetSplit<I> {
-    /// creates a new split from a base dataset, for example:
-    /// train (evaluation as remainder): 0.8 (80%),
-    /// validation (test as remainder): 0.1 (10%)
-    /// params:
-    /// - dataset: base dataset to split
-    /// - train_pct: percentage of total data to allocate for training, rest for evaluation (e.g. 0.8 for 80%)
-    /// - valid_pct: percentage of total data to allocate for validation, rest for testing (e.g. 0.1 for 10%)
-    /// - seed: random seed for deterministic shuffling before splitting
-    /// returns: a tuple of (train_split, eval_split, test_split) DatasetSplit instances
+    /// Creates a new split from a base dataset, for example:
+    /// - train (evaluation as remainder): 0.8 (80%),
+    /// - validation (test as remainder): 0.1 (10%).
+    ///
+    /// ### Params:
+    /// - `dataset`: Base dataset to split.
+    /// - `train_pct`: Percentage of total data to allocate for training, rest for evaluation (e.g. 0.8 for 80%).
+    /// - `valid_pct`: Percentage of total data to allocate for validation, rest for testing (e.g. 0.1 for 10%).
+    /// - `seed`: Random seed for deterministic shuffling before splitting.
+    ///
+    /// ### Returns:
+    /// A tuple of (`train_split`, `eval_split`, `test_split`) `DatasetSplit` instances.
     pub fn split(
         dataset: Arc<dyn Dataset<I>>,
         train_pct: f32,
@@ -109,4 +112,24 @@ impl DatasetSource {
             // DatasetSource::Lrw => "lrw", // maybe add later
         }
     }
+}
+
+
+
+/// Helper for obtaining a random subset of dataset entries out of the entire dataset.
+/// 
+/// ### Params:
+/// - `entries`: List of dataset entries from the entire dataset of interest.
+/// - `fraction`: Fractional subset of the dataset to sample from.
+/// 
+/// ### Returns:
+/// A random subset of `entries` of size `(len * fraction).round()`, clamped to [1, len].
+pub fn sample_subset_entries<T>(mut entries: Vec<T>, fraction: f32, seed: u64) -> Vec<T> {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let take = (entries.len() as f32 * fraction).round() as usize;
+    let take = take.max(1).min(entries.len());
+    let mut rng = StdRng::seed_from_u64(seed);
+    entries.shuffle(&mut rng);
+    entries.truncate(take);
+    entries
 }

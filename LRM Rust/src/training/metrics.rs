@@ -2,7 +2,7 @@
 //! 
 //! Provides implementations for Character Error Rate (CER) and Word Error Rate (WER)
 //! adapted to the Burn training dashboard. These metrics use Levenshtein distance to
-//! compare decoded model predictions against ground-truth targets aross normalized
+//! compare decoded model predictions against ground-truth targets across normalized
 //! sequences.
 
 
@@ -28,17 +28,21 @@ use burn::{
     },
 };
 use std::{
-    cmp::min,
     sync::Arc,
     marker::PhantomData,
 };
 
-use crate::{ctc::ctc_decode::CtcDecoder, vocab::TokenMap};
+use crate::{
+    ctc::ctc_decode::CtcDecoder,
+    utils::levenshtein,
+    vocab::TokenMap
+};
 
 
 
-/// raw result of a training/validation step
-/// training/validation step will return this
+/// Raw result returned by a training/validation step.
+///
+/// Contains loss, logits, targets, and lengths for downstream metrics and Burn's loss graph.
 pub struct VsrmStepOutput<B: Backend> {
     pub loss: Tensor<B, 1>,                 // [N]
     pub outputs: Tensor<B, 3>,              // [N, T, V] (logits)
@@ -49,8 +53,9 @@ pub struct VsrmStepOutput<B: Backend> {
 
 
 
-/// standardized input for CTC-compatible metrics
-/// custom CER/WER metrics will intake this
+/// Standardized input for CTC-compatible metrics.
+///
+/// Custom CER/WER metrics consume this type via Burn's `Adaptor` trait.
 pub struct VsrmMetricInput<B: Backend> {
     pub loss: Tensor<B, 1>,                 // [N]
     pub inputs: Tensor<B, 3>,               // [N, T, V] (logits)
@@ -61,8 +66,9 @@ pub struct VsrmMetricInput<B: Backend> {
 
 
 
-/// tracks Character Error Rate (CER) over an epoch
-/// compares raw token ID sequences
+/// Tracks Character Error Rate (CER) over an epoch.
+///
+/// Compares raw token ID sequences using Levenshtein distance.
 #[derive(Clone)]
 pub struct CtcCharErrorRate<B: Backend> {
     decoder: CtcDecoder,
@@ -73,8 +79,9 @@ pub struct CtcCharErrorRate<B: Backend> {
 
 
 
-/// tracks Word Error Rate (WER) over an epoch
-/// compares white-space-separated word sequences
+/// Tracks Word Error Rate (WER) over an epoch.
+///
+/// Compares white-space-separated word sequences using Levenshtein distance.
 #[derive(Clone)]
 pub struct CtcWordErrorRate<B: Backend> {
     decoder: CtcDecoder,
@@ -86,7 +93,7 @@ pub struct CtcWordErrorRate<B: Backend> {
 
 
 
-/// marks step output as ready for async processing by Burn's Metric system
+/// Marks step output as ready for async processing by Burn's Metric system.
 impl<B: Backend> ItemLazy for VsrmStepOutput<B> {
     type ItemSync = Self;
 
@@ -97,7 +104,7 @@ impl<B: Backend> ItemLazy for VsrmStepOutput<B> {
 
 
 
-/// translator to feed standard Burn Loss graph
+/// Translator to feed standard Burn Loss graph.
 impl<B: Backend> Adaptor<LossInput<B>> for VsrmStepOutput<B> {
     fn adapt(&self) -> LossInput<B> {
         LossInput::new(self.loss.clone())
@@ -106,7 +113,7 @@ impl<B: Backend> Adaptor<LossInput<B>> for VsrmStepOutput<B> {
 
 
 
-/// translator to feed our custom CER/WEr metrics
+/// Translator to feed our custom CER/WER metrics.
 impl<B: Backend> Adaptor<VsrmMetricInput<B>> for VsrmStepOutput<B> {
     fn adapt(&self) -> VsrmMetricInput<B> {
         VsrmMetricInput {
@@ -122,6 +129,13 @@ impl<B: Backend> Adaptor<VsrmMetricInput<B>> for VsrmStepOutput<B> {
 
 
 impl<B: Backend> CtcCharErrorRate<B> {
+    /// Creates a CER metric with the given CTC decoder.
+    ///
+    /// ### Params:
+    /// - `decoder`: CTC decoder for greedy or beam-search decoding of logits to token sequences.
+    ///
+    /// ### Returns:
+    /// A new `CtcCharErrorRate` instance.
     pub fn new(decoder: CtcDecoder) -> Self {
         Self {
             decoder,
@@ -135,6 +149,14 @@ impl<B: Backend> CtcCharErrorRate<B> {
 
 
 impl<B: Backend> CtcWordErrorRate<B> {
+    /// Creates a WER metric with the given CTC decoder and token map.
+    ///
+    /// ### Params:
+    /// - `decoder`: CTC decoder for greedy or beam-search decoding of logits to token sequences.
+    /// - `token_map`: Bidirectional char-to-ID mapping for converting IDs to words.
+    ///
+    /// ### Returns:
+    /// A new `CtcWordErrorRate` instance.
     pub fn new(decoder: CtcDecoder, token_map: TokenMap) -> Self {
         Self {
             decoder,
@@ -148,7 +170,7 @@ impl<B: Backend> CtcWordErrorRate<B> {
 
 
 
-/// required to plot CER as a numerical val in the training dashboard
+/// Required to plot CER as a numerical value in the training dashboard.
 impl<B: Backend> Numeric for CtcCharErrorRate<B> {
     fn value(&self) -> NumericEntry {
         if self.total_chars == 0 { NumericEntry::Value(0.0) }
@@ -167,7 +189,7 @@ impl<B: Backend> Numeric for CtcCharErrorRate<B> {
 
 
 
-/// required to plot WER as a numerical val in the training dashboard
+/// Required to plot WER as a numerical value in the training dashboard.
 impl<B: Backend> Numeric for CtcWordErrorRate<B> {
     fn value(&self) -> NumericEntry {
         if self.total_words == 0 { NumericEntry::Value(0.0) }
@@ -186,7 +208,7 @@ impl<B: Backend> Numeric for CtcWordErrorRate<B> {
 
 
 
-/// for real-time plotting to visualize CER progression in the training dashboard
+/// For real-time plotting to visualize CER progression in the training dashboard.
 impl<B: Backend> Metric for CtcCharErrorRate<B> {
     type Input = VsrmMetricInput<B>;
 
@@ -195,11 +217,14 @@ impl<B: Backend> Metric for CtcCharErrorRate<B> {
         Arc::new(format!("CTC Decoder Char Error Rate ({:?})", mode))
     }
 
-    /// processes a batch of logits to compute running CER
-    /// params:
-    /// - input_item: container for model loss, logits, ground truth target IDs as well as logit/target lengths
-    /// - _metadata: progress tracking from Burn learner
-    /// returns: a SerializedEntry container of formatted CER percentage and raw float val for plotting
+    /// Processes a batch of logits to compute running CER.
+    ///
+    /// ### Params:
+    /// - `input_item`: Container for model loss, logits, ground truth target IDs as well as logit/target lengths.
+    /// - `_metadata`: Progress tracking from Burn learner.
+    ///
+    /// ### Returns:
+    /// A `SerializedEntry` container of formatted CER percentage and raw float val for plotting.
     fn update(&mut self, input_item: &VsrmMetricInput<B>, _metadata: &MetricMetadata) -> SerializedEntry {
         // decode logits to predicted token sequences (tensor to vec)
         let predictions = self.decoder.forward(input_item.inputs.clone())
@@ -254,7 +279,7 @@ impl<B: Backend> Metric for CtcCharErrorRate<B> {
 
 
 
-/// for real-time plotting to visualize WER progression in the training dashboard
+/// For real-time plotting to visualize WER progression in the training dashboard.
 impl<B: Backend> Metric for CtcWordErrorRate<B> {
     type Input = VsrmMetricInput<B>;
 
@@ -263,12 +288,15 @@ impl<B: Backend> Metric for CtcWordErrorRate<B> {
         Arc::new(format!("CTC Decoder Word Error Rate ({:?})", mode))
     }
 
-    /// processes a batch of logits to compute running WER
-    /// decodes sequence IDs, maps to chars with TokenMap, and splits by whitespace
-    /// params:
-    /// - input_item: container for model loss, logits, ground truth target IDs as well as logit/target lengths
-    /// - _metadata: progress tracking from Burn learner
-    /// returns: a SerializedEntry container of formatted WER percentage and raw float val for plotting
+    /// Processes a batch of logits to compute running WER.
+    /// Decodes sequence IDs, maps to chars with `TokenMap`, and splits by whitespace.
+    ///
+    /// ### Params:
+    /// - `input_item`: Container for model loss, logits, ground truth target IDs as well as logit/target lengths.
+    /// - `_metadata`: Progress tracking from Burn learner.
+    ///
+    /// ### Returns:
+    /// A `SerializedEntry` container of formatted WER percentage and raw float val for plotting.
     fn update(&mut self, input_item: &VsrmMetricInput<B>, _metadata: &MetricMetadata) -> SerializedEntry {
         // decode logits to predicted token sequences (tensor to vec)
         let predictions = self.decoder.forward(input_item.inputs.clone())
@@ -338,42 +366,17 @@ impl<B: Backend> Metric for CtcWordErrorRate<B> {
 
 
 
-/// edit distance solver for finding min number of edits needed to change one sequence into another
-/// params:
-/// - seq1: predicted sequence of items (IDs/words)
-/// - seq2: ground truth sequence of items
-/// returns: total count of insertions, deletions, and substitutions
-fn levenshtein<T: PartialEq>(seq1: &[T], seq2: &[T]) -> usize {
-    if seq1 == seq2 { return 0 }
-    if seq1.is_empty() { return seq2.len() }
-    if seq2.is_empty() { return seq1.len() }
 
-    let mut col: Vec<usize> = (0..=seq2.len()).collect();
-
-    for (i, el1) in seq1.iter().enumerate() {
-        let mut last_diag = col[0];
-        col[0] = i + 1;
-        for (j, el2) in seq2.iter().enumerate() {
-            let old_col_j = col[j + 1];
-            col[j + 1] = if el1 == el2 {
-                last_diag
-            } else {
-                1 + min(min(col[j], col[j + 1]), last_diag)
-            };
-            last_diag = old_col_j;
-        }
-    }
-    col[seq2.len()]
-}
-
-
-
-/// transform padded batch tensor into a ragged vector of sequences
-/// conversion performed by: tensor --> data --> flat slice --> chunk by length
-/// params:
-/// - data_tensor: padded tensor containing batch sequences [N, Max_L]
-/// - lengths_tensor: tensor containing the actual length of each sequence [N]
-/// returns: a ragged vector of sequences with padding removed [[L1], [L2], ... [LN]]
+/// Transforms padded batch tensor into a ragged vector of sequences.
+///
+/// Conversion performed by: tensor → data → flat slice → chunk by length.
+///
+/// ### Params:
+/// - `data_tensor`: Padded tensor containing batch sequences [N, Max_L].
+/// - `lengths_tensor`: Tensor containing the actual length of each sequence [N].
+///
+/// ### Returns:
+/// A ragged vector of sequences with padding removed [[L1], [L2], ... [LN]].
 fn unpad_to_vec<B: Backend>(
     data_tensor: Tensor<B, 2, Int>,
     lengths_tensor: Tensor<B, 1, Int>,

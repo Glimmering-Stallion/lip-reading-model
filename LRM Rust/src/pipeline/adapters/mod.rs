@@ -2,7 +2,7 @@
 
 //! data preprocessing and standardization components
 //!
-//! - `grid`: preprocessor for GRID audio-visual sentence corpus
+//! - `grid`: preprocessor and adapter for GRID audio-visual sentence corpus
 
 pub mod grid;
 // pub mod lrw;

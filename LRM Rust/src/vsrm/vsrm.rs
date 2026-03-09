@@ -130,11 +130,13 @@ pub struct ParamIds {
     pub fc_w: ParamId,
 }
 
-/// helper that computes and prints basic distribution statistics for a given tensor
-/// used for identifying vanishing/exploding gradients or activations
-/// params:
-/// - name: label for console output
-/// - t: tensor to analyze [D-dimensional]
+/// Helper that computes and prints basic distribution statistics for a given tensor.
+/// 
+/// Used for identifying vanishing/exploding gradients or activations.
+///
+/// ### Params:
+/// - `name`: Label for console output.
+/// - `t`: Tensor to analyze [D-dimensional].
 #[cfg(test)]
 fn stats_any<B: Backend, const D: usize>(
     name: &str,
@@ -170,10 +172,11 @@ fn stats_any<B: Backend, const D: usize>(
     _t: &Tensor<B, D>,
 ) {}
 
-/// specific helper for logging gradient magnitudes during backpropagation
-/// params:
-/// - label: name of the parameter layer
-/// - t: 1D tensor containing flattened gradient values
+/// Specific helper for logging gradient magnitudes during backpropagation.
+///
+/// ### Params:
+/// - `label`: Name of the parameter layer.
+/// - `t`: 1D tensor containing flattened gradient values.
 #[cfg(test)]
 fn print_grad_stats<B: Backend, const D: usize>(label: &str, t: &Tensor<B, D>) {
     let v = t.clone().to_data().convert::<f32>();
@@ -273,16 +276,19 @@ pub struct VsrModel<B: Backend> {
 
 
 impl<B: Backend> VsrModel<B> {
-    /// initializes full VSRM architecture with frontend CNN and backend TCN
-    /// params:
-    /// - in_channels: input video channels (usually always 1 for grayscale)
-    /// - out_channels: base feature width (determines hidden sizes of TCN)
-    /// - hidden_dim: latent dimension for TCN block layers
-    /// - frame_dims: tuple of (height, width) for spatial input
-    /// - norm_groups: number of groups for GroupNorm (must divide channel counts)
-    /// - vocab_size: total number of character classes for output
-    /// - device: backend device for initialization
-    /// returns: initialized VSR model with precomputed receptive field metadata
+    /// Initializes full VSRM architecture with frontend CNN and backend TCN.
+    ///
+    /// ### Params:
+    /// - `in_channels`: Input video channels (usually 1 for grayscale).
+    /// - `out_channels`: Base feature width (determines hidden sizes of TCN).
+    /// - `hidden_dim`: Latent dimension for TCN block layers.
+    /// - `frame_dims`: Tuple of (height, width) for spatial input.
+    /// - `norm_groups`: Number of groups for GroupNorm (must divide channel counts).
+    /// - `vocab_size`: Total number of character classes for output.
+    /// - `device`: Backend device for initialization.
+    ///
+    /// ### Returns:
+    /// An initialized VSR model with precomputed receptive field metadata.
     pub fn new(
         in_channels: usize,
         out_channels: usize,
@@ -399,7 +405,7 @@ impl<B: Backend> VsrModel<B> {
 
             let mut data = bias_param.val().to_data();
             
-            // optionally force initial blank prob down here so other chars can breathe
+            // optionally tweak initial blank prob up/down here so other chars can breathe
             if let Ok(values) = data.as_mut_slice::<f32>() { values[blank_id] = 5.0; }
             
             // re-upload to device and update layer
@@ -433,11 +439,15 @@ impl<B: Backend> VsrModel<B> {
         }
     }
 
-    /// forward pass of VSRM architecture
-    /// processes raw video frames into raw unnormalized character scores (logits)
-    /// params:
-    /// - input: [N, C, T, H, W]  batch of video frames
-    /// returns: [N, T, Vocab]    logits for each timestep
+    /// Forward pass of VSRM architecture.
+    /// 
+    /// Processes raw video frames into raw unnormalized character scores (logits).
+    ///
+    /// ### Params:
+    /// - `input`: [N, C, T, H, W] batch of video frames.
+    ///
+    /// ### Returns:
+    /// [N, T, Vocab] logits for each timestep.
     pub fn forward(&self, input: Tensor<B, 5>) -> Tensor<B, 3> {
         // note: N is samples per batch (batch size), C is channels, T is timesteps (number of frames), H is height (frame dim y), W is width (frame dim x)
 
@@ -474,7 +484,10 @@ impl<B: Backend> VsrModel<B> {
         y
     }
 
-    /// compute total receptive field of VSR model
+    /// Helper that computes total receptive field of VSR model.
+    ///
+    /// ### Returns:
+    /// Total number of temporal frames the model can see.
     pub fn total_receptive_field(&self) -> usize {
         let mut total_rf = 1;
 
@@ -493,8 +506,10 @@ impl<B: Backend> VsrModel<B> {
         total_rf
     }
 
-    /// maps parameter IDs for weight inspection in autodiff mode
-    /// returns: container of IDs for ResBlock and Linear layers
+    /// Maps parameter IDs for weight inspection in autodiff mode.
+    ///
+    /// ### Returns:
+    /// Container of IDs for ResBlock and Linear layers.
     pub fn param_ids(&self) -> ParamIds {
         ParamIds {
             rb1_w: self.rb1.primary_weight_id(),
@@ -509,9 +524,10 @@ impl<B: Backend> VsrModel<B> {
 
 #[cfg(test)]
 impl<B0: Backend> VsrModel<Autodiff<B0>> {
-    /// prints statistical summaries of current gradients across major layers
-    /// params:
-    /// - grads: gradient container from current training iteration
+    /// Prints statistical summaries of current gradients across major layers.
+    ///
+    /// ### Params:
+    /// - `grads`: Gradient container from current training iteration.
     pub fn debug_print_grads(&self, grads: &GradientsParams) {
         let ids = self.param_ids();
         if let Some(g) = grads.get::<B0, 5>(ids.rb1_w) { print_grad_stats("grad rb1.weight", &g); }
@@ -520,10 +536,12 @@ impl<B0: Backend> VsrModel<Autodiff<B0>> {
         if let Some(g) = grads.get::<B0, 2>(ids.fc_w) { print_grad_stats("grad fc.weight", &g); }
     }
 
-    /// logs exact tensor shapes at every stage of the forward pass
-    /// execution is guarded by PRINT_ONCE to prevent console flooding
-    /// params:
-    /// - input: [N, C, T, H, W] sample input tensor
+    /// Logs exact tensor shapes at every stage of the forward pass.
+    /// 
+    /// Execution is guarded by `PRINT_ONCE` to prevent console flooding.
+    ///
+    /// ### Params:
+    /// - `input`: [N, C, T, H, W] sample input tensor.
     pub fn inspect_shapes_once(&self, input: Tensor<Autodiff<B0>, 5>) {
         PRINT_ONCE.call_once(|| {
             println!("IN (N, C, T, H, W): {:?}", input.dims());

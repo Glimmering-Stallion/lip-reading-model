@@ -9,6 +9,7 @@
 
 // custom imports
 use crate::{
+    cli::resolve_from_checkpoint,
     context::Context,
     ctc::{
         ctc_decode::{
@@ -16,70 +17,87 @@ use crate::{
             CtcDecoderConfig,
         },
         ctc_loss::CtcLossConfig,
-        lm::{
-            LanguageModelConfig,
-            NgramConfig,
-        }
     },
     pipeline::{
-        adapters::grid::GridDataset, batcher::{
+        adapters::grid::GridDataset,
+        batcher::{
             Batch,
             VsrmBatcher,
-        }, dataset::{
+        },
+        dataset::{
             DatasetSource,
-            DatasetSplit, DatasetStats,
-        }, io::{load_json, save_json}, tracker::LipTrackerConfig
+            DatasetSplit,
+            DatasetStats,
+        },
+        io::{load_json, save_json},
+        tracker::LipTrackerConfig,
     },
     training::metrics::{
         CtcCharErrorRate,
         CtcWordErrorRate,
         VsrmStepOutput,
     },
-    vocab::{BLANK_ID, TokenMap, VOCAB, VOCAB_SIZE},
+    vocab::{
+        BLANK_ID,
+        TokenMap,
+        VOCAB,
+    },
     vsrm::{
-        SummaryVisitor, VsrModel, VsrModelConfig
+        SummaryVisitor,
+        VsrModel,
+        VsrModelConfig,
     }
 };
 
 // imports
 use burn::{
+    Tensor,
     config::Config,
     data::{
-        dataloader::{DataLoader, DataLoaderBuilder},
+        dataloader::{
+            DataLoader,
+            DataLoaderBuilder
+        },
         dataset::Dataset,
     },
     lr_scheduler::{
-        composed::{ComposedLrSchedulerConfig, SchedulerReduction},
+        composed::{
+            ComposedLrSchedulerConfig,
+            SchedulerReduction,
+        },
         cosine::CosineAnnealingLrSchedulerConfig,
         linear::LinearLrSchedulerConfig,
     },
     module::Module,
-    optim::AdamConfig,
+    optim::{
+        AdamConfig,
+    },
     record::CompactRecorder,
-    Tensor,
     tensor::{
         ElementConversion,
         activation::log_softmax,
         backend::{
             AutodiffBackend,
             Backend,
-        }
+        },
     },
     train::{
-        InferenceStep, Learner,
+        checkpoint::KeepLastNCheckpoints,
+        InferenceStep,
+        Learner,
         SupervisedTraining,
         TrainOutput,
         TrainStep,
         metric::{
-            Adaptor,
-            LearningRateMetric,
-            LossInput,
-            LossMetric,
-        }
-    },
+            Adaptor, LearningRateMetric, LossInput, LossMetric
+        },
+    }
 };
 use std::{
-    fs, io::{self, Write}, ops::Sub, path::Path, sync::Arc, thread, time::Duration
+    io::{self, Write},
+    sync::Arc,
+    thread,
+    time::Duration,
 };
 use log;
 
@@ -91,31 +109,44 @@ type ValidLoader<B> = Arc<dyn DataLoader<<B as AutodiffBackend>::InnerBackend, B
 
 
 
+// different hyperparameters and metadata for the VSR model
 #[derive(Config, Debug)]
 pub struct VsrmLearnerConfig  {
+    pub model_id: String,                    // model name to be saved as
+
+    // None = not specified, Some(None) = use latest, Some(Some(e)) = use epoch e
+    pub resume_from: Option<Option<usize>>,  // which checkpoint to resume training model from (runtime-only, not persisted to learner_config.json)
+
+    #[config(default = false)]
+    pub keep_all_checkpoints: bool,          // if true, keep all checkpoints; else keep most recent only
+
     #[config(default = "(50, 100)")]
-    pub frame_dims: (usize, usize), // (height, width)
+    pub frame_dims: (usize, usize),          // video frame dimensions that the processes (height, width)
 
     #[config(default = 50)]
-    pub num_epochs: usize,
+    pub num_epochs: usize,                   // number of times the model has processed through entire training dataset
 
     #[config(default = 4)]
-    pub batch_size: usize,
+    pub batch_size: usize,                   // number of training samples to process per iteration
 
     #[config(default = 1e-4)]
-    pub learning_rate: f64,
+    pub learning_rate: f64,                  // peak learning rate that the scheduler reaches (controls step size towards minimum of CTC loss function)
 
-    pub optimizer: AdamConfig,
+    pub optimizer: AdamConfig,               // Adam optimizer for weight updates
 
     #[config(default = 8)]
-    pub num_workers: usize,
+    pub num_workers: usize,                  // number of background threads to process dataset in parallel (too low --> GPU idle, too high --> CPU contention)
 
     #[config(default = 1)]
-    pub accumulation: usize,
+    pub accumulation: usize,                 // number of mini-batches that gets processed by the model before weight updates
 
     #[config(default = 42)]
-    pub seed: u64,
+    pub seed: u64,                           // seed value for deterministic RNG on dataset shuffling
+
+    #[config(default = "None")]
+    pub active_subset: Option<(f32, u64)>,   // fraction of entire dataset to use for training (e.g. Some((0.1, 69) = 10% with seed 69, None = use full dataset)
 }
+
 
 
 
@@ -129,7 +160,7 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
         let [n, t, v] = logits.dims();
         assert!(n > 0 && t > 0 && v > 0);
 
-        // -------------------------------------- Debugging --------------------------------------\
+        // -------------------------------------- Debugging --------------------------------------
 
         let [n, t, _] = logits.dims();
         let token_map = TokenMap::new(VOCAB);
@@ -267,21 +298,15 @@ where
     VsrmStepOutput<B>: Adaptor<LossInput<B>>,
     VsrmStepOutput<B::InnerBackend>: Adaptor<LossInput<B::InnerBackend>>,
 {
+    // create output/model paths
     let output_path = context.models_path.clone();
-
-    // create model experiment/artifacts directory
-    let model_dir = format!("vsrm_{}", dataset_src.tag());
-    let model_path = output_path.join(&model_dir);
-    fs::create_dir_all(&model_path).expect("Failed to create trained vsrm artifacts directory");
+    let model_path = output_path.join(&learner_config.model_id.clone());
 
     assert!(learner_config.num_epochs > 0, "Number of epochs must be > 0, got {}", learner_config.num_epochs);
     assert!(learner_config.batch_size > 0, "Batch size must be > 0, got {}", learner_config.batch_size);
     assert!(learner_config.learning_rate > 0.0, "Learning rate must be > 0, got {}", learner_config.learning_rate);
     assert!(learner_config.num_workers <= 64, "Exceeded reasonable worker limit ({})", learner_config.num_workers);
     if learner_config.num_workers == 0 { println!("Running with 0 workers: data loading will be synchronous"); }
-
-    // save hyperparams
-    learner_config.save(model_path.join("learner_config.json")).expect("Failed to save config");
 
     // ------------------------------------ Dataset batching and loading ------------------------------------
 
@@ -314,7 +339,7 @@ where
         .expect("Failed to initialize Composed Scheduler");
 
     // init optimizer and model
-    let optimizer = learner_config.optimizer.init();
+    let optimizer = learner_config.optimizer.init::<B, VsrModel<B>>();
     let model = model_config.init::<B>(&device);
     SummaryVisitor::summarize(&model);
 
@@ -326,30 +351,7 @@ where
     );
     learner.fork(&device);
 
-    // -------------------------------------- CTC decoder and LM setup --------------------------------------
-
-    let ngram_lm_path = context.models_path.join("ngram_lm.bin");
-    assert!(ngram_lm_path.exists(), "N-gram LM at {:?} does not exist", ngram_lm_path);
-
-    // N-gram LM instance
-    let ngram_lm = NgramConfig::new()
-        .with_n(3)
-        .with_vocab_size(VOCAB_SIZE)
-        .with_path(ngram_lm_path.to_str().map(|s| s.to_string()));
-
-    let beam_width = 5;
-    let lm_alpha = 2.0;
-    let lm_beta = 2.0;
-
-    // init CTC Beam decoder with N-gram LM (slower)
-    let beam_decoder = CtcDecoderConfig::new()
-        .with_search_type(CtcDecodeType::BeamSearch)
-        .with_beam_width(beam_width)
-        .with_blank_id(BLANK_ID)
-        .with_lm(Some(LanguageModelConfig::Ngram(ngram_lm)))
-        .with_lm_alpha(lm_alpha)
-        .with_lm_beta(lm_beta)
-        .init();
+    // ------------------------------------------ CTC decoder setup -----------------------------------------
 
     // init CTC Greedy decoder (faster)
     let greedy_decoder = CtcDecoderConfig::new()
@@ -370,10 +372,27 @@ where
     println!("=============================\n");
     // -------------------------------------------------------------
 
-    println!("Training model: {}\n", model_dir);
+    // resulve user intent for resume training behavior:
+    // case A: resume flag given --> user explicitly requested a resume
+    // - if provided/default model ID exists
+    //      - if resume flag carries a value
+    //           - if value is valid --> resume from that epoch value
+    //           - if value is invalid --> error
+    //      - if no value carried --> resume from latest epoch value
+    // - if provided/default model ID doesn't exist --> error
+    // case B: resume flag not given --> user wants a fresh start
+    // - if provided/default model ID exists --> error
+    // - if provided/default model ID doesn't exist --> proceed fresh
+    let from_checkpoint = resolve_from_checkpoint(&model_path, learner_config.resume_from);
 
-    // trainer instance
-    let trained_model = SupervisedTraining::new(
+    // resolve user intent for checkpointing behavior:
+    // - if `keep_all_checkpoints` on --> set checkpoints to keep as total epochs
+    // - if `keep_all_checkpoints` off --> set checkpoints to keep as just one
+    let keep_n_checkpoints = if learner_config.keep_all_checkpoints { learner_config.num_epochs }
+    else { 1 };
+
+    // trainer instance (Burn's `FileCheckpointer` creates model dir on init)
+    let trainer = SupervisedTraining::new(
         &model_path,
         train_dataloader,
         valid_dataloader,
@@ -384,14 +403,25 @@ where
         .metric_valid_numeric(CtcCharErrorRate::new(greedy_decoder.clone()))
         // .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map))
         .with_file_checkpointer(CompactRecorder::new())
+        .with_checkpointing_strategy(KeepLastNCheckpoints::new(keep_n_checkpoints))
         .num_epochs(learner_config.num_epochs)
-        .grads_accumulation(learner_config.accumulation)
-        .launch(learner);
+        .grads_accumulation(learner_config.accumulation);
+
+    // resume training on existing model at specified checkpoint or train new model
+    let training = if let Some(epoch) = from_checkpoint { trainer.checkpoint(epoch) }
+    else { trainer };
+
+    // save hyperparams (excluding runtime-only field `resume_from`)
+    let mut persisted_learner_config = learner_config.clone();
+    persisted_learner_config.resume_from = None;
+    persisted_learner_config.save(model_path.join("learner_config.json")).expect("Failed to save config");
+
+    let trained_model = training.launch(learner);
 
     // save final model weights
     trained_model
         .model
-        .save_file(model_path.join(format!("{}_final_weights", model_dir)), &CompactRecorder::new())
+        .save_file(model_path.join(format!("{}_final_weights", learner_config.model_id)), &CompactRecorder::new())
         .expect("Failed to save trained model");
 
     // small pause for Learner dashboard TUI cleanup, then training loop confirmation
@@ -402,95 +432,151 @@ where
 
 
 
+/// Creates train and validation dataloaders for the given dataset source.
+///
+/// Dispatches to dataset-specific creators (e.g. `create_grid_dataloaders` for GRID).
+/// 
+/// Returns a tuple of `(train_dataloader, valid_dataloader)` configured with
+/// batch size, shuffling, and worker count from `learner_config`.
+///
+/// ### Params:
+/// - `device`: Backend device for tensor placement.
+/// - `context`: Application context (paths, config).
+/// - `dataset_src`: Which dataset to use (Grid, Lrw, etc.).
+/// - `learner_config`: Training config (batch size, workers, frame dims, seed).
+/// - `token_map`: Token-to-ID mapping for transcript encoding.
+///
+/// ### Returns:
+/// `(TrainLoader<B>, ValidLoader<B>)` — train and validation dataloaders.
 fn create_dataloaders<B>(
     device: &B::Device,
     context: &Context,
     dataset_src: DatasetSource,
-    learner_config: &VsrmLearnerConfig ,
+    learner_config: &VsrmLearnerConfig,
     token_map: TokenMap,
-) -> (
-    TrainLoader<B>,
-    ValidLoader<B>,
-)
-where
-    B: AutodiffBackend,
+) -> (TrainLoader<B>, ValidLoader<B>)
+where B: AutodiffBackend,
 {
-    // (train/validation boundary, validation/test boundary)
-    // total data:                  |---------------------------train---------------------------|-valid-|--test--|
-    // train/eval split point:      |----------------------------80%--------------------------->|<---------------|
-    // valid/test split point:      |-----------------------------------------------------------|--10%-->|<------|
-    let split_thresholds = (0.8, 0.1);
-
     match dataset_src {
-        DatasetSource::Grid => {
-            // mouth tracker instance
-            let tracker_config = LipTrackerConfig::new(
-                context.models_path.join("haarcascade_frontalface_alt2.xml"),
-                context.models_path.join("haarcascade_mcs_mouth.xml"),
-                learner_config.frame_dims,
-            );
-
-            // dataset instance
-            let dataset = Arc::new(GridDataset::new(context, token_map, Some(tracker_config)));
-
-            // find global mean and std dev stats of all video frame pixels in GRID dataset (to use as input normalization)
-            let grid_stats_filename = format!("{}_stats.json", dataset_src.tag());
-            let grid_stats_path = dataset.grid_path.join(grid_stats_filename);
-            let grid_stats: DatasetStats = if grid_stats_path.exists() {
-                load_json(&grid_stats_path).expect("Failed to load cached GRID global mean and std dev stats")
-            } else {
-                let (mean, std_dev) = dataset.calc_global_stats();
-                let stats = DatasetStats::new(mean, std_dev);
-                save_json(&grid_stats_path, &stats).expect("Failed to cache GRID global mean and std dev stats");
-                stats
-            };
-
-            // train/validation dataset instances
-            let (train_dataset, valid_dataset, _) = DatasetSplit::split(
-                dataset,
-                split_thresholds.0,
-                split_thresholds.1,
-                learner_config.seed,
-            );
-
-            assert!(train_dataset.len() > 0, "Training dataset is empty");
-            assert!(valid_dataset.len() > 0, "Validation dataset is empty");
-
-            // train/validation data batcher instances (train uses Autodiff B, while valid uses InnerBackend raw B)
-            let train_batcher = VsrmBatcher::<B>::new(device.clone(), Some(grid_stats));
-            let valid_batcher = VsrmBatcher::<B::InnerBackend>::new(device.clone(), Some(grid_stats));
-
-            // train/validation data loader instances
-            let train_dataloader = DataLoaderBuilder::new(train_batcher)
-                .batch_size(learner_config.batch_size)
-                .shuffle(learner_config.seed)
-                .num_workers(learner_config.num_workers)
-                .build(train_dataset);
-            let valid_dataloader = DataLoaderBuilder::new(valid_batcher)
-                .batch_size(learner_config.batch_size)
-                .shuffle(learner_config.seed)
-                .num_workers(learner_config.num_workers)
-                .build(valid_dataset);
-
-            assert!(train_dataloader.num_items() > 0, "Training dataloader has 0 items");
-            assert!(valid_dataloader.num_items() > 0, "Validation dataloader has 0 items");
-
-            (train_dataloader, valid_dataloader)
-        }
-        // DatasetSource::Lrw => { // similar logic for future LRW dataset },
+        DatasetSource::Grid => create_grid_dataloaders::<B>(device, context, learner_config, token_map),
+        // DatasetSource::Lrw => create_lrw_dataloaders::<B>(...),
     }
 }
 
 
 
-/// apply entropy regularization to loss to improve model generalization
-/// goal: penalize model when it becomes too confident too fast (such as collapsing to repeating chars/blanks)
-/// formula: loss + lambda * max(0, (threshold - entropy))
-/// params:
-/// - logits: raw unnormalized model output scores over vocabulary
-/// - lambda: penalty scaling factor
-/// - min_entropy_threshold: min allowable entropy value before penalty increases overall loss
-/// returns: the final net penalty contribution towards model's output loss
+/// Creates train and validation dataloaders for the GRID corpus.
+///
+/// Loads or computes global pixel stats for normalization, splits the dataset
+/// (80% train / 10% valid / 10% test), and builds Burn dataloaders with
+/// `VsrmBatcher`.
+/// 
+/// Uses pre-extracted mouth crops from `preproc_frames/` when
+/// available; otherwise decodes video and runs `LipTracker` on demand.
+///
+/// ### Params:
+/// - `device`: Backend device for tensor placement.
+/// - `context`: Application context (paths, config).
+/// - `learner_config`: Training config (batch size, workers, frame dims, seed).
+/// - `token_map`: Token-to-ID mapping for transcript encoding.
+///
+/// ### Returns:
+/// `(TrainLoader<B>, ValidLoader<B>)` — train and validation dataloaders.
+fn create_grid_dataloaders<B>(
+    device: &B::Device,
+    context: &Context,
+    learner_config: &VsrmLearnerConfig,
+    token_map: TokenMap,
+) -> (TrainLoader<B>, ValidLoader<B>)
+where
+    B: AutodiffBackend,
+{
+    // (train/validation boundary, validation/test boundary)
+    // for example:
+    // total data:                  |---------------------------train---------------------------|-valid-|--test--|
+    // train/eval split point:      |----------------------------80%--------------------------->|<---------------|
+    // valid/test split point:      |-----------------------------------------------------------|--10%-->|<------|
+
+    let split_thresholds = (0.8, 0.1);
+
+    let tracker_config = LipTrackerConfig::new(
+        context.models_path.join("haarcascade_frontalface_alt2.xml"),
+        context.models_path.join("haarcascade_mcs_mouth.xml"),
+        learner_config.frame_dims,
+    );
+
+    // GRID dataset instance
+    let dataset = Arc::new(GridDataset::new(
+        context,
+        token_map,
+        Some(tracker_config),
+        learner_config.active_subset,
+    ));
+
+    // find global mean and std dev stats of all video frame pixels in GRID dataset (to use as input normalization)
+    let grid_stats_filename = format!("{}_stats.json", DatasetSource::Grid.tag());
+    let grid_stats_path = dataset.grid_path.join(grid_stats_filename);
+    let grid_stats: DatasetStats = if grid_stats_path.exists() {
+        load_json(&grid_stats_path).expect("Failed to load cached GRID global mean and std dev stats")
+    } else {
+        let (mean, std_dev) = dataset.calc_global_stats();
+        let stats = DatasetStats::new(mean, std_dev);
+        save_json(&grid_stats_path, &stats).expect("Failed to cache GRID global mean and std dev stats");
+        stats
+    };
+
+    // train/validation dataset instances
+    let (train_dataset, valid_dataset, _) = DatasetSplit::split(
+        dataset,
+        split_thresholds.0,
+        split_thresholds.1,
+        learner_config.seed,
+    );
+
+    assert!(train_dataset.len() > 0, "Training dataset is empty");
+    assert!(valid_dataset.len() > 0, "Validation dataset is empty");
+
+    println!("Train dataset has {} samples", train_dataset.len());
+    println!("Valid dataset {} samples\n", valid_dataset.len());
+
+    // train/validation data batcher instances (train uses Autodiff B, while valid uses InnerBackend raw B)
+    let train_batcher = VsrmBatcher::<B>::new(device.clone(), Some(grid_stats));
+    let valid_batcher = VsrmBatcher::<B::InnerBackend>::new(device.clone(), Some(grid_stats));
+
+    // train/validation data loader instances
+    let train_dataloader = DataLoaderBuilder::new(train_batcher)
+        .batch_size(learner_config.batch_size)
+        .shuffle(learner_config.seed)
+        .num_workers(learner_config.num_workers)
+        .build(train_dataset);
+    let valid_dataloader = DataLoaderBuilder::new(valid_batcher)
+        .batch_size(learner_config.batch_size)
+        .shuffle(learner_config.seed)
+        .num_workers(learner_config.num_workers)
+        .build(valid_dataset);
+
+    assert!(train_dataloader.num_items() > 0, "Training dataloader has 0 items");
+    assert!(valid_dataloader.num_items() > 0, "Validation dataloader has 0 items");
+
+    (train_dataloader, valid_dataloader)
+}
+
+
+
+
+/// Applies entropy regularization to loss to improve model generalization.
+/// 
+/// Goal: penalize model when it becomes too confident too fast (such as collapsing to repeating chars/blanks).
+/// 
+/// Formula: loss + lambda * max(0, (threshold - entropy)).
+///
+/// ### Params:
+/// - `logits`: Raw unnormalized model output scores over vocabulary.
+/// - `lambda`: Penalty scaling factor.
+/// - `min_entropy_threshold`: Min allowable entropy value before penalty increases overall loss.
+///
+/// ### Returns:
+/// The final net penalty contribution towards model's output loss.
 fn calc_entropy_penalty<B: Backend>(
     logits: Tensor<B, 3>,
     lambda: f32,
@@ -525,7 +611,10 @@ fn calc_entropy_penalty<B: Backend>(
 
 #[cfg(test)]
 mod tests {
-    use crate::context::Context;
+    use crate::{
+        context::Context,
+        vocab::VOCAB_SIZE,
+    };
 
     use super::*;
     use burn::{
@@ -547,10 +636,16 @@ mod tests {
             Optimizer,
         },
     };
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{
+        Rng,
+        SeedableRng,
+        rngs::StdRng,
+    };
 
     type TestBackend = Autodiff<Wgpu<f32, i32>>;
     // type TestBackend = Autodiff<NdArray>;
+
+    const SEED: u64 = 69;
 
     // these unit tests are sanity checks to ensure the training loop, loss function, and backward pass are implemented correctly
     // and can successfully optimize model on a small dataset (without this, we might have silent bugs that prevent learning but don't cause crashes)
@@ -704,8 +799,7 @@ mod tests {
         let device = WgpuDevice::default();
         // let device = NdArrayDevice::Cpu;
 
-        let seed = 69;
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = StdRng::seed_from_u64(SEED);
         let lr = 1e-3;
         let steps = 300;
         let mut initial_loss = 0.0;
@@ -720,8 +814,15 @@ mod tests {
             frame_dims,
         );
 
+        // init GRID dataset instance
+        let dataset = GridDataset::new(
+            &context,
+            token_map.clone(),
+            Some(tracker_config),
+            None,
+        );
+
         // grab single real sample from our actual dataset (GRID)
-        let dataset = GridDataset::new(&context, token_map.clone(), Some(tracker_config));
         let dataset_item = dataset
             .get(rng.random_range(0..dataset.len()))
             .expect("Failed to get first item from dataset");
@@ -831,8 +932,7 @@ mod tests {
         let device = WgpuDevice::default();
         // let device = NdArrayDevice::Cpu;
 
-        let seed = 69;
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = StdRng::seed_from_u64(SEED);
         let n = 16; // batch size
         let lr = 1e-3;
         let steps = 300;
@@ -848,8 +948,15 @@ mod tests {
             frame_dims,
         );
 
+        // init GRID dataset instance
+        let dataset = GridDataset::new(
+            &context,
+            token_map.clone(),
+            Some(tracker_config),
+            None,
+        );
+
         // grab 16 real samples from our actual dataset (GRID again)
-        let dataset = GridDataset::new(&context, token_map.clone(), Some(tracker_config));
         let mut items = Vec::with_capacity(n);
         while items.len() < n {
             let idx = rng.random_range(0..dataset.len());

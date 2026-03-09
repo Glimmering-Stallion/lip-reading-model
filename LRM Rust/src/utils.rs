@@ -5,6 +5,7 @@
 // imports
 use burn::tensor::{backend::Backend, Tensor};
 use num_traits::Float;
+use std::cmp::min;
 
 
 
@@ -84,4 +85,37 @@ pub fn log_sum_exp_3_tensor<B: Backend, const D: usize>(
     c: Tensor<B, D>,
 ) -> Tensor<B, D> {
     log_sum_exp_2_tensor(log_sum_exp_2_tensor(a, b), c)
+}
+
+
+/// Computes Levenshtein (edit) distance between two sequences.
+///
+/// ### Params:
+/// - `seq1`: Predicted sequence of items (IDs/words).
+/// - `seq2`: Ground truth sequence of items.
+///
+/// ### Returns:
+/// Total count of insertions, deletions, and substitutions.
+#[inline]
+pub fn levenshtein<T: PartialEq>(seq1: &[T], seq2: &[T]) -> usize {
+    if seq1 == seq2 { return 0 }
+    if seq1.is_empty() { return seq2.len() }
+    if seq2.is_empty() { return seq1.len() }
+
+    let mut col: Vec<usize> = (0..=seq2.len()).collect();
+
+    for (i, el1) in seq1.iter().enumerate() {
+        let mut last_diag = col[0];
+        col[0] = i + 1;
+        for (j, el2) in seq2.iter().enumerate() {
+            let old_col_j = col[j + 1];
+            col[j + 1] = if el1 == el2 {
+                last_diag
+            } else {
+                1 + min(min(col[j], col[j + 1]), last_diag)
+            };
+            last_diag = old_col_j;
+        }
+    }
+    col[seq2.len()]
 }

@@ -1,8 +1,9 @@
 #![recursion_limit = "2048"]
 
+pub mod cli;
 pub mod pipeline;
 pub mod training;
-// pub mod inference;
+pub mod inference;
 pub mod vsrm;
 pub mod ctc;
 pub mod context;
@@ -25,6 +26,7 @@ pub mod prelude {
         vocab::{
             TokenMap,
             BLANK_ID,
+            SPACE_ID,
             VOCAB,
             VOCAB_SIZE,
         },
@@ -40,6 +42,15 @@ pub mod prelude {
                 VsrmBatcher,
             },
         },
+        vsrm::{
+            VsrModel,
+            VsrModelConfig,
+        },
+        ctc::lm::{
+            Ngram,
+            NgramConfig,
+            build_or_load_ngram_lm,
+        },
         training::{
             learner::{
                 VsrmLearnerConfig,
@@ -53,13 +64,6 @@ pub mod prelude {
                 CtcWordErrorRate,
             },
         },
-        vsrm::{
-            VsrModel,
-            VsrModelConfig,
-        },
-        ctc::lm::{
-            Ngram,
-            NgramConfig,
-        },
+        // inference::run_infer_vsrm,
     };
 }

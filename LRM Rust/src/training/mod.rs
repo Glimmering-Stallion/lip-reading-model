@@ -10,5 +10,6 @@ pub mod learner;
 pub mod metrics;
 pub mod trainer;
 
+pub use crate::cli::find_latest_checkpoint_epoch;
 pub use learner::{VsrmLearnerConfig, train};
 pub use metrics::{CtcCharErrorRate, CtcWordErrorRate};
