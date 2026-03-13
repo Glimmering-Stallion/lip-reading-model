@@ -100,8 +100,6 @@ This document records all modifications to the project for future reference and 
 
 **Result:** All ~11200 training items are now processed per epoch; LR warmup and cosine decay behave as intended.
 
-# Change Logs Since Last Git Commit
-
 ## 8. CLI Subcommands ([`src/main.rs`](src/main.rs))
 
 **Unified CLI with `clap` subcommands:**
@@ -169,13 +167,60 @@ cargo run -- infer --model vsrm_grid --input path/to/video.mpg --output pred.txt
 - Doc comment consistency: `metrics.rs`, `ctc_loss.rs`, `learner.rs` use `### Params:` / `### Returns:` style.
 - README Project Tree: added `cli.rs`, fixed tree structure.
 
+# Change Logs Since Last Git Commit
+
+## 13. TCN Causal Normalization ([`src/vsrm/tcn.rs`](src/vsrm/tcn.rs))
+
+- Replaced GroupNorm with per-timestep LayerNorm to preserve strict causality and to maintain coherence in train-inference dynamics.
+- LayerNorm applied over channel dimension only: transpose [N,C,T] → [N,T,C], norm over C, transpose back.
+- Removed `norm_groups` from `TemporalConvNetConfig` and `TcnBlock`.
+- Re-enabled `tcn_is_causal` unit test (now passes).
+- **Checkpoint compatibility:** Architecture change; existing checkpoints will not load. Retrain from scratch.
+- Chose per-timestep LayerNorm due to:
+    - Simplicity of implementation
+    - Small channel noise issue countered with sufficiently large number of channels being passed in (using 512 as default)
+
+## 14. Word Separation in Targets ([`src/pipeline/adapters/grid.rs`](src/pipeline/adapters/grid.rs))
+
+- `load_alignment()` now inserts `SPACE_ID` between consecutive words when building target sequences.
+- Enables meaningful WER metrics (targets and predictions split by whitespace).
+- Vocab already included space; CTC loss and decoder support space tokens without changes.
+- **Checkpoint compatibility:** Targets change; retrain required to learn space prediction.
+
+## 15. Tracker Trait Refactor (`src/pipeline/tracker/`)
+
+Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module directory.
+
+**New directory structure:** `pipeline/tracker/`
+
+- **`mod.rs`**: Slim manifest — `pub mod` declarations and `pub use` re-exports only (matches project convention).
+- **`backend.rs`**: Backend-agnostic trait, shared types, configuration dispatch, and TLS helpers.
+  - `LipTrackerBackend` trait: `process_frame()`, `reset_state()`, `target_dims()`.
+  - `TrackerResult`: contains `crop: Mat` (for the model) + `VizMetadata` (for the display fork).
+  - `VizMetadata`: `face_rect`, `mouth_rect`, `landmarks`, `stabilized_center` — each tracker populates what it can.
+  - `TrackerConfig` enum: dispatch wrapper (`Haar(HaarTrackerConfig)`, future: `MediaPipe(...)`).
+  - `with_tracker()`: TLS helper using `Box<dyn LipTrackerBackend>` — replaces old `LipTracker::with_local()`.
+- **`haar.rs`**: Existing Haar cascade logic moved and renamed (`LipTracker` → `HaarTracker`, `LipTrackerConfig` → `HaarTrackerConfig`), implementing `LipTrackerBackend`. All doc comments preserved.
+
+**Caller updates:**
+
+- `grid.rs`: Uses `with_tracker(config, |tracker: &mut dyn LipTrackerBackend| { ... })`, extracts `.crop` from `TrackerResult`.
+- `learner.rs`, `main.rs`: Construct `TrackerConfig::Haar(HaarTrackerConfig::new(...))`.
+- `pipeline/mod.rs`, `lib.rs`: Re-exports updated from `LipTracker`/`LipTrackerConfig` to `LipTrackerBackend`/`TrackerConfig`/`HaarTrackerConfig`.
+- `inference/predictor.rs`, `pipeline/video.rs`: Commented-out import paths updated to new names.
+
+**`as_deref_mut` resolution:** TLS helper uses `&mut **opt.as_mut().unwrap()` to dereference `Box<dyn LipTrackerBackend>` without requiring `Deref` on the concrete type.
+
+**No checkpoint impact.** Model weights unchanged; this is a code-organization refactor only.
+
 ## Files Modified (Summary)
 
 | File | Changes |
 |------|---------|
-| `tracker.rs` | Hierarchical detection, Kalman+EMA smoothing, face-detection fallback |
+| `tracker.rs` → `tracker/` | Trait refactor: split into `mod.rs` (manifest), `backend.rs` (trait + TLS), `haar.rs` (Haar impl) |
 | `residual.rs` | New ResBlock module |
-| `tcn.rs` | GroupNorm in blocks, norm_groups config |
+| `tcn.rs` | GroupNorm → per-timestep LayerNorm (causal), norm_groups removed, tcn_is_causal re-enabled |
+| `grid.rs` | Word separation: SPACE_ID inserted between words in load_alignment; tracker imports updated to trait-based API |
 | `vsrm.rs` | ResBlock frontend, AAP+proj, FC init, blank bias, removed double ReLU |
 | `grid.rs` | Global stats, try_load/get fallback, pre-validation, sp filtering |
 | `dataset.rs` | DatasetStats struct |
@@ -183,7 +228,7 @@ cargo run -- infer --model vsrm_grid --input path/to/video.mpg --output pred.txt
 | `batcher.rs` | Global normalization with DatasetStats |
 | `learner.rs` | Composed LR scheduler, train/resume logic, entropy penalty (disabled) |
 | `summary.rs` | New SummaryVisitor module |
-| `main.rs` | CLI subcommands (build-lm, train, infer), run_build_lm, run_train_vsrm |
+| `main.rs` | CLI subcommands (build-lm, train, infer), run_build_lm, run_train_vsrm; tracker imports updated |
 | `inference/predictor.rs` | run_infer_vsrm (commented out, stub) |
 | `pipeline/video.rs` | load_video_with_tracker (commented out, for inference) |
 | `lm.rs` | Doc typo fix (linguistic) |
@@ -191,5 +236,7 @@ cargo run -- infer --model vsrm_grid --input path/to/video.mpg --output pred.txt
 | `utils.rs` | Added levenshtein (moved from metrics) |
 | `metrics.rs` | Doc style, typos (aross→across, WEr→WER) |
 | `ctc_loss.rs` | Doc style (params/returns → ### Params/### Returns) |
-| `learner.rs` | model_id String, Params/Returns colons |
+| `learner.rs` | model_id String, Params/Returns colons; tracker imports updated to TrackerConfig::Haar |
+| `lib.rs` | Tracker re-exports updated to new names |
+| `pipeline/mod.rs` | Tracker re-exports updated; module doc updated |
 | `README.md` | Project Tree: cli.rs, tree structure fix |

@@ -48,7 +48,8 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 ### Alignment & Vocabulary Handling (`vocab.rs`)
 
 - Implemented parsing of .align files.
-- Filters out silence tokens ("sil").
+- Filters out silence tokens ("sil", "sp").
+- Inserts spaces between words in alignment-derived targets (`SPACE_ID`) for WER metrics.
 - Converts labels into integer sequences using a bidirectional vocabulary map.
 - Designed a character-level vocabulary including:
   - Lowercase letters
@@ -75,6 +76,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
   - Deployment simplicity
 - Built modular TCN blocks featuring:
   - Dilated causal convolutions
+  - Per-timestep causal LayerNorm (normalizes over channels only)
   - Residual blocks
   - Dropout and non-linear activations
 - Added a projection head mapping features to per-time-step character logits.
@@ -154,9 +156,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 - **Standardized inference framework:** Add an inference path with a standardization component that mirrors the batcher's preprocessing (reuse `VsrmBatcher`, `DatasetStats`, `TokenMap` or other components where necessary; avoid creating unnecessary files).
 - **Inference subcommand wiring:** Wire inference subcommand to predictor (video loading + VSRM forward + CTC decode).
-- **Word separation in targets:** Decide whether alignment extraction should insert spaces between words and how to represent word boundaries for WER metrics.
 - **FPS video standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
-- **TCN normalization for causality:** Consider per-time-step normalization or Weight Normalization (WeightNorm) for TCN blocks. The TCN paper (Bai et al., 2018) used WeightNorm instead of BatchNorm or LayerNorm. WeightNorm normalizes convolution filter weights during the forward pass rather than activations; it requires no statistics over T or C at runtime, is strictly causal, and could be fast for live inference.
 
 ## CLI Usage
 

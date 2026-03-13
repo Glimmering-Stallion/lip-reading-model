@@ -10,11 +10,19 @@ use flate2::read::GzDecoder;
 use indicatif::{ProgressBar, ProgressStyle};
 use rand::Rng;
 use reqwest::blocking::Client;
-use serde::{Serialize, de::DeserializeOwned};
-// use serde_json::Value;
+use serde::{
+    Serialize,
+    de::DeserializeOwned,
+};
 use std::{
     fs::{self, File},
-    io::{self, BufRead, BufReader, Read, Write},
+    io::{
+        self,
+        BufRead,
+        BufReader,
+        Read,
+        Write,
+    },
     path::Path,
     error::Error,
     sync::{
@@ -26,7 +34,6 @@ use std::{
     },
 };
 use zip::ZipArchive;
-use tar::Archive;
 
 
 
@@ -63,6 +70,8 @@ where
 
     Ok(())
 }
+
+
 
 /// Generic 3D tensor deserializer.
 ///

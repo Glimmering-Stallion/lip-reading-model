@@ -13,20 +13,24 @@ use crate::{
     pipeline::{
         FramesBuffer,
         batcher::VsrmItem,
+        dataset::sample_subset_entries,
         io::{
             load_json,
             read_tensor_3d,
             save_json,
             write_tensor_3d,
         },
-        dataset::sample_subset_entries,
-        tracker::{LipTracker, LipTrackerConfig},
+        tracker::
+        {
+            LipTrackerBackend,
+            TrackerConfig,
+            with_local_tracker,
+        }
     },
-    vocab::TokenMap,
+    vocab::{SPACE_ID, TokenMap},
 };
 
 // imports
-use rand::{SeedableRng, seq::SliceRandom, rngs::StdRng};
 use serde::{Deserialize, Serialize};
 use burn::{
     data::dataset::Dataset,
@@ -61,7 +65,7 @@ pub struct GridDataset {
     pub grid_path: PathBuf,
     entries: Vec<String>,
     token_map: TokenMap,
-    tracker_config: Option<LipTrackerConfig>,
+    tracker_config: Option<TrackerConfig>,
     frames_to_alignment: HashMap<String, String>,
 }
 
@@ -87,7 +91,7 @@ impl GridDataset {
     pub fn new(
         context: &Context,
         token_map: TokenMap,
-        tracker_config: Option<LipTrackerConfig>,
+        tracker_config: Option<TrackerConfig>,
         active_subset: Option<(f32, u64)>,
     ) -> Self {
         let grid_path = context.data_path.join("grid-lr-corpus");
@@ -216,12 +220,14 @@ impl GridDataset {
             if data.is_empty() || t == 0 { return None; }
             TensorData::new(data, vec![1, t, h, w])
         } else {
-            // slow path: video decode + LipTracker (or full frames)
+            // slow path: video decode + tracker (or full frames)
             let frames_buffer = match &self.tracker_config {
                 // --------------- mode (A): lip tracking and cropping ---------------
-                Some(config) => LipTracker::with_local(config, |tracker| {
-                    tracker.reset_state(); // clear smoothing state from last video
-                    self.load_frames(entry, |frame| tracker.process_frame(frame))
+                Some(config) => with_local_tracker(config, |tracker: &mut dyn LipTrackerBackend| {
+                    tracker.reset_state();
+                    self.load_frames(entry, |frame| {
+                        tracker.process_frame(frame).map(|result| result.crop)
+                    })
                 }).ok()?,
                 // -------------------- mode (B) full sized frames -------------------
                 None => self.load_frames(entry, |f| Ok(f.clone())).ok()?,
@@ -445,7 +451,7 @@ impl GridDataset {
     /// - `entry`: Unique GRID dataset entry ID to parse alignments from (in the form of "s1/bbaf2n").
     ///
     /// ### Returns:
-    /// A list of corresponding char IDs.
+    /// A sequence of corresponding char IDs.
     fn load_alignment(&self, entry: &str) -> Result<Vec<usize>, Box<dyn Error>> {
         let (speaker, stem) = entry.split_once('/').unwrap_or((entry, ""));
         let alignment_speaker = self.frames_to_alignment.get(speaker).map(|s| s.as_str()).unwrap_or(speaker);
@@ -458,23 +464,24 @@ impl GridDataset {
 
         match File::open(alignment_path) {
             Ok(file) => {
-                let mut tokens: Vec<String> = vec![];
+                let mut sequence: Vec<usize> = vec![];
                 let lines = BufReader::new(file).lines();
 
                 for line in lines.map_while(Result::ok) {
                     let line_group = line.split_whitespace().collect::<Vec<_>>();
                     assert!(line_group.len() >= 3, "Malformed alignment line: {:?}", line_group);
-                    if line_group[2] != "sil" && line_group[2] != "sp" {
-                        tokens.push(line_group[2].to_string());
+
+                    let word = line_group[2];
+                    if word != "sil" && word != "sp" {
+                        if !sequence.is_empty() { sequence.push(SPACE_ID); }
+
+                        let char_ids = word.chars().filter_map(|char| self.token_map.id_of(char));
+                        sequence.extend(char_ids);
                     }
                 }
-                assert!(!tokens.is_empty(), "No non-silence tokens found in alignment file");
+                assert!(!sequence.is_empty(), "No non-silence tokens found in alignment file");
 
-                Ok(tokens
-                    .iter()
-                    .flat_map(|token| token.chars())
-                    .filter_map(|ch| self.token_map.id_of(ch))
-                    .collect())
+                Ok(sequence)
             }
             Err(e) => {
                 eprintln!("Error opening alignments file: {}", e);
@@ -774,6 +781,7 @@ mod tests {
     use super::*;
     use crate::{
         context::Context,
+        pipeline::tracker::HaarTrackerConfig,
         vocab::VOCAB,
     };
     use image::{GrayImage, Luma};
@@ -860,11 +868,13 @@ mod tests {
         let mouth_cascade_path = context.models_path.join("haarcascade_mcs_mouth.xml");
         let target_dims = (50, 100);
 
-        let tracker_config = LipTrackerConfig::new(
-            face_cascade_path,
-            mouth_cascade_path,
-            target_dims,
-        ).with_smoothing_alpha(0.8);
+        let tracker_config = TrackerConfig::Haar(
+            HaarTrackerConfig::new(
+                face_cascade_path,
+                mouth_cascade_path,
+                target_dims,
+            ).with_smoothing_alpha(0.8)
+        );
 
         // GRID dataset instance
         let dataset = GridDataset::new(

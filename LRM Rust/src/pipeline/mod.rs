@@ -3,7 +3,7 @@
 //! Data ingestion and processing pipeline
 //!
 //! - `io`: raw filesystem, networking, and decompression utilities
-//! - `tracker`: dynamic mouth tracking and fixed box cropping using Haar cascade logic
+//! - `tracker`: trait-based mouth tracking with pluggable backends (Haar, future: MediaPipe)
 //! - `dataset`: high-level dataset source abstractions (GRID/LRW/others)
 //! - `batcher`: tensor grouping and padding logic for CTC-style rectangular batches
 //! - `adapters`: source-specific logic to map specific datasets to standardized 'VsrmItem' format for batch collation
@@ -16,6 +16,7 @@ pub mod batcher;
 pub mod adapters;
 pub mod video;
 
+pub use tracker::{LipTrackerBackend, TrackerConfig, HaarTrackerConfig};
 pub use dataset::{DatasetSource, DatasetSplit};
 pub use batcher::{VsrmBatcher, Batch};
 

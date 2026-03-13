@@ -10,7 +10,7 @@
 //         batcher::{Batch, VsrmBatcher, VsrmItem},
 //         dataset::DatasetStats,
 //         io::load_json,
-//         tracker::LipTrackerConfig,
+//         tracker::TrackerConfig,
 //         video::load_video_with_tracker,
 //     },
 //     vocab::{TokenMap, BLANK_ID, VOCAB_SIZE},

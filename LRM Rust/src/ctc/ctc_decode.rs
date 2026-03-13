@@ -461,13 +461,11 @@ mod tests {
     use crate::ctc::lm::LanguageModelConfig;
     use std::{
         array,
-        env,
         path::Path,
     };
     use burn::{
         backend::ndarray::NdArray,
         tensor::{
-            backend::Backend,
             Distribution,
             Tensor,
         },

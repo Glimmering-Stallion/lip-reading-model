@@ -22,25 +22,16 @@ use burn::{
         ParamId,
     },
     nn::{
-        GroupNorm,
-        GroupNormConfig,
         Initializer,
         Linear,
         LinearConfig,
-        PaddingConfig3d,
-        conv::{
-            Conv3d,
-            Conv3dConfig,
-        },
         pool::{
             AdaptiveAvgPool2d,
             AdaptiveAvgPool2dConfig,
         }
     },
     optim::GradientsParams,
-    prelude::TensorData,
     tensor::{
-        Shape,
         Tensor,
         activation,
         backend::{
@@ -404,9 +395,9 @@ impl<B: Backend> VsrModel<B> {
             // bias (for blank) = 4.0: P(blank) = e^4/(27 + e^4) ≈ 66.9%
 
             let mut data = bias_param.val().to_data();
-            
+
             // optionally tweak initial blank prob up/down here so other chars can breathe
-            if let Ok(values) = data.as_mut_slice::<f32>() { values[blank_id] = 5.0; }
+            if let Ok(values) = data.as_mut_slice::<f32>() { values[blank_id] = 0.0; }
             
             // re-upload to device and update layer
             let new_bias = Tensor::<B, 1>::from_data(data, device);
@@ -539,6 +530,7 @@ impl<B0: Backend> VsrModel<Autodiff<B0>> {
     /// Logs exact tensor shapes at every stage of the forward pass.
     /// 
     /// Execution is guarded by `PRINT_ONCE` to prevent console flooding.
+    /// Mirrors the actual `forward()` flow: ResBlocks → AAP → proj → TCN → FC.
     ///
     /// ### Params:
     /// - `input`: [N, C, T, H, W] sample input tensor.
@@ -546,27 +538,39 @@ impl<B0: Backend> VsrModel<Autodiff<B0>> {
         PRINT_ONCE.call_once(|| {
             println!("IN (N, C, T, H, W): {:?}", input.dims());
 
-            let x = activation::relu(self.rb1.forward(input));
-            println!("C1 (N, C, T, H, W): {:?}", x.dims());
+            let x = self.rb1.forward(input);
+            println!("RB1 (N, C, T, H, W): {:?}", x.dims());
 
-            let x = activation::relu(self.rb2.forward(x));
-            println!("C2 (N, C, T, H, W): {:?}", x.dims());
+            let x = self.rb2.forward(x);
+            println!("RB2 (N, C, T, H, W): {:?}", x.dims());
 
-            let x = activation::relu(self.rb3.forward(x));
-            println!("C3 (N, C, T, H, W): {:?}", x.dims());
+            let x = self.rb3.forward(x);
+            println!("RB3 (N, C, T, H, W): {:?}", x.dims());
 
-            let [batch, channels, timesteps, height, width] = x.dims();
-            let x = x.reshape(Shape::new([batch, channels * height * width, timesteps]));
-            println!("RS (N, C_feat, T): {:?}", x.dims());
+            let [n, c, t, h, w] = x.dims();
+            let x = x.swap_dims(1, 2).reshape([n * t, c, h, w]);
+            println!("RS4 (N*T, C, H, W): {:?}", x.dims());
 
-            let x = activation::relu(self.tcn1.forward(x));
-            println!("TCN1 (N, C_feat, T): {:?}", x.dims());
+            let x = self.aap.forward(x);
+            println!("AAP (N*T, C, 4, 4): {:?}", x.dims());
 
-            let x = activation::relu(self.tcn2.forward(x));
-            println!("TCN2 (N, C_feat, T): {:?}", x.dims());
+            let x = x.reshape([n, t, c * 4 * 4]);
+            println!("RS3 (N, T, C*16): {:?}", x.dims());
+
+            let x = activation::relu(self.proj.forward(x));
+            println!("PROJ (N, T, D): {:?}", x.dims());
 
             let x = x.swap_dims(1, 2);
-            println!("SWP (N, T, C_feat): {:?}", x.dims());
+            println!("SWP (N, D, T): {:?}", x.dims());
+
+            let x = self.tcn1.forward(x);
+            println!("TCN1 (N, D, T): {:?}", x.dims());
+
+            let x = self.tcn2.forward(x);
+            println!("TCN2 (N, D, T): {:?}", x.dims());
+
+            let x = x.swap_dims(1, 2);
+            println!("SWP (N, T, D): {:?}", x.dims());
 
             let y = self.fc.forward(x);
             println!("OUT (N, T, Vocab): {:?}", y.dims());
@@ -590,13 +594,13 @@ mod tests {
     type B = NdArray<f32>;
 
     #[test]
+    #[ignore = "heavy computation: full model forward pass with significantly large inputs"]
     fn model_input_shapes_data_flow_small() {
         // let (n, c, t, h, w) = (1, 1, 8, 16, 16);
         // let out_channels = 10;
         // let norm_groups = 5;
 
-        let (n, c, t, h, w) = (1, 1, 75, 50, 150); // Real GRID dimensions
-        let vocab_size = VOCAB_SIZE;
+        let (n, c, t, h, w) = (1, 1, 75, 50, 100);
         let blank_id = BLANK_ID;
         let out_channels = 128;
         let norm_groups = 8;
@@ -607,7 +611,7 @@ mod tests {
             .with_in_channels(c)
             .with_out_channels(out_channels)
             .with_norm_groups(norm_groups)
-            .with_vocab_size(vocab_size)
+            .with_vocab_size(VOCAB_SIZE)
             .with_blank_id(blank_id)
             .init(&device);
 

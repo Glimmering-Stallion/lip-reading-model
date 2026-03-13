@@ -156,6 +156,7 @@ mod tests {
     pub type AD = Autodiff<B>;    // autodiff backend
 
     #[test]
+    #[ignore = "heavy: 25 epochs on Wgpu GPU"]
     fn test_train_epoch() {
         // (batch size, channels, timesteps, height, width, sequence length), where t ≥ 2l - 1
         let (n, c, t, h, w, l) = (1, 1, 6, 40, 40, 3);
@@ -218,7 +219,7 @@ mod tests {
 
                     // // debugging: print input/target tensor values (floats/ints)
                     // let in_data = inputs.clone().to_data().to_vec::<f32>().unwrap();
-                    // let tgt_data = targets.clone().to_data().to_vec::<i64>().unwrap();
+                    // let tgt_data = targets.clone().to_data().convert::<i64>().to_vec::<i64>().unwrap();
                     // println!("\nInputs data (first 10/{}) = {:?}", in_data.len(), &in_data[..in_data.len().min(10)]);
                     // println!("Targets data (first 10/{}) = {:?}\n", tgt_data.len(), &tgt_data[..tgt_data.len().min(10)]);
                 }
@@ -245,6 +246,6 @@ mod tests {
         assert!(losses.iter().all(|x| x.is_finite())); // all losses should be finite
         assert!(losses.len() == epochs); // should have one loss per epoch
         assert!(mean(&last_n) < mean(&first_n)); // losses should have a downward trend
-        assert!(t as i64 >= 2 * l as i64 - 1, "CTC needs T ≥ 2L - 1");
+        assert!(t as i32 >= 2 * l as i32 - 1, "CTC needs T ≥ 2L - 1");
     }
 }

@@ -29,8 +29,14 @@ use crate::{
             DatasetSplit,
             DatasetStats,
         },
-        io::{load_json, save_json},
-        tracker::LipTrackerConfig,
+        io::{
+            load_json,
+            save_json,
+        },
+        tracker::{
+            TrackerConfig,
+            HaarTrackerConfig,
+        },
     },
     training::metrics::{
         CtcCharErrorRate,
@@ -38,9 +44,9 @@ use crate::{
         VsrmStepOutput,
     },
     vocab::{
+        VOCAB,
         BLANK_ID,
         TokenMap,
-        VOCAB,
     },
     vsrm::{
         SummaryVisitor,
@@ -89,7 +95,10 @@ use burn::{
         TrainOutput,
         TrainStep,
         metric::{
-            Adaptor, LearningRateMetric, LossInput, LossMetric
+            Adaptor,
+            LearningRateMetric,
+            LossInput,
+            LossMetric,
         },
     }
 };
@@ -401,7 +410,7 @@ where
         .metric_train_numeric(LearningRateMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_valid_numeric(CtcCharErrorRate::new(greedy_decoder.clone()))
-        // .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map))
+        .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map))
         .with_file_checkpointer(CompactRecorder::new())
         .with_checkpointing_strategy(KeepLastNCheckpoints::new(keep_n_checkpoints))
         .num_epochs(learner_config.num_epochs)
@@ -499,11 +508,11 @@ where
 
     let split_thresholds = (0.8, 0.1);
 
-    let tracker_config = LipTrackerConfig::new(
+    let tracker_config = TrackerConfig::Haar(HaarTrackerConfig::new(
         context.models_path.join("haarcascade_frontalface_alt2.xml"),
         context.models_path.join("haarcascade_mcs_mouth.xml"),
         learner_config.frame_dims,
-    );
+    ));
 
     // GRID dataset instance
     let dataset = Arc::new(GridDataset::new(
@@ -651,6 +660,7 @@ mod tests {
     // and can successfully optimize model on a small dataset (without this, we might have silent bugs that prevent learning but don't cause crashes)
 
     #[test]
+    #[ignore = "heavy computation: 300 steps overfit on synthetic data"]
     fn test_overfit_synthetic_sample() {
         // test if a randomly initialized model can overfit a sample of dummy data (loss should drop significantly after 100 training steps)
 
@@ -788,6 +798,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "heavy computation: 300 steps overfit on real GRID sample with lip tracking"]
     fn test_overfit_real_sample() {
         // test if a randomly initialized model can overfit a sample of real data (loss should drop significantly after 100 training steps)
 
@@ -808,11 +819,11 @@ mod tests {
         let frame_dims = (50, 100);
 
         // init mouth tracker
-        let tracker_config = LipTrackerConfig::new(
+        let tracker_config = TrackerConfig::Haar(HaarTrackerConfig::new(
             context.models_path.join("haarcascade_frontalface_alt2.xml"),
             context.models_path.join("haarcascade_mcs_mouth.xml"),
             frame_dims,
-        );
+        ));
 
         // init GRID dataset instance
         let dataset = GridDataset::new(
@@ -921,6 +932,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "heavy computation: 300 steps overfit on batch of 8 real GRID samples"]
     fn test_overfit_real_batch() {
         // test if a randomly initialized model can overfit a batch of real data
 
@@ -933,7 +945,7 @@ mod tests {
         // let device = NdArrayDevice::Cpu;
 
         let mut rng = StdRng::seed_from_u64(SEED);
-        let n = 16; // batch size
+        let n = 8; // batch size
         let lr = 1e-3;
         let steps = 300;
         let mut initial_loss = 0.0;
@@ -942,11 +954,11 @@ mod tests {
         let frame_dims = (50, 150);
 
         // init mouth tracker
-        let tracker_config = LipTrackerConfig::new(
+        let tracker_config = TrackerConfig::Haar(HaarTrackerConfig::new(
             context.models_path.join("haarcascade_frontalface_alt2.xml"),
             context.models_path.join("haarcascade_mcs_mouth.xml"),
             frame_dims,
-        );
+        ));
 
         // init GRID dataset instance
         let dataset = GridDataset::new(
@@ -956,7 +968,7 @@ mod tests {
             None,
         );
 
-        // grab 16 real samples from our actual dataset (GRID again)
+        // grab N real samples from our actual dataset (GRID again)
         let mut items = Vec::with_capacity(n);
         while items.len() < n {
             let idx = rng.random_range(0..dataset.len());

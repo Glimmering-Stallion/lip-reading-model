@@ -26,13 +26,15 @@
 // preprocess a specific dataset for the VSRM::                                          cargo run -- preprocess --dataset [dataset_src]
 // train new VSRM with default model ID `vsrm_{dataset_src}` (error if ID alr exists):   cargo run -- train --model
 // train new VSRM with custom model ID (error if ID exists):                             cargo run -- train --model [my_vsrm]
-// resume training from latest checkpoint (uses last completed epoch):                   cargo run -- train --model [my_vsrm] --resume
-// resume training from specified checkpoint:                                            cargo run -- train --model [my_vsrm] --resume [epoch]
+// resume training from latest checkpoint (uses last completed epoch):                   cargo run -- train --model [...] --resume
+// resume training from specified checkpoint:                                            cargo run -- train --model [...] --resume [epoch]
 // train using a subset of the dataset (e.g. fraction = 0.1 for 10%):                    cargo run -- train --model [...] --subset [fraction]
 // toggle keep-all-checkpoints during training (default: keep most recent only):         cargo run -- train --model [...] --keep-all-checkpoints [on|off]
-// run inference on a single video:                                                      cargo run -- infer --model [my_vsrm] --input [path/to/video.mpg]
-// run inference in specified video and write predictions to file:                       cargo run -- infer --model [my_vsrm] --input [path/to/video.mpg] --output [predictions.txt]
-
+// run inference for default model ID on a video file:                                   cargo run -- infer --model --input [path/to/video.mpg]
+// run inference for custom model ID on a video file:                                    cargo run -- infer --model [my_vsrm] --input [path/to/video.mpg]
+// run inference on a video file with visulization overlay:                              cargo run -- infer --model [...] --input [...] --visualize
+// run real-time live inference from webcam:                                             cargo run -- infer --model [...] --live
+// run real-time live inference from specified webcam:                                   cargo run -- infer --model [...] --live --camera [my_camera]
 
 
 // imports
@@ -43,12 +45,15 @@ use burn::{
         wgpu::WgpuDevice::DefaultDevice,
     },
     grad_clipping::GradientClippingConfig,
-    optim::{AdamConfig, decay::WeightDecayConfig},
+    optim::{AdamConfig, decay::WeightDecayConfig}, prelude::Backend,
 };
 use lrm_rust::{
     cli,
     ctc::lm::LanguageModel,
-    pipeline::{DatasetSource, tracker::LipTrackerConfig},
+    pipeline::{
+        DatasetSource,
+        tracker::{TrackerConfig, HaarTrackerConfig},
+    },
     prelude::*,
     vocab::SPACE_ID,
 };
@@ -145,8 +150,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             run_train_vsrm(&context, model.as_ref().and_then(|m| m.as_deref()), *resume, *subset, keep_all_checkpoints.as_ref().map(|o| o.as_deref()), &token_map)?;
         }
         Command::Infer { model, input, output } => {
-            // TODO: run_infer_vsrm(&context, model, input, output.as_deref(), &(*token_map).clone())?;
-            eprintln!("Inference not yet wired. Model: {}, input: {:?}, output: {:?}", model, input, output);
+            // run_infer_vsrm(&context, model.as_ref(), input, &(*token_map).clone())?;
         }
         Command::Preprocess { dataset } => {
             run_preprocess(&context, dataset, &token_map)?;
@@ -302,6 +306,17 @@ fn run_train_vsrm(
 
 
 
+// fn run_infer_vsrm<B: Backend>(
+//     context: &Context,
+//     model: Option<&str>,
+//     input: Option<&str>,
+//     token_map: &Arc<TokenMap>,
+// ) -> Result<> {
+//     todo!()
+// }
+
+
+
 /// Pre-extracts mouth crops to disk for faster training.
 ///
 /// ### Params:
@@ -318,11 +333,11 @@ fn run_preprocess(
 ) -> Result<(), Box<dyn Error>> {
     if dataset != "grid" { return Err(format!("Unsupported dataset: {}. Only 'grid' is supported.", dataset).into()); }
 
-    let tracker_config = LipTrackerConfig::new(
+    let tracker_config = TrackerConfig::Haar(HaarTrackerConfig::new(
         context.models_path.join("haarcascade_frontalface_alt2.xml"),
         context.models_path.join("haarcascade_mcs_mouth.xml"),
         (50, 100),
-    );
+    ));
 
     let grid_dataset = GridDataset::new(
         context,

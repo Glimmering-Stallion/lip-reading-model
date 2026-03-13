@@ -35,6 +35,11 @@ pub mod prelude {
                 extract_slr_corpus,
                 stream_corpus_lines,
             },
+            tracker::{
+                LipTrackerBackend,
+                TrackerConfig,
+                HaarTrackerConfig,
+            },
             adapters::grid::{GridDataset},
             batcher::{
                 Batch,

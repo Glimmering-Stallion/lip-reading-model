@@ -26,7 +26,14 @@ data/
 test_frame.png
 
 # ignore models (in both Python and Rust dirs)
-models/*
+**/models/
+
+# catch large binary model files specifically (extra safety)
+*.mpk
+*.pt
+*.pth
+*.bin
+checkpoint*
 
 # ignore VSCode settings
 .vscode/

@@ -11,19 +11,32 @@
 
 // imports
 use burn::{
-    config::Config, module::Module, nn::{
-        Dropout, DropoutConfig, GroupNorm, GroupNormConfig, conv::{Conv1d, Conv1dConfig}
-    }, tensor::{
-        Tensor, activation, backend::Backend
+    config::Config,
+    module::Module,
+    nn::{
+        Dropout,
+        DropoutConfig,
+        LayerNorm,
+        LayerNormConfig,
+        conv::{
+            Conv1d,
+            Conv1dConfig,
+        }
+    },
+    tensor::{
+        Tensor,
+        activation,
+        backend::Backend
     }
 };
 
 
 
-#[derive(Module, Debug)]
+#[derive(Module,
+    Debug)]
 pub struct TcnBlock<B: Backend> {
-    conv1: Conv1d<B>, gn1: GroupNorm<B>,
-    conv2: Conv1d<B>, gn2: GroupNorm<B>,
+    conv1: Conv1d<B>, ln1: LayerNorm<B>,
+    conv2: Conv1d<B>, ln2: LayerNorm<B>,
     padding: usize, dropout: Dropout,
     proj: Option<Conv1d<B>>,
 }
@@ -42,9 +55,6 @@ pub struct TemporalConvNetConfig {
 
     #[config(default = 0.0)]
     pub dropout_prob: f64,        // dropout probability after the Conv1D layers within a TCN Block
-
-    #[config(default = 8)]
-    pub norm_groups: usize,       // number of groups for GroupNorm (must be divisible by channels)
 }
 
 
@@ -71,7 +81,6 @@ impl<B: Backend> TcnBlock<B> {
     /// - `kernel_size`: Temporal width of convolution window.
     /// - `dilation`: Spacing between kernel elements (controls lookback range).
     /// - `dropout_prob`: Probability for dropout layers between convolutions.
-    /// - `norm_groups`: Number of groups for GroupNorm (must be divisible by channels).
     /// - `device`: The backend device to initialize weights on.
     ///
     /// ### Returns:
@@ -82,24 +91,22 @@ impl<B: Backend> TcnBlock<B> {
         kernel_size: usize,
         dilation: usize,
         dropout_prob: f64,
-        norm_groups: usize,
         device: &B::Device,
     ) -> Self {
         assert!(in_channels > 0 && out_channels > 0, "TCN channels must be > 0");
         assert!(kernel_size > 0, "TCN kernel size must be > 0");
         assert!(dilation > 0, "TCN dilation must be > 0");
         assert!((0.0..=1.0).contains(&dropout_prob), "TCN dropout probability must be in [0, 1]");
-        assert!(out_channels.is_multiple_of(norm_groups), "Output channels ({}) must be divisible by norm_groups ({})", out_channels, norm_groups);
 
         let conv1 = Conv1dConfig::new(in_channels, out_channels, kernel_size)
             .with_dilation(dilation)
             .init(device);
-        let gn1 = GroupNormConfig::new(norm_groups, out_channels).init(device);
+        let ln1 = LayerNormConfig::new(out_channels).init(device);
 
         let conv2 = Conv1dConfig::new(out_channels, out_channels, kernel_size)
             .with_dilation(dilation)
             .init(device);
-        let gn2 = GroupNormConfig::new(norm_groups, out_channels).init(device);
+        let ln2 = LayerNormConfig::new(out_channels).init(device);
 
         let padding = (kernel_size - 1) * dilation;
         let dropout = DropoutConfig::new(dropout_prob).init();
@@ -111,8 +118,8 @@ impl<B: Backend> TcnBlock<B> {
         } else { None };
 
         Self {
-            conv1, gn1,
-            conv2, gn2,
+            conv1, ln1,
+            conv2, ln2,
             padding,
             dropout,
             proj,
@@ -131,7 +138,7 @@ impl<B: Backend> TcnBlock<B> {
     pub fn forward(&self, input: Tensor<B, 3>) -> Tensor<B, 3> {
         // manually apply causal left padding to time dimension of input
         // default case:    (left, right, top, bottom) = (dim -1, dim -2)
-        // our case:        (timesteps_left, timesteps_right, channels_left, channels_right)
+        // our case:        (timesteps_left, timesteps_right, channels_top, channels_bottom)
         // resulting input: (padding, 0, 0, 0)
 
         debug_assert_eq!(input.dims().len(), 3);
@@ -142,15 +149,15 @@ impl<B: Backend> TcnBlock<B> {
             None => input.clone(),
         };
 
-        let x = input.pad((self.padding, 0, 0, 0), 0.0); // first left-padding
-        let x = self.conv1.forward(x);
-        let x = self.gn1.forward(x);
+        let x = input.pad((self.padding, 0, 0, 0), 0.0);
+        let x = self.conv1.forward(x).swap_dims(2, 1);  // [N, T, C]
+        let x = self.ln1.forward(x).swap_dims(2, 1);    // [N, C, T]
         let x = activation::relu(x);
         let x = self.dropout.forward(x);
 
-        let x = x.pad((self.padding, 0, 0, 0), 0.0); // second left-padding
-        let x = self.conv2.forward(x);
-        let x = self.gn2.forward(x);
+        let x = x.pad((self.padding, 0, 0, 0), 0.0);
+        let x = self.conv2.forward(x).swap_dims(2, 1);  // [N, T, C]
+        let x = self.ln2.forward(x).swap_dims(2, 1);    // [N, C, T]
         let x = activation::relu(x);
         let x = self.dropout.forward(x);
 
@@ -167,7 +174,6 @@ impl TemporalConvNetConfig {
             self.kernel_size,
             self.layers,
             self.dropout_prob,
-            self.norm_groups,
             device,
         )
     }
@@ -183,7 +189,6 @@ impl<B: Backend> TemporalConvNet<B> {
     /// - `kernel_size`: Size of the 1D temporal kernel.
     /// - `layers`: Number of residual blocks to stack (dilation = 2^layers).
     /// - `dropout_prob`: Dropout rate applied within each residual block.
-    /// - `norm_groups`: Number of groups for GroupNorm (must be divisible by channels).
     /// - `device`: Backend device for weight allocation.
     ///
     /// ### Returns:
@@ -193,7 +198,6 @@ impl<B: Backend> TemporalConvNet<B> {
         kernel_size: usize,
         layers: usize,
         dropout_prob: f64,
-        norm_groups: usize,
         device: &B::Device,
     ) -> Self {
         assert!(layers > 0, "TCN must have at least one layer");
@@ -215,7 +219,6 @@ impl<B: Backend> TemporalConvNet<B> {
                 kernel_size,
                 dilation,
                 dropout_prob,
-                norm_groups,
                 device,
             );
             tcn_blocks.push(tcn_block);
@@ -277,13 +280,11 @@ mod tests {
         let device = Default::default();
         let (n, c_in, l) = (2, 16, 32);
         let c_out = 32;
-        let norm_groups = 8;
 
         let block = TcnBlock::<B>::new(
             c_in, c_out, 3,   // kernel
             2,   // dilation
             0.1, // dropout
-            norm_groups,
             &device,
         );
 
@@ -294,14 +295,8 @@ mod tests {
     }
 
     /// Tests that the TCN is causal: output at time t depends only on inputs at 0..=t.
-    /// 
-    /// NOTE: Currently ignored because GroupNorm normalizes over the full sequence (including
-    /// future timesteps), which breaks strict causality.
-    /// 
-    /// The dilated conv layers use left-only padding and are causal;
-    /// replacing GroupNorm with per-timestep normalization would fix this.
+    /// LayerNorm is applied per-timestep (over channels only), preserving causality.
     #[test]
-    #[ignore = "GroupNorm normalizes over full sequence, breaking causality; conv layers are causal"]
     fn tcn_is_causal() {
         let device: NdArrayDevice = Default::default();
         let (n, c, t) = (2, 1, 6); // 2 batches to compare two cases
@@ -309,7 +304,6 @@ mod tests {
 
         // causal TCN with no dropout for determinism
         let tcn: TemporalConvNet<B> = TemporalConvNetConfig::new([c, c])
-            .with_norm_groups(1)
             .with_layers(3)
             .init(&device);
 
