@@ -13,9 +13,12 @@ pub mod vocab;
 
 
 pub mod prelude {
+    pub type ESS = Box<dyn std::error::Error + Send + Sync>;
+
     pub use crate::{
         context::Context,
         utils::{
+            io_err,
             log_sum_exp_2_scalar,
             log_sum_exp_2_tensor,
             log_sum_exp_3_scalar,
@@ -32,6 +35,8 @@ pub mod prelude {
         },
         pipeline::{
             io::{
+                load_json,
+                save_json,
                 extract_slr_corpus,
                 stream_corpus_lines,
             },
@@ -51,10 +56,13 @@ pub mod prelude {
             VsrModel,
             VsrModelConfig,
         },
-        ctc::lm::{
-            Ngram,
-            NgramConfig,
-            build_or_load_ngram_lm,
+        ctc::{
+            ctc_decode::CtcDecodeType,
+            lm::{
+                Ngram,
+                NgramConfig,
+                build_or_load_ngram_lm,
+            },
         },
         training::{
             learner::{
@@ -69,6 +77,18 @@ pub mod prelude {
                 CtcWordErrorRate,
             },
         },
-        // inference::run_infer_vsrm,
+        inference::{
+            predictor::{
+                VsrmPredictorConfig,
+                InferenceSession,
+                SlidingWindow,
+                infer,
+            },
+            loader::{
+                open_camera,
+                load_frame,
+            },
+            overlay::OverlayRenderer,
+        },
     };
 }

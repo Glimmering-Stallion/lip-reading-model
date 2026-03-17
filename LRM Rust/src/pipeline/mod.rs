@@ -7,14 +7,12 @@
 //! - `dataset`: high-level dataset source abstractions (GRID/LRW/others)
 //! - `batcher`: tensor grouping and padding logic for CTC-style rectangular batches
 //! - `adapters`: source-specific logic to map specific datasets to standardized 'VsrmItem' format for batch collation
-//! - `video`: (stub) video loading with LipTracker for inference; code commented out pending integration
 
 pub mod io;
 pub mod tracker;
 pub mod dataset;
 pub mod batcher;
 pub mod adapters;
-pub mod video;
 
 pub use tracker::{LipTrackerBackend, TrackerConfig, HaarTrackerConfig};
 pub use dataset::{DatasetSource, DatasetSplit};

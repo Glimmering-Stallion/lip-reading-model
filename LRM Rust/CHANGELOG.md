@@ -167,8 +167,6 @@ cargo run -- infer --model vsrm_grid --input path/to/video.mpg --output pred.txt
 - Doc comment consistency: `metrics.rs`, `ctc_loss.rs`, `learner.rs` use `### Params:` / `### Returns:` style.
 - README Project Tree: added `cli.rs`, fixed tree structure.
 
-# Change Logs Since Last Git Commit
-
 ## 13. TCN Causal Normalization ([`src/vsrm/tcn.rs`](src/vsrm/tcn.rs))
 
 - Replaced GroupNorm with per-timestep LayerNorm to preserve strict causality and to maintain coherence in train-inference dynamics.
@@ -213,6 +211,49 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 
 **No checkpoint impact.** Model weights unchanged; this is a code-organization refactor only.
 
+# Change Logs Since Last Git Commit
+
+## 16. Inference Pipeline
+
+**Full inference path from video to prediction:**
+
+- **`InferenceSession`** ([`src/inference/predictor.rs`](src/inference/predictor.rs)): Loads trained VSRM checkpoint and frame batcher. Exposes `predict_file()` for single-video mode and `predict_frames()` for sliding-window inference. Takes pre-loaded configs; no filesystem access except checkpoint.
+- **`infer()` free function**: Mirrors `train()`; receives configs, builds session internally, runs file or live loop.
+- **`inference/loader.rs`**: `load_video` (video file + tracker → `FramesBuffer`), `load_frame`, `open_camera`. `pipeline/video.rs` deleted.
+- **`OverlayRenderer`** ([`src/inference/overlay.rs`](src/inference/overlay.rs)): Draws tracker metadata and prediction text on live frames.
+- **`SlidingWindow`**: Buffers frames for live inference; when full, flushes to `FramesBuffer` and runs CTC decode.
+- **`run_infer_vsrm`**: Loads configs from model dir (hard block on missing), builds `VsrmPredictorConfig` from `learner_config` (frame_dims, rf), delegates to `infer()`.
+
+## 17. CLI and Config
+
+**Train CLI**
+
+- `--model` and `--dataset`; model ID = `vsrm_{dataset_src}` when `--model` omitted. Train requires `--dataset` for fresh start.
+- Config loaded in main only when resuming; resolvers take `Option<&VsrmLearnerConfig>`; `learner_config` built via builder pattern.
+
+**Infer CLI**
+
+- Requires `--model`; `--input` or `--live`; `--camera` for webcam mode.
+
+**Preprocess**
+
+- `--dataset` uses `DatasetSource` (FromStr) instead of `String`.
+
+**VsrmLearnerConfig**
+
+- `dataset_src`, `rf` (receptive field), builder pattern. `rf` persisted; infer reads from `learner_config.json` without model init.
+- `train()` returns `Result<(), ESS>`.
+
+**VsrmPredictorConfig**
+
+- `frame_dims`, `rf_window_stride`, `search_type: CtcDecodeType`.
+
+## 18. Batcher and Misc
+
+- **Batcher**: Supports inference (no transcripts): `max_l.max(1)` as placeholder; targets unused during inference.
+- **TrainBackend** / **InferBackend** type aliases in main.
+- **Error propagation**: `io_err` in utils; `ESS` type alias; resolvers return `Result`; `?` in runners.
+
 ## Files Modified (Summary)
 
 | File | Changes |
@@ -225,18 +266,16 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `grid.rs` | Global stats, try_load/get fallback, pre-validation, sp filtering |
 | `dataset.rs` | DatasetStats struct |
 | `io.rs` | load_json, save_json |
-| `batcher.rs` | Global normalization with DatasetStats |
-| `learner.rs` | Composed LR scheduler, train/resume logic, entropy penalty (disabled) |
+| `batcher.rs` | Global normalization with DatasetStats; inference support (max_l.max(1)) |
+| `learner.rs` | Composed LR scheduler, train/resume logic; VsrmLearnerConfig: rf, dataset_src, builder; train() returns Result |
 | `summary.rs` | New SummaryVisitor module |
-| `main.rs` | CLI subcommands (build-lm, train, infer), run_build_lm, run_train_vsrm; tracker imports updated |
-| `inference/predictor.rs` | run_infer_vsrm (commented out, stub) |
-| `pipeline/video.rs` | load_video_with_tracker (commented out, for inference) |
-| `lm.rs` | Doc typo fix (linguistic) |
-| `cli.rs` | New module: checkpoint/CLI resolution helpers |
-| `utils.rs` | Added levenshtein (moved from metrics) |
-| `metrics.rs` | Doc style, typos (aross→across, WEr→WER) |
-| `ctc_loss.rs` | Doc style (params/returns → ### Params/### Returns) |
-| `learner.rs` | model_id String, Params/Returns colons; tracker imports updated to TrackerConfig::Haar |
-| `lib.rs` | Tracker re-exports updated to new names |
-| `pipeline/mod.rs` | Tracker re-exports updated; module doc updated |
-| `README.md` | Project Tree: cli.rs, tree structure fix |
+| `main.rs` | CLI subcommands; infer wired; TrainBackend/InferBackend; Preprocess DatasetSource |
+| `inference/predictor.rs` | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow |
+| `inference/loader.rs` | New: load_video, load_frame, open_camera |
+| `inference/overlay.rs` | New: OverlayRenderer |
+| `pipeline/video.rs` | Deleted; logic in inference/loader.rs |
+| `cli.rs` | Checkpoint/CLI resolution helpers; pure resolvers |
+| `utils.rs` | levenshtein, io_err |
+| `lib.rs` | Tracker re-exports updated |
+| `pipeline/mod.rs` | Tracker re-exports updated |
+| `README.md` | Project tree, CLI examples |

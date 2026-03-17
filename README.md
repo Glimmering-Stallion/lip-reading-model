@@ -150,13 +150,15 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - **Training:** Training and validation pipeline implemented and wired into Burn's learner framework.
 - **Verification:** Pipeline dataflow correctness and model convergence verified via single-batch overfit unit tests.
 - **Mouth tracking:** Dynamic mouth tracking using Haar cascades implemented.
-- **CLI:** Subcommands for build-lm, train (new/resume), and infer (stub, for now) are in place.
+- **CLI:** Subcommands for build-lm, preprocess, train (new/resume), and infer (static file + live cam modes) are in place.
 
 ## Pending / Future Work
 
 - **Standardized inference framework:** Add an inference path with a standardization component that mirrors the batcher's preprocessing (reuse `VsrmBatcher`, `DatasetStats`, `TokenMap` or other components where necessary; avoid creating unnecessary files).
-- **Inference subcommand wiring:** Wire inference subcommand to predictor (video loading + VSRM forward + CTC decode).
 - **FPS video standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
+- **Word-Level N-gram vs. Char Level Decoder Incongruity**: 
+- **Format Error Messages**: In the Rust ecosystem it is more idiomatic for error messages to be lower case and not end with a period (such that they can be chained together).
+- **Grad-CAM For Overlay Visualization**: During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
 
 ## CLI Usage
 
@@ -170,10 +172,10 @@ cargo run -- build-lm --model [lm.bin] --corpus [path/to/corpus.txt] --n [N-gram
 cargo run -- preprocess --dataset [dataset_src]
 
 # Train new VSRM with default model ID "vsrm_{dataset_src}" (error if ID alr exists):
-cargo run -- train --model
+cargo run -- train --dataset [dataset_src]
 
-# Train new VSRM with custom model ID (error if ID alr exists):
-cargo run -- train --model [my_vsrm]
+# Train new VSRM with custom model ID (error if ID exists; --dataset required for fresh start):
+cargo run -- train --model [my_vsrm] --dataset [dataset_src]
 
 # Resume training from latest checkpoint (uses last completed epoch):
 cargo run -- train --model [my_vsrm] --resume
@@ -187,8 +189,17 @@ cargo run -- train --model [...] --subset [fraction]
 # Keep all checkpoints (default: keep most recent only; enables resume from earlier epochs):
 cargo run -- train --model [...] --keep-all-checkpoints [on|off]
 
-# Inference on a specified video and write predictions to file (stub for now, predictor not yet wired)
-cargo run -- infer --model [my_model] --input [path/to/video.mpg] --output [predictions.txt]
+# Inference on a video file with default model ID "vsrm_{dataset_src}" (predictions printed to stdout):
+cargo run -- infer --dataset [dataset_src] --input [path/to/video.mpg]
+
+# Inference with specific model ID:
+cargo run -- infer --model [my_model] --input [path/to/video.mpg]
+
+# Live inference from default webcam:
+cargo run -- infer --model [my_model] --live
+
+# Live inference from specified camera:
+cargo run -- infer --model [my_model] --live --camera [my_camera]
 ```
 
 ## Attributions
@@ -262,7 +273,9 @@ Lip Reading Model
 │  │  │  ├─ lm.rs
 │  │  │  └─ mod.rs
 │  │  ├─ inference
+│  │  │  ├─ loader.rs
 │  │  │  ├─ mod.rs
+│  │  │  ├─ overlay.rs
 │  │  │  └─ predictor.rs
 │  │  ├─ lib.rs
 │  │  ├─ main.rs
@@ -274,8 +287,10 @@ Lip Reading Model
 │  │  │  ├─ dataset.rs
 │  │  │  ├─ io.rs
 │  │  │  ├─ mod.rs
-│  │  │  ├─ tracker.rs
-│  │  │  └─ video.rs
+│  │  │  └─ tracker
+│  │  │     ├─ haar.rs
+│  │  │     ├─ mod.rs
+│  │  │     └─ tracker.rs
 │  │  ├─ training
 │  │  │  ├─ learner.rs
 │  │  │  ├─ metrics.rs

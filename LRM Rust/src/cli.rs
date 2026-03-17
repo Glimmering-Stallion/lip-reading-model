@@ -4,9 +4,16 @@
 
 
 
-use crate::training::VsrmLearnerConfig;
-use burn::config::Config;
-use std::{fs, path::Path, process};
+use crate::{
+    pipeline::DatasetSource,
+    prelude::*,
+    training::VsrmLearnerConfig,
+};
+use std::{
+    fs,
+    io::ErrorKind,
+    path::Path,
+};
 
 
 
@@ -89,7 +96,7 @@ pub fn find_latest_checkpoint_epoch(model_path: &Path) -> Option<usize> {
 pub fn resolve_from_checkpoint(
     model_path: &Path,
     resume_from: Option<Option<usize>>,
-) -> Option<usize> {
+) -> Result<Option<usize>, ESS> {
     // case A: resume flag given --> user explicitly requested a resume
     // - if provided/default model ID exists
     //      - if resume flag carries a value
@@ -103,47 +110,30 @@ pub fn resolve_from_checkpoint(
     match resume_from {
         // --------------- (A) ---------------
         Some(request) => {
-            if model_path.exists() {
+            if !model_path.exists() { Err(io_err(format!("Cannot resume: model directory {:?} does not exist\n", model_path), ErrorKind::InvalidInput)) }
+            else {
                 let epoch = match request {
                     Some(epoch) => {
-                        if checkpoint_epoch_exists(model_path, epoch) {
-                            epoch
-                        } else {
-                            eprintln!("Cannot resume: checkpoint for epoch {} not found in {:?}\n", epoch, model_path);
-                            display_train_cli_help();
-                            process::exit(1);
-                        }
-                    }
-                    None => match find_latest_checkpoint_epoch(model_path) {
-                        Some(epoch) => epoch,
-                        None => {
-                            eprintln!("Cannot resume: no saved checkpoints found in {:?}\n", model_path);
-                            display_train_cli_help();
-                            process::exit(1);
-                        }
+                        if checkpoint_epoch_exists(model_path, epoch) { epoch }
+                        else { return Err(io_err(format!("Cannot resume: checkpoint for epoch {} not found in {:?}\n", epoch, model_path), ErrorKind::InvalidInput)); }
                     },
+                    None => find_latest_checkpoint_epoch(model_path).ok_or_else(|| io_err(format!("Cannot resume: no valid checkpoints found in {:?}\n", model_path), ErrorKind::InvalidInput))?,
                 };
                 println!("Resuming from checkpoint epoch {}\n", epoch);
-                Some(epoch)
-            } else {
-                eprintln!("Cannot resume: model directory {:?} does not exist\n", model_path);
-                display_train_cli_help();
-                process::exit(1);
+                Ok(Some(epoch))
             }
         }
         // --------------- (B) ---------------
         None => {
-            if model_path.exists() {
-                eprintln!(
+            if !model_path.exists() {
+                println!("Training new model: {:?}\n", model_path);
+                Ok(None)
+            } else {
+                Err(io_err(format!(
                     "ERROR: Model directory {:?} already exists!\n
                     To prevent accidental data loss, training has been aborted\n",
                     model_path
-                );
-                display_train_cli_help();
-                process::exit(1);
-            } else {
-                println!("Training new model: {:?}\n", model_path);
-                None
+                ), ErrorKind::InvalidInput))
             }
         }
     }
@@ -156,62 +146,120 @@ pub fn resolve_from_checkpoint(
 /// - **Resume** (model path exists): Loads `learner_config.json`; if CLI is `None`, uses persisted value; otherwise uses CLI value and prints update/same messages.
 /// - **Fresh start**: CLI `None` → false; `Some(Some("on"))` or `Some(None)` → true; `Some(Some("off"))` → false.
 pub fn resolve_keep_all_checkpoints(
-    model_path: &Path,
+    learner_config: Option<&VsrmLearnerConfig>,
     keep_all_checkpoints: Option<Option<&str>>,
-) -> bool {
-    if model_path.exists() {
-        let persisted_learner_config = VsrmLearnerConfig::load(model_path.join("learner_config.json")).ok();
-        let current_learner_config = persisted_learner_config.as_ref().map(|c| c.keep_all_checkpoints).unwrap_or(false);
+) -> Result<bool, ESS> {
+    // resolve provided CLI arg
+    let cli_value = match keep_all_checkpoints {
+        None => None,                                         // flag not provided
+        Some(None) => Some(true),                             // flag provided without value (implicitly true)
+        Some(Some(val)) => Some(parse_cli_bool(val)?),  // flag provided with value (parse value validity)
+    };
 
-        match keep_all_checkpoints {
-            None => current_learner_config,
-            Some(Some(val)) => {
-                let val_bool = matches!(val.to_lowercase().as_str(), "on" | "true" | "1");
-                if val_bool == current_learner_config {
-                    println!("'keep-all-checkpoints' flag already {}\n", if val_bool { "on" } else { "off" });
-                } else {
-                    println!("'keep-all-checkpoints' flag updated to {}\n", if val_bool { "on" } else { "off" });
-                }
-                val_bool
+    match learner_config {
+        // fresh start case (no config with previous value to persist)
+        None => Ok(cli_value.unwrap_or(false)),
+
+        // resume case (persist previous value or update with newly provided CLI arg value)
+        Some(config) => {
+            let persisted_val = config.keep_all_checkpoints;
+            match  cli_value {
+                None => Ok(persisted_val),  // implicitly default to previous value
+                Some(val) => {        // use newly provided value
+                    let status = if val { "on" } else { "off" };
+                    if val == persisted_val { println!("'keep-all-checkpoints' flag already {}\n", status); }  // provided value is same as previous value
+                    else { println!("'keep-all-checkpoints' flag updated to {}\n", status); }                  // provided value is diff from previous value
+                    Ok(val)
+                },
             }
-            Some(None) => {
-                if !current_learner_config {
-                    println!("'keep-all-checkpoints' flag updated to on\n");
-                }
-                true
-            }
-        }
-    } else {
-        match keep_all_checkpoints {
-            None => false,
-            Some(Some(val)) => matches!(val.to_lowercase().as_str(), "on" | "true" | "1"),
-            Some(None) => true,
         }
     }
 }
 
 
 
-/// Resolves `active_subset` from CLI and persisted config.
+/// Resolves `dataset_src` from CLI and persisted config.
+///
+/// - **Resume** (model path exists): Loads `learner_config.json`; if persisted value exists,
+///   validates that the CLI value matches it (panics on mismatch). Falls back to CLI value if
+///   no persisted config is found.
+/// - **Fresh start** (model path doesn't exist): Uses the CLI value directly.
+pub fn resolve_dataset_source(
+    learner_config: Option<&VsrmLearnerConfig>,
+    dataset_src: Option<DatasetSource>,
+) -> Result<DatasetSource, ESS> {
+    match learner_config {
+        // fresh start case (no config with previous value to persist)
+        None => dataset_src.ok_or_else(|| io_err("A '--dataset' source is required when starting a new model from scratch", ErrorKind::InvalidInput)),
+
+        // resume case (persist previous value or update with newly provided CLI arg value)
+        Some(config) => {
+            let persisted_val = config.dataset_src;
+
+            match dataset_src {
+                None => Ok(persisted_val),     // implicitly default to previous value
+                Some(val) => {  // use newly provided value
+                    // provided value is same as previous value
+                    if val.tag() == persisted_val.tag() { Ok(persisted_val) }
+
+                    // provided value is diff from previous value
+                    else {
+                        Err(io_err(format!(
+                            "Dataset mismatch: model was trained on '{}' but '--dataset {}' was specified",
+                            persisted_val.tag(), val.tag(),
+                        ), ErrorKind::InvalidInput))
+                    }
+                },
+            }
+        }
+    }
+}
+
+
+
+/// Resolves `subset` from CLI and persisted config.
 ///
 /// - **Resume** (model path exists): Loads `learner_config.json`; if CLI is `None`, uses persisted value; otherwise uses CLI value.
 /// - **Fresh start**: CLI `None` → None (full dataset); `Some(pct)` → Some((pct, seed)).
 pub fn resolve_active_subset(
-    model_path: &Path,
-    subset_cli: Option<f32>,
+    learner_config: Option<&VsrmLearnerConfig>,
+    subset: Option<f32>,
     seed: u64,
-) -> Option<(f32, u64)> {
-    if model_path.exists() {
-        let persisted = VsrmLearnerConfig::load(model_path.join("learner_config.json")).ok();
-        let current = persisted.and_then(|c| c.active_subset);
-        match subset_cli {
-            None => current,
-            Some(pct) => Some((pct, seed)),
-        }
-    } else {
-        subset_cli.map(|pct| (pct, seed))
+) -> Result<Option<(f32, u64)>, ESS> {
+    // resolve provided CLI arg
+    let cli_value = subset.map(|pct| (pct, seed));
+
+    match learner_config {
+        // fresh start case (no config with previous value to persist)
+        None => Ok(subset.map(|pct| (pct, seed))),
+
+        // resume case (persist previous value or update with newly provided CLI arg value)
+        Some(config) => {
+            let persisted_val = config.active_subset;
+
+            match cli_value {
+                None => Ok(persisted_val),  // implicitly default to previous value
+                Some(val) => {  // use newly provided value
+                    // provided value is same as previous value
+                    if Some(val) == persisted_val {
+                        println!("'subset' flag remains {:?}\n", val);
+                        Ok(persisted_val)
+                    }
+
+                    // provided value is diff from previous value
+                    else {
+                        Err(io_err(format!(
+                            "Subset mismatch: Cannot change data distribution during resume\n
+                            Persisted: {:?}, Requested: {:?}",
+                            persisted_val, val,
+                        ), ErrorKind::InvalidInput))
+                    }
+                },
+            }
+        },
     }
 }
+
 
 
 /// Prints training CLI input options to `stderr` (to guide user intent).
@@ -226,4 +274,30 @@ pub fn display_train_cli_help() {
         - To keep all checkpoints (enables resume from earlier epochs): use '--keep-all-checkpoints [on|off]' (default when passed: on)\n\
         - To start fresh: manually delete the model directory or use another model ID in '--model [model ID]'\n"
     );
+}
+
+
+
+/// Parses given raw CLI strings into a strict boolean, while rejecting invalid inputs.
+/// 
+/// Considers three case insensitive input string variations for valid bool parsing:
+/// - "on"/"off",
+/// - "true"/"false",
+/// - "1"/"0",
+/// - anything else is an error.
+/// 
+/// ### Params:
+/// - `val`: String value to parse.
+/// 
+/// ## Returns:
+/// A result wrapper containing the raw bool value under valid conditions.
+fn parse_cli_bool(val: &str) -> Result<bool, ESS> {
+    match val.to_lowercase().as_str() {
+        ("on" | "true" | "1") => Ok(true),
+        ("off" | "false" | "0") => Ok(false),
+        _ => Err(io_err(format!(
+            "Invalid boolean flag value: '{}'\n
+            Expected on/off, true/false, or 1/0.", val
+        ), ErrorKind::InvalidInput)),
+    }
 }

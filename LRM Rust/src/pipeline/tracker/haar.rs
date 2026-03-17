@@ -12,8 +12,9 @@ use opencv::{
     objdetect::CascadeClassifier,
     prelude::*,
 };
+use crate::prelude::{io_err, ESS};
 use std::{
-    error::Error,
+    io::ErrorKind,
     path::PathBuf,
 };
 
@@ -87,7 +88,7 @@ impl LipTrackerBackend for HaarTracker {
     ///
     /// ### Returns:
     /// A [`TrackerResult`] containing the mouth crop and visualization metadata.
-    fn process_frame(&mut self, frame: &Mat) -> Result<TrackerResult, Box<dyn Error>> {
+    fn process_frame(&mut self, frame: &Mat) -> Result<TrackerResult, ESS> {
         let face_roi = match self.detect_face_roi(frame) {
             Some(roi) => roi,
             None => {
@@ -120,7 +121,9 @@ impl LipTrackerBackend for HaarTracker {
             face_roi.width,
             face_roi.height / 2,
         );
-        let half_face_frame = Mat::roi(frame, half_face_roi)?.clone_pointee();
+        let half_face_frame = Mat::roi(frame, half_face_roi)
+            .map_err(|e| io_err(e.to_string(), ErrorKind::Other))?
+            .clone_pointee();
 
         let mouth_roi = self.detect_mouth_roi(&half_face_frame);
 

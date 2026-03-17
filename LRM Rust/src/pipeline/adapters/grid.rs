@@ -10,6 +10,7 @@
 // custom imports
 use crate::{
     context::Context,
+    prelude::{io_err, ESS},
     pipeline::{
         FramesBuffer,
         batcher::VsrmItem,
@@ -53,9 +54,8 @@ use opencv::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    error::Error,
     fs::{read_dir, rename, File},
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, ErrorKind},
     path::PathBuf,
 };
 
@@ -224,13 +224,13 @@ impl GridDataset {
             let frames_buffer = match &self.tracker_config {
                 // --------------- mode (A): lip tracking and cropping ---------------
                 Some(config) => with_local_tracker(config, |tracker: &mut dyn LipTrackerBackend| {
-                    tracker.reset_state();
-                    self.load_frames(entry, |frame| {
+                    tracker.reset_state(); // clear smoothing state from last video to prevent drift
+                    self.load_video(entry, |frame| {
                         tracker.process_frame(frame).map(|result| result.crop)
                     })
                 }).ok()?,
                 // -------------------- mode (B) full sized frames -------------------
-                None => self.load_frames(entry, |f| Ok(f.clone())).ok()?,
+                None => self.load_video(entry, |f| Ok(f.clone())).ok()?,
             };
 
             // internal filtering
@@ -452,7 +452,7 @@ impl GridDataset {
     ///
     /// ### Returns:
     /// A sequence of corresponding char IDs.
-    fn load_alignment(&self, entry: &str) -> Result<Vec<usize>, Box<dyn Error>> {
+    fn load_alignment(&self, entry: &str) -> Result<Vec<usize>, ESS> {
         let (speaker, stem) = entry.split_once('/').unwrap_or((entry, ""));
         let alignment_speaker = self.frames_to_alignment.get(speaker).map(|s| s.as_str()).unwrap_or(speaker);
         let alignment_path = self.grid_path
@@ -485,7 +485,7 @@ impl GridDataset {
             }
             Err(e) => {
                 eprintln!("Error opening alignments file: {}", e);
-                Err(Box::new(e))
+                Err(e.into())
             }
         }
     }
@@ -498,12 +498,12 @@ impl GridDataset {
     ///
     /// ### Returns:
     /// A `FramesBuffer` containing the flattened vector of frames along with frame dimensions.
-    fn load_frames<F>(
+    fn load_video<F>(
         &self,
         entry: &str,
         mut process: F,
-    ) -> Result<FramesBuffer, Box<dyn Error>>
-    where F: FnMut(&Mat) -> Result<Mat, Box<dyn Error>>
+    ) -> Result<FramesBuffer, ESS>
+    where F: FnMut(&Mat) -> Result<Mat, ESS>
     {
         let frames_path: PathBuf = self.grid_path
             .join("frames")
@@ -516,9 +516,11 @@ impl GridDataset {
         let mut frame_dims: (usize, usize) = (0, 0); // (height, width)
         let (mut orig_frame, mut gray_frame) = (Mat::default(), Mat::default());
 
-        match VideoCapture::from_file(frames_path.to_str().ok_or("Invalid path")?, CAP_ANY) {
+        let path_str = frames_path.to_str().ok_or_else(|| io_err("Invalid path", ErrorKind::InvalidInput))?;
+
+        match VideoCapture::from_file(path_str, CAP_ANY) {
             Ok(mut cap) => {
-                while cap.read(&mut orig_frame).expect("Error reading frame") {
+                while cap.read(&mut orig_frame).map_err(|e| io_err(e.to_string(), ErrorKind::Other))? {
                     if orig_frame.empty() { break; }
 
                     // convert frame to grayscale
@@ -528,16 +530,16 @@ impl GridDataset {
                         imgproc::COLOR_BGR2GRAY,
                         0,
                         AlgorithmHint::ALGO_HINT_DEFAULT,
-                    ).expect("Failed to convert frame to grayscale");
+                    ).map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
 
                     // process frame, obtain frame dims, and add to frames container
                     let proc_frame = process(&gray_frame)?;
-                    let size = proc_frame.size()?;
+                    let size = proc_frame.size().map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
                     (frame_dims.0, frame_dims.1) = (
                         size.height as usize,
                         size.width as usize,
                     );
-                    frames.extend(proc_frame.data_bytes()?);
+                    frames.extend(proc_frame.data_bytes().map_err(|e| io_err(e.to_string(), ErrorKind::Other))?);
                 }
 
                 Ok(FramesBuffer {
@@ -548,7 +550,7 @@ impl GridDataset {
             }
             Err(e) => {
                 eprintln!("Error opening video file: {}", e);
-                Err(Box::new(e))
+                Err(io_err(e.to_string(), ErrorKind::Other))
             }
         }
     }
@@ -668,19 +670,19 @@ fn determine_frames_to_alignment_mapping(
 ///
 /// ### Returns:
 /// `Ok(())` on success, or an error if mapping is ambiguous (many-to-one) or I/O fails.
-pub fn align_grid_directories(context: &crate::context::Context, dry_run: bool) -> Result<(), Box<dyn Error>> {
+pub fn align_grid_directories(context: &crate::context::Context, dry_run: bool) -> Result<(), ESS> {
     let grid_path = context.data_path.join("grid-lr-corpus");
     let frames_path = grid_path.join("frames");
     let alignments_path = grid_path.join("alignments");
 
     if !grid_path.exists() {
-        return Err(format!("GRID corpus directory does not exist at {:?}", grid_path).into());
+        return Err(io_err(format!("GRID corpus directory does not exist at {:?}", grid_path), ErrorKind::NotFound));
     }
     if !frames_path.exists() {
-        return Err(format!("GRID frames directory does not exist at {:?}", frames_path).into());
+        return Err(io_err(format!("GRID frames directory does not exist at {:?}", frames_path), ErrorKind::NotFound));
     }
     if !alignments_path.exists() {
-        return Err(format!("GRID alignments directory does not exist at {:?}", alignments_path).into());
+        return Err(io_err(format!("GRID alignments directory does not exist at {:?}", alignments_path), ErrorKind::NotFound));
     }
 
     // Collect frames speakers
@@ -704,11 +706,10 @@ pub fn align_grid_directories(context: &crate::context::Context, dry_run: bool) 
     }
     for (a, fs) in &align_to_frames {
         if fs.len() > 1 {
-            return Err(format!(
-                "Ambiguous mapping: alignment dir {} is best match for multiple frames dirs: {:?}",
-                a, fs
-            )
-            .into());
+            return Err(io_err(
+                format!("Ambiguous mapping: alignment dir {} is best match for multiple frames dirs: {:?}", a, fs),
+                ErrorKind::InvalidInput,
+            ));
         }
     }
 

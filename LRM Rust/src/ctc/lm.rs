@@ -7,14 +7,13 @@
 
 
 // imports
-use burn::{
-    config::Config,
-};
+use burn::config::Config;
+use crate::prelude::{io_err, ESS};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
+    io::ErrorKind,
     fmt::Debug,
-    error::Error,
     path::Path,
 };
 use bincode::{self, config};
@@ -198,13 +197,13 @@ impl LanguageModel for Ngram {
 
 
 impl Ngram {
-    pub fn save(&self, path: &str) -> Result<(), Box<dyn Error>> {
+    pub fn save(&self, path: &str) -> Result<(), ESS> {
         let mut f = File::create(path)?;
         bincode::serde::encode_into_std_write(self, &mut f, config::standard())?;
         Ok(())
     }
 
-    pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn load(path: &str) -> Result<Self, ESS> {
         let mut f = File::open(path)?;
         let lm: Self = bincode::serde::decode_from_std_read(&mut f, config::standard())?;
         Ok(lm)
@@ -293,14 +292,14 @@ pub fn build_or_load_ngram_lm<I>(
     n: usize,
     vocab_size: usize,
     train_sequences: I,
-) -> Result<Ngram, Box<dyn Error>>
+) -> Result<Ngram, ESS>
 where
     I: IntoIterator<Item = Vec<usize>>,
     I::IntoIter: 'static,
 {
     // does an LM already exist?
     if output_path.exists() {
-        let path_str = output_path.to_str().ok_or("Invalid output path")?;
+        let path_str = output_path.to_str().ok_or_else(|| io_err("Invalid output path", ErrorKind::InvalidInput))?;
         let lm = Ngram::load(path_str)?;
         Ok(lm)
     } else {
@@ -317,7 +316,7 @@ where
         if let Some(parent) = output_path.parent() { fs::create_dir_all(parent)?; }
 
         lm.train(Box::new(train_sequences.into_iter()));
-        let path_str = output_path.to_str().ok_or("Invalid output path")?;
+        let path_str = output_path.to_str().ok_or_else(|| io_err("Invalid output path", ErrorKind::InvalidInput))?;
         lm.save(path_str)?;
 
         println!("Saved N-gram LM to {}\n", path_str);

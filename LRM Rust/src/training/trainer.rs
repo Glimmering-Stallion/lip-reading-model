@@ -1,4 +1,10 @@
-// VSRM manual training loop for low-level control (like custom gradient inspection, and debugging CTC-specific edge cases)
+//! Legacy VSRM training loop for manual low-level control.
+//!
+//! This module implements a custom training loop over the Visual Speech Recognition
+//! Model (VSRM), providing fine-grained control over the forward pass, CTC loss
+//! computation, backpropagation, and optimizer steps. It is used for custom gradient
+//! inspection and debugging CTC-specific edge cases, as an alternative to Burn's
+//! higher-level `Learner` API.
 
 
 
@@ -156,7 +162,7 @@ mod tests {
     pub type AD = Autodiff<B>;    // autodiff backend
 
     #[test]
-    #[ignore = "heavy: 25 epochs on Wgpu GPU"]
+    #[ignore = "heavy computation: 25 epochs on Wgpu GPU"]
     fn test_train_epoch() {
         // (batch size, channels, timesteps, height, width, sequence length), where t ≥ 2l - 1
         let (n, c, t, h, w, l) = (1, 1, 6, 40, 40, 3);

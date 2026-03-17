@@ -94,10 +94,10 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
             .iter()
             .map(|item| item.transcript_ids.len())
             .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+            .max(1); // max_l may be 0 for inference (no transcripts); use 1 as placeholder since targets are unused
 
         assert!(max_t > 0, "Max time dimension is zero");
-        assert!(max_l > 0, "Max transcript length is zero");
 
         // padded frames and sequence targets
         let mut padded_frames_container: Vec<Tensor<CpuB, 4>> = Vec::with_capacity(items.len());

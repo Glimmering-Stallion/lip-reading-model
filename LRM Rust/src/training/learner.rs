@@ -9,7 +9,7 @@
 
 // custom imports
 use crate::{
-    cli::resolve_from_checkpoint,
+    prelude::{io_err, ESS},
     context::Context,
     ctc::{
         ctc_decode::{
@@ -34,8 +34,8 @@ use crate::{
             save_json,
         },
         tracker::{
-            TrackerConfig,
             HaarTrackerConfig,
+            TrackerConfig,
         },
     },
     training::metrics::{
@@ -44,9 +44,9 @@ use crate::{
         VsrmStepOutput,
     },
     vocab::{
-        VOCAB,
-        BLANK_ID,
         TokenMap,
+        BLANK_ID,
+        VOCAB,
     },
     vsrm::{
         SummaryVisitor,
@@ -123,14 +123,20 @@ type ValidLoader<B> = Arc<dyn DataLoader<<B as AutodiffBackend>::InnerBackend, B
 pub struct VsrmLearnerConfig  {
     pub model_id: String,                    // model name to be saved as
 
+    pub dataset_src: DatasetSource,          // dataset src that model will be trained on
+
     // None = not specified, Some(None) = use latest, Some(Some(e)) = use epoch e
-    pub resume_from: Option<Option<usize>>,  // which checkpoint to resume training model from (runtime-only, not persisted to learner_config.json)
+    #[config(default = "None")]
+    pub resume_from: Option<usize>,          // which checkpoint to resume training model from (runtime-only, not persisted to learner_config.json)
 
     #[config(default = false)]
-    pub keep_all_checkpoints: bool,          // if true, keep all checkpoints; else keep most recent only
+    pub keep_all_checkpoints: bool,          // flag/toggle for checkpoint save strategy (if true, keep all checkpoints; else keep most recent only)
 
     #[config(default = "(50, 100)")]
     pub frame_dims: (usize, usize),          // video frame dimensions that the processes (height, width)
+
+    #[config(default = 0)]
+    pub rf: usize,                           // receptive field (RF) of the model (populated on initialization)
 
     #[config(default = 50)]
     pub num_epochs: usize,                   // number of times the model has processed through entire training dataset
@@ -155,7 +161,6 @@ pub struct VsrmLearnerConfig  {
     #[config(default = "None")]
     pub active_subset: Option<(f32, u64)>,   // fraction of entire dataset to use for training (e.g. Some((0.1, 69) = 10% with seed 69, None = use full dataset)
 }
-
 
 
 
@@ -301,7 +306,7 @@ pub fn train<B>(
     model_config: VsrModelConfig,
     learner_config: VsrmLearnerConfig ,
     token_map: TokenMap,
-)
+) -> Result<(), ESS>
 where
     B: AutodiffBackend,
     VsrmStepOutput<B>: Adaptor<LossInput<B>>,
@@ -354,7 +359,7 @@ where
 
     // learner instance (and move model to device)
     let mut learner = Learner::new(
-        model,
+        model.clone(),
         optimizer,
         scheduler,
     );
@@ -371,7 +376,7 @@ where
     // -------------------------------------- VSRM training and saving --------------------------------------
 
     // ------------------------ Diagnostics ------------------------
-    println!("=== SCHEDULER DIAGNOSTICS ===");
+    println!("=== Scheduler Diagnostics ===");
     println!("  Num Items:      {}",      num_items);
     println!("  Num Batches:    {}",      num_batches);
     println!("  Total Steps:    {}",      total_steps);
@@ -381,24 +386,11 @@ where
     println!("=============================\n");
     // -------------------------------------------------------------
 
-    // resulve user intent for resume training behavior:
-    // case A: resume flag given --> user explicitly requested a resume
-    // - if provided/default model ID exists
-    //      - if resume flag carries a value
-    //           - if value is valid --> resume from that epoch value
-    //           - if value is invalid --> error
-    //      - if no value carried --> resume from latest epoch value
-    // - if provided/default model ID doesn't exist --> error
-    // case B: resume flag not given --> user wants a fresh start
-    // - if provided/default model ID exists --> error
-    // - if provided/default model ID doesn't exist --> proceed fresh
-    let from_checkpoint = resolve_from_checkpoint(&model_path, learner_config.resume_from);
-
     // resolve user intent for checkpointing behavior:
     // - if `keep_all_checkpoints` on --> set checkpoints to keep as total epochs
     // - if `keep_all_checkpoints` off --> set checkpoints to keep as just one
-    let keep_n_checkpoints = if learner_config.keep_all_checkpoints { learner_config.num_epochs }
-    else { 1 };
+    let keep_n_checkpoints = if learner_config.keep_all_checkpoints
+    { learner_config.num_epochs } else { 1 };
 
     // trainer instance (Burn's `FileCheckpointer` creates model dir on init)
     let trainer = SupervisedTraining::new(
@@ -417,26 +409,30 @@ where
         .grads_accumulation(learner_config.accumulation);
 
     // resume training on existing model at specified checkpoint or train new model
-    let training = if let Some(epoch) = from_checkpoint { trainer.checkpoint(epoch) }
-    else { trainer };
+    let training = if let Some(epoch) = learner_config.resume_from
+    { trainer.checkpoint(epoch) } else { trainer };
 
-    // save hyperparams (excluding runtime-only field `resume_from`)
-    let mut persisted_learner_config = learner_config.clone();
-    persisted_learner_config.resume_from = None;
-    persisted_learner_config.save(model_path.join("learner_config.json")).expect("Failed to save config");
+    let mut persisted_learner_config = learner_config.clone()
+        .with_rf(model.total_receptive_field()); // update model receptive field value for learner config
+    persisted_learner_config.resume_from = None; // clear `resume_from` value (runtime-only)
 
+    // save learner and model configs
+    persisted_learner_config.save(model_path.join("learner_config.json"))
+        .map_err(|e| io_err(format!("Failed to save learner config: {}", e), io::ErrorKind::Other))?;
+    model_config.save(model_path.join("model_config.json"))
+        .map_err(|e| io_err(format!("Failed to save model config: {}", e), io::ErrorKind::Other))?;
+
+    // launch training and save final model weights
     let trained_model = training.launch(learner);
-
-    // save final model weights
-    trained_model
-        .model
+    trained_model.model
         .save_file(model_path.join(format!("{}_final_weights", learner_config.model_id)), &CompactRecorder::new())
-        .expect("Failed to save trained model");
+        .map_err(|e| io_err(format!("Failed to save trained model: {}", e), io::ErrorKind::Other))?;
 
     // small pause for Learner dashboard TUI cleanup, then training loop confirmation
     io::stdout().flush().unwrap();
     thread::sleep(Duration::from_millis(100));
     println!("Training complete: model weights saved to {:?}\n", output_path);
+    Ok(())
 }
 
 
@@ -522,15 +518,17 @@ where
         learner_config.active_subset,
     ));
 
+    let norm_stats_path = context.models_path
+    .join(&learner_config.model_id)
+    .join("norm_stats.json");
+
     // find global mean and std dev stats of all video frame pixels in GRID dataset (to use as input normalization)
-    let grid_stats_filename = format!("{}_stats.json", DatasetSource::Grid.tag());
-    let grid_stats_path = dataset.grid_path.join(grid_stats_filename);
-    let grid_stats: DatasetStats = if grid_stats_path.exists() {
-        load_json(&grid_stats_path).expect("Failed to load cached GRID global mean and std dev stats")
+    let grid_stats: DatasetStats = if norm_stats_path.exists() {
+        load_json(&norm_stats_path).expect("Failed to load cached GRID global mean and std dev stats")
     } else {
         let (mean, std_dev) = dataset.calc_global_stats();
         let stats = DatasetStats::new(mean, std_dev);
-        save_json(&grid_stats_path, &stats).expect("Failed to cache GRID global mean and std dev stats");
+        save_json(&norm_stats_path, &stats).expect("Failed to cache GRID global mean and std dev stats");
         stats
     };
 

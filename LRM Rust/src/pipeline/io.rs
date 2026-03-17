@@ -14,6 +14,7 @@ use serde::{
     Serialize,
     de::DeserializeOwned,
 };
+use crate::prelude::ESS;
 use std::{
     fs::{self, File},
     io::{
@@ -24,7 +25,6 @@ use std::{
         Write,
     },
     path::Path,
-    error::Error,
     sync::{
         atomic::{
             AtomicU64,
@@ -47,7 +47,7 @@ pub fn write_tensor_3d<T, P>(
     path: P,
     data: &[T],
     shape: (usize, usize, usize),
-) -> Result<(), Box<dyn Error>>
+) -> Result<(), ESS>
 where
     T: bytemuck::Pod,
     P: AsRef<Path>,
@@ -77,7 +77,7 @@ where
 ///
 /// Loads a 3D sequence from a structured binary file.
 /// Returns (data, (H, W, T)).
-pub fn read_tensor_3d<T, P>(path: P) -> Result<(Vec<T>, (usize, usize, usize)), Box<dyn Error>>
+pub fn read_tensor_3d<T, P>(path: P) -> Result<(Vec<T>, (usize, usize, usize)), ESS>
 where
     T: bytemuck::Pod,
     P: AsRef<Path>,
@@ -109,7 +109,7 @@ where
 ///
 /// ### Returns:
 /// `Ok(())` on success, or an error on I/O or serialization failure.
-pub fn save_json<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> Result<(), Box<dyn Error>> {
+pub fn save_json<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> Result<(), ESS> {
     let file = File::create(path)?;
     serde_json::to_writer_pretty(file, data)?;
     Ok(())
@@ -124,7 +124,7 @@ pub fn save_json<P: AsRef<Path>, T: Serialize>(path: P, data: &T) -> Result<(), 
 ///
 /// ### Returns:
 /// Deserialized value of type `T`, or an error on I/O or deserialization failure.
-pub fn load_json<P: AsRef<Path>, T: DeserializeOwned>(path: P) -> Result<T, Box<dyn Error>> {
+pub fn load_json<P: AsRef<Path>, T: DeserializeOwned>(path: P) -> Result<T, ESS> {
     let file = File::open(path)?;
     let data = serde_json::from_reader(file)?;
     Ok(data)
@@ -297,13 +297,13 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
                         .copy_to(&mut file)
                         .expect("Failed to write to file.");
                     println!(
-                        "SLR corpus downloaded successfully to {}",
+                        "SLR corpus downloaded successfully to {}\n",
                         slr_dir.to_string_lossy()
                     );
 
                     // extract/remove gzip file
                     extract_gzip(&output, &final_path);
-                    fs::remove_file(&output).expect("Failed to delete gzip file.");
+                    fs::remove_file(&output).expect("Failed to delete gzip file");
 
                     assert!(final_path.exists(), "SLR corpus file missing after extraction");
                     assert!(final_path.metadata().unwrap().len() > 0, "SLR corpus file is empty");
@@ -311,5 +311,5 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
             }
             Err(e) => { eprintln!("Error parsing URL: {}", e); }
         }
-    } else { println!("SLR corpus already exists, downloading skipped"); }
+    } else { println!("SLR corpus already exists, downloading skipped\n"); }
 }

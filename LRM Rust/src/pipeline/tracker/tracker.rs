@@ -3,10 +3,8 @@
 
 
 
-use std::{
-    cell::RefCell,
-    error::Error,
-};
+use crate::prelude::ESS;
+use std::cell::RefCell;
 use opencv::core::{
     Mat,
     Point2f,
@@ -60,7 +58,7 @@ pub trait LipTrackerBackend: Send {
     ///
     /// ### Returns:
     /// A [`TrackerResult`] containing the mouth crop and visualization metadata.
-    fn process_frame(&mut self, frame: &Mat) -> Result<TrackerResult, Box<dyn Error>>;
+    fn process_frame(&mut self, frame: &Mat) -> Result<TrackerResult, ESS>;
 
     /// Resets temporal smoothing state for processing a new video.
     fn reset_state(&mut self);
@@ -74,7 +72,7 @@ pub trait LipTrackerBackend: Send {
 /// Configuration enum for backend dispatch.
 ///
 /// Each variant wraps the backend-specific config struct.
-/// Call [`TrackerConfig::build`] to instantiate the corresponding tracker.
+/// Call [`TrackerConfig::init()`] to instantiate the corresponding tracker.
 #[derive(Debug, Clone)]
 pub enum TrackerConfig {
     Haar(HaarTrackerConfig),
@@ -88,7 +86,7 @@ impl TrackerConfig {
     ///
     /// ### Returns:
     /// A boxed trait object implementing [`LipTrackerBackend`].
-    pub fn build(&self) -> Box<dyn LipTrackerBackend> {
+    pub fn init(&self) -> Box<dyn LipTrackerBackend> {
         match self {
             TrackerConfig::Haar(c) => Box::new(c.init()),
         }
@@ -122,7 +120,7 @@ where
     TRACKER_TLS.with(|cell| {
         let mut opt = cell.borrow_mut();
         if opt.is_none() {
-            *opt = Some(config.build());
+            *opt = Some(config.init());
         }
         f(&mut **opt.as_mut().unwrap())
     })

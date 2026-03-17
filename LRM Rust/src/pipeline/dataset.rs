@@ -13,7 +13,7 @@ use rand::{
     rngs::StdRng,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc};
 
 
 
@@ -33,10 +33,11 @@ pub struct DatasetStats {
 
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum DatasetSource {
     Grid,
-    // Lrw, // maybe add later
+    // Lrw, // stubbed for future
 }
 
 
@@ -109,7 +110,22 @@ impl DatasetSource {
     pub fn tag(&self) -> &'static str {
         match self {
             DatasetSource::Grid => "grid",
-            // DatasetSource::Lrw => "lrw", // maybe add later
+            // DatasetSource::Lrw => "lrw", // stubbed for future
+            // ...
+        }
+    }
+}
+
+
+
+impl FromStr for DatasetSource {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "grid" => Ok(Self::Grid),
+            // "lrw" => Ok(Self::Lrw),  // stubbed for future
+            other => Err(format!("Unknown dataset: '{}'. Supported: grid", other)),
         }
     }
 }

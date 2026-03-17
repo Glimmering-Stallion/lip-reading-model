@@ -1,9 +1,16 @@
-// Utility functions
+//! General-purpose utilities for the lip-reading model.
+//!
+//! This module provides statistical helpers (mean, std_dev), numerically stable
+//! log-sum-exp operations for scalars and tensors, Levenshtein edit distance for
+//! sequence comparison, and the `io_err` builder for constructing app-level
+//! errors from messages and `io::ErrorKind`.
 
 
 
 // imports
+use crate::prelude::ESS;
 use burn::tensor::{backend::Backend, Tensor};
+use std::io::{Error, ErrorKind};
 use num_traits::Float;
 use std::cmp::min;
 
@@ -118,4 +125,26 @@ pub fn levenshtein<T: PartialEq>(seq1: &[T], seq2: &[T]) -> usize {
         }
     }
     col[seq2.len()]
+}
+
+
+
+/// Builds an `ESS` from a message and `io::ErrorKind`.
+///
+/// Wraps the message as an `io::Error`, then converts to the shared app error type.
+/// 
+/// `ESS` (`Box<dyn Error + Send + Sync>`) is used project-wide so errors can propagate
+/// across threads (e.g. parallel data loading, training workers).
+/// 
+/// Use any `io::ErrorKind` (e.g. `InvalidInput` for CLI validation, `Other` for I/O).
+///
+/// ### Params:
+/// - `msg`: Error message (any type implementing `Into<String>`).
+/// - `kind`: `io::ErrorKind` for the error.
+///
+/// ### Returns:
+/// An `ESS` suitable for `Result` propagation.
+#[inline]
+pub fn io_err(msg: impl Into<String>, kind: ErrorKind) -> ESS {
+    Error::new(kind, msg.into()).into()
 }
