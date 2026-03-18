@@ -170,7 +170,7 @@ impl CtcDecoder {
         inputs: Tensor<B, 3>
     ) -> Vec<Vec<i64>> {
         let [n, t, _] = inputs.dims();
-        assert!(self.blank_id < inputs.dims()[2], "Blank ID {} is out of vocabulary size bounds {}", self.blank_id, inputs.dims()[2]);
+        assert!(self.blank_id < inputs.dims()[2], "blank ID {} is out of vocabulary size bounds {}", self.blank_id, inputs.dims()[2]);
 
         // grab most probable symbol ID from vocab distribution (dim 2), per frame (dim 1), per sample (dim 0)
         let argmax_ids = inputs          // [N, T, Vocab]
@@ -205,8 +205,8 @@ impl CtcDecoder {
         let [n, t, vocab_size] = log_probs.clone().dims();
         let mut top_seq_ids = Vec::with_capacity(n);
 
-        assert!(self.blank_id < vocab_size, "Blank ID ({}) is out of vocabulary size bounds ({})", self.blank_id, vocab_size);
-        assert!((1..=15).contains(&self.beam_width), "Beam width ({}) must be in [1, 15]", self.beam_width);
+        assert!(self.blank_id < vocab_size, "blank ID ({}) is out of vocabulary size bounds ({})", self.blank_id, vocab_size);
+        assert!((1..=15).contains(&self.beam_width), "beam width ({}) must be in [1, 15]", self.beam_width);
         if self.lm.is_some() {
             assert!((0.2..=3.0).contains(&self.lm_alpha), "LM alpha value ({}) must be in [0.2, 3.0]", self.lm_alpha);
             assert!((1.5..=5.0).contains(&self.lm_beta), "LM beta value ({}) must be in [1.5, 5.0]", self.lm_beta);
@@ -245,8 +245,8 @@ impl CtcDecoder {
         let sentinel_value = f32::NEG_INFINITY;
         let (timesteps, vocab_size) = (log_probs.dims()[0], log_probs.dims()[1]);
         let k = (self.beam_width + 1).min(vocab_size - 1); // plus 1 to account for possible blank skipping
-        assert!(timesteps > 0, "No timesteps in input");
-        assert!(blank < vocab_size, "Blank ID ({}) is out of vocabulary size bounds ({})", blank, vocab_size);
+        assert!(timesteps > 0, "no timesteps in input");
+        assert!(blank < vocab_size, "blank ID ({}) is out of vocabulary size bounds ({})", blank, vocab_size);
 
         // t = -1 (base case)
         // initialize beam with empty prefix (starts with size 1 and grows to beam_width)
@@ -262,7 +262,7 @@ impl CtcDecoder {
         // 0 ≤ t ≤ T - 1 (recurrence case)
         for t in 0..timesteps {
             // reset buffer
-            // maps sequence of symbol IDs to (log_prob_blank, log_prob_non_blank, log_prob_lm)
+            // maps sequence of symbol IDs to a (log_prob_blank, log_prob_non_blank, log_prob_lm) tuple
             let mut next_prefixes: HashMap<Vec<usize>, (f32, f32, f32)> = HashMap::new();
 
             // grab log-probs of each symbol given by model at current timestep

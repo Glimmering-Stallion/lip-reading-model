@@ -112,13 +112,14 @@ use log;
 
 
 
-// type aliases for the train/validation dataloader creator return type
+/// Type alias for the train dataloader creator return type
 type TrainLoader<B> = Arc<dyn DataLoader<B, Batch<B>>>;
+/// Type alias for the validation dataloader creator return type
 type ValidLoader<B> = Arc<dyn DataLoader<<B as AutodiffBackend>::InnerBackend, Batch<<B as AutodiffBackend>::InnerBackend>>>;
 
 
 
-// different hyperparameters and metadata for the VSR model
+/// Serializable configuration hyperparameters and metadata for training the VSR model.
 #[derive(Config, Debug)]
 pub struct VsrmLearnerConfig  {
     pub model_id: String,                    // model name to be saved as
@@ -133,7 +134,7 @@ pub struct VsrmLearnerConfig  {
     pub keep_all_checkpoints: bool,          // flag/toggle for checkpoint save strategy (if true, keep all checkpoints; else keep most recent only)
 
     #[config(default = "(50, 100)")]
-    pub frame_dims: (usize, usize),          // video frame dimensions that the processes (height, width)
+    pub frame_dims: (usize, usize),          // input video frame dimensions (height, width)
 
     #[config(default = 0)]
     pub rf: usize,                           // receptive field (RF) of the model (populated on initialization)
@@ -210,7 +211,7 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
         if !loss.clone().is_finite().all().into_scalar().elem::<bool>() {
             println!("DUMPING BATCH: Loss is NaN/Inf!");
             println!("Batch lengths: {:?}", batch.input_lengths);
-            panic!("Loss contains non-finite values");
+            panic!("loss contains non-finite values");
         }
 
         // ------------------------------- Entropy Regularization --------------------------------
@@ -285,7 +286,7 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
                 batch.input_lengths.clone(),
                 batch.target_lengths.clone(),
             );
-        if !loss.clone().is_finite().all().into_scalar().elem::<bool>() { panic!("Loss contains non-finite values"); }
+        if !loss.clone().is_finite().all().into_scalar().elem::<bool>() { panic!("loss contains non-finite values"); }
 
         VsrmStepOutput {
             loss,
@@ -302,10 +303,9 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
 pub fn train<B>(
     device: B::Device,
     context: &Context,
-    dataset_src: DatasetSource,
-    model_config: VsrModelConfig,
-    learner_config: VsrmLearnerConfig ,
-    token_map: TokenMap,
+    model_config: &VsrModelConfig,
+    learner_config: &VsrmLearnerConfig,
+    token_map: &TokenMap,
 ) -> Result<(), ESS>
 where
     B: AutodiffBackend,
@@ -316,10 +316,10 @@ where
     let output_path = context.models_path.clone();
     let model_path = output_path.join(&learner_config.model_id.clone());
 
-    assert!(learner_config.num_epochs > 0, "Number of epochs must be > 0, got {}", learner_config.num_epochs);
-    assert!(learner_config.batch_size > 0, "Batch size must be > 0, got {}", learner_config.batch_size);
-    assert!(learner_config.learning_rate > 0.0, "Learning rate must be > 0, got {}", learner_config.learning_rate);
-    assert!(learner_config.num_workers <= 64, "Exceeded reasonable worker limit ({})", learner_config.num_workers);
+    assert!(learner_config.num_epochs > 0, "number of epochs must be > 0, got {}", learner_config.num_epochs);
+    assert!(learner_config.batch_size > 0, "batch size must be > 0, got {}", learner_config.batch_size);
+    assert!(learner_config.learning_rate > 0.0, "learning rate must be > 0, got {}", learner_config.learning_rate);
+    assert!(learner_config.num_workers <= 64, "exceeded reasonable worker limit ({})", learner_config.num_workers);
     if learner_config.num_workers == 0 { println!("Running with 0 workers: data loading will be synchronous"); }
 
     // ------------------------------------ Dataset batching and loading ------------------------------------
@@ -328,9 +328,9 @@ where
     let (train_dataloader, valid_dataloader) = create_dataloaders(
         &device,
         context,
-        dataset_src,
-        &learner_config,
-        token_map.clone(),
+        learner_config.dataset_src,
+        learner_config,
+        token_map,
     );
 
     // ------------------------ Training learner, LR scheduling, and optimizer setup ------------------------
@@ -340,9 +340,9 @@ where
     let total_steps = num_batches * learner_config.num_epochs;
     let warmup_steps = num_batches; // warmup over first epoch
 
-    assert!(num_batches > 0, "Computed 0 batches for training");
-    assert!(total_steps > 0, "Total training steps is 0");
-    assert!(warmup_steps < total_steps, "Warmup steps ({}) must be less than total steps ({})", warmup_steps, total_steps);
+    assert!(num_batches > 0, "computed 0 batches for training");
+    assert!(total_steps > 0, "total training steps is 0");
+    assert!(warmup_steps < total_steps, "warmup steps ({}) must be less than total steps ({})", warmup_steps, total_steps);
 
     let lr = learner_config.learning_rate;
     let scheduler = ComposedLrSchedulerConfig::new()
@@ -350,7 +350,7 @@ where
         .cosine(CosineAnnealingLrSchedulerConfig::new(lr, total_steps).with_min_lr(lr / 10.0))
         .with_reduction(SchedulerReduction::Prod)
         .init()
-        .expect("Failed to initialize Composed Scheduler");
+        .expect("failed to initialize composed scheduler");
 
     // init optimizer and model
     let optimizer = learner_config.optimizer.init::<B, VsrModel<B>>();
@@ -402,7 +402,7 @@ where
         .metric_train_numeric(LearningRateMetric::new())
         .metric_valid_numeric(LossMetric::new())
         .metric_valid_numeric(CtcCharErrorRate::new(greedy_decoder.clone()))
-        .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map))
+        .metric_valid_numeric(CtcWordErrorRate::new(greedy_decoder.clone(), token_map.clone()))
         .with_file_checkpointer(CompactRecorder::new())
         .with_checkpointing_strategy(KeepLastNCheckpoints::new(keep_n_checkpoints))
         .num_epochs(learner_config.num_epochs)
@@ -418,15 +418,15 @@ where
 
     // save learner and model configs
     persisted_learner_config.save(model_path.join("learner_config.json"))
-        .map_err(|e| io_err(format!("Failed to save learner config: {}", e), io::ErrorKind::Other))?;
+        .map_err(|e| io_err(format!("failed to save learner config: {}", e), io::ErrorKind::Other))?;
     model_config.save(model_path.join("model_config.json"))
-        .map_err(|e| io_err(format!("Failed to save model config: {}", e), io::ErrorKind::Other))?;
+        .map_err(|e| io_err(format!("failed to save model config: {}", e), io::ErrorKind::Other))?;
 
     // launch training and save final model weights
     let trained_model = training.launch(learner);
     trained_model.model
         .save_file(model_path.join(format!("{}_final_weights", learner_config.model_id)), &CompactRecorder::new())
-        .map_err(|e| io_err(format!("Failed to save trained model: {}", e), io::ErrorKind::Other))?;
+        .map_err(|e| io_err(format!("failed to save trained model: {}", e), io::ErrorKind::Other))?;
 
     // small pause for Learner dashboard TUI cleanup, then training loop confirmation
     io::stdout().flush().unwrap();
@@ -458,7 +458,7 @@ fn create_dataloaders<B>(
     context: &Context,
     dataset_src: DatasetSource,
     learner_config: &VsrmLearnerConfig,
-    token_map: TokenMap,
+    token_map: &TokenMap,
 ) -> (TrainLoader<B>, ValidLoader<B>)
 where B: AutodiffBackend,
 {
@@ -491,7 +491,7 @@ fn create_grid_dataloaders<B>(
     device: &B::Device,
     context: &Context,
     learner_config: &VsrmLearnerConfig,
-    token_map: TokenMap,
+    token_map: &TokenMap,
 ) -> (TrainLoader<B>, ValidLoader<B>)
 where
     B: AutodiffBackend,
@@ -515,7 +515,7 @@ where
         context,
         token_map,
         Some(tracker_config),
-        learner_config.active_subset,
+        learner_config.active_subset.clone(),
     ));
 
     let norm_stats_path = context.models_path
@@ -524,11 +524,11 @@ where
 
     // find global mean and std dev stats of all video frame pixels in GRID dataset (to use as input normalization)
     let grid_stats: DatasetStats = if norm_stats_path.exists() {
-        load_json(&norm_stats_path).expect("Failed to load cached GRID global mean and std dev stats")
+        load_json(&norm_stats_path).expect("failed to load cached GRID global mean and std dev stats")
     } else {
         let (mean, std_dev) = dataset.calc_global_stats();
         let stats = DatasetStats::new(mean, std_dev);
-        save_json(&norm_stats_path, &stats).expect("Failed to cache GRID global mean and std dev stats");
+        save_json(&norm_stats_path, &stats).expect("failed to cache GRID global mean and std dev stats");
         stats
     };
 
@@ -540,8 +540,8 @@ where
         learner_config.seed,
     );
 
-    assert!(train_dataset.len() > 0, "Training dataset is empty");
-    assert!(valid_dataset.len() > 0, "Validation dataset is empty");
+    assert!(train_dataset.len() > 0, "training dataset is empty");
+    assert!(valid_dataset.len() > 0, "validation dataset is empty");
 
     println!("Train dataset has {} samples", train_dataset.len());
     println!("Valid dataset {} samples\n", valid_dataset.len());
@@ -562,8 +562,8 @@ where
         .num_workers(learner_config.num_workers)
         .build(valid_dataset);
 
-    assert!(train_dataloader.num_items() > 0, "Training dataloader has 0 items");
-    assert!(valid_dataloader.num_items() > 0, "Validation dataloader has 0 items");
+    assert!(train_dataloader.num_items() > 0, "training dataloader has 0 items");
+    assert!(valid_dataloader.num_items() > 0, "validation dataloader has 0 items");
 
     (train_dataloader, valid_dataloader)
 }
@@ -792,7 +792,7 @@ mod tests {
             current_loss = loss_val;
         }
 
-        panic!("FAILURE: Loss did not drop significantly. Started at {}, ended at {}.", initial_loss, current_loss);
+        panic!("loss did not drop significantly: started at {}, ended at {}", initial_loss, current_loss);
     }
 
     #[test]
@@ -826,7 +826,7 @@ mod tests {
         // init GRID dataset instance
         let dataset = GridDataset::new(
             &context,
-            token_map.clone(),
+            &token_map,
             Some(tracker_config),
             None,
         );
@@ -834,7 +834,7 @@ mod tests {
         // grab single real sample from our actual dataset (GRID)
         let dataset_item = dataset
             .get(rng.random_range(0..dataset.len()))
-            .expect("Failed to get first item from dataset");
+            .expect("failed to get first item from dataset");
         let batch = VsrmBatcher::<TestBackend>::new(device.clone(), None)
             .batch(vec![dataset_item], &device.clone());
 
@@ -926,7 +926,7 @@ mod tests {
             current_loss = loss_val;
         }
 
-        panic!("FAILURE: Loss did not drop significantly. Started at {}, ended at {}.", initial_loss, current_loss);
+        panic!("loss did not drop significantly: started at {}, ended at {}", initial_loss, current_loss);
     }
 
     #[test]
@@ -961,7 +961,7 @@ mod tests {
         // init GRID dataset instance
         let dataset = GridDataset::new(
             &context,
-            token_map.clone(),
+            &token_map,
             Some(tracker_config),
             None,
         );
@@ -1086,6 +1086,6 @@ mod tests {
             current_loss = loss_val;
         }
 
-        panic!("FAILURE: Loss did not drop significantly. Started at {}, ended at {}.", initial_loss, current_loss);
+        panic!("loss did not drop significantly: started at {}, ended at {}", initial_loss, current_loss);
     }
 }

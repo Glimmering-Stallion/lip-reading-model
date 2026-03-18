@@ -52,12 +52,12 @@ pub fn load_video(
     path: &Path,
     tracker: &mut dyn LipTrackerBackend,
 ) -> Result<FramesBuffer, ESS> {
-    let path_str = path.to_str().ok_or_else(|| io_err("Invalid video path", ErrorKind::InvalidInput))?;
+    let path_str = path.to_str().ok_or_else(|| io_err("invalid video path", ErrorKind::InvalidInput))?;
     let mut cap = VideoCapture::from_file(path_str, CAP_ANY)
         .map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
 
     if !cap.is_opened().map_err(|e| io_err(e.to_string(), ErrorKind::Other))? {
-        return Err(io_err(format!("Failed to open video: {}", path_str), ErrorKind::Other));
+        return Err(io_err(format!("failed to open video: {}", path_str), ErrorKind::Other));
     }
 
     tracker.reset_state();
@@ -87,7 +87,7 @@ pub fn load_video(
     }
 
     if frames.is_empty() {
-        return Err(io_err(format!("No frames decoded from video: {}", path_str), ErrorKind::InvalidData));
+        return Err(io_err(format!("no frames decoded from video: {}", path_str), ErrorKind::InvalidData));
     }
 
     Ok(FramesBuffer {

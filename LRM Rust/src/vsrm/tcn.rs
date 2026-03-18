@@ -142,7 +142,7 @@ impl<B: Backend> TcnBlock<B> {
         // resulting input: (padding, 0, 0, 0)
 
         debug_assert_eq!(input.dims().len(), 3);
-        debug_assert!(input.dims()[2] > 0, "Temporal dimension must be > 0");
+        debug_assert!(input.dims()[2] > 0, "temporal dimension must be > 0");
 
         let residual = match &self.proj {
             Some(path) => path.forward(input.clone()),
@@ -203,7 +203,7 @@ impl<B: Backend> TemporalConvNet<B> {
         assert!(layers > 0, "TCN must have at least one layer");
         assert!(layers < 12, "TCN layers too large ({}), dilation will explode", layers);
         assert!(kernel_size > 0);
-        assert!(channels[0] > 0 && channels[1] > 0, "Channels must be positive");
+        assert!(channels[0] > 0 && channels[1] > 0, "channels must be positive");
 
         let mut tcn_blocks = Vec::with_capacity(layers);
         let mut current_in_channels = channels[0];
@@ -331,6 +331,6 @@ mod tests {
         let diff = (y0 - y1).abs().sum().into_scalar();
 
         // suffix should not affect prefix
-        assert!(diff < 1e-6, "Non-causal behavior detected: diff={diff}");
+        assert!(diff < 1e-6, "non-causal behavior detected: diff = {diff}");
     }
 }

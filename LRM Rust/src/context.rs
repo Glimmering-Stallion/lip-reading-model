@@ -35,9 +35,9 @@ impl Context {
         let data_path = rust_root.join("data");
         let tests_path = rust_root.join("tests");
 
-        if !models_path.exists() { fs::create_dir_all(&models_path).expect("Failed to create output directory for models"); }
-        if !data_path.exists() { fs::create_dir_all(&data_path).expect("Failed to create output directory for data"); }
-        if !tests_path.exists() { fs::create_dir_all(&tests_path).expect("Failed to create tests directory"); }
+        if !models_path.exists() { fs::create_dir_all(&models_path).expect("failed to create output directory for models"); }
+        if !data_path.exists() { fs::create_dir_all(&data_path).expect("failed to create output directory for data"); }
+        if !tests_path.exists() { fs::create_dir_all(&tests_path).expect("failed to create tests directory"); }
 
         Context {
             rust_root,

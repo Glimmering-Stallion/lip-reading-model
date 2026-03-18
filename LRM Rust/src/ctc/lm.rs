@@ -68,7 +68,7 @@ pub struct NgramConfig {
 
 impl NgramConfig {
     pub fn init(&self) -> Ngram {
-        assert!((1..=5).contains(&self.n), "N-gram size ({}) must be in [1, 5]", self.n);
+        assert!((1..=5).contains(&self.n), "n-gram size ({}) must be in [1, 5]", self.n);
 
         if let Some(path) = &self.path {
             Ngram::load(path).unwrap()
@@ -299,7 +299,7 @@ where
 {
     // does an LM already exist?
     if output_path.exists() {
-        let path_str = output_path.to_str().ok_or_else(|| io_err("Invalid output path", ErrorKind::InvalidInput))?;
+        let path_str = output_path.to_str().ok_or_else(|| io_err("invalid output path", ErrorKind::InvalidInput))?;
         let lm = Ngram::load(path_str)?;
         Ok(lm)
     } else {
@@ -316,7 +316,7 @@ where
         if let Some(parent) = output_path.parent() { fs::create_dir_all(parent)?; }
 
         lm.train(Box::new(train_sequences.into_iter()));
-        let path_str = output_path.to_str().ok_or_else(|| io_err("Invalid output path", ErrorKind::InvalidInput))?;
+        let path_str = output_path.to_str().ok_or_else(|| io_err("invalid output path", ErrorKind::InvalidInput))?;
         lm.save(path_str)?;
 
         println!("Saved N-gram LM to {}\n", path_str);

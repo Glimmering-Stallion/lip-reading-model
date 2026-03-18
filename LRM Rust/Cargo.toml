@@ -27,7 +27,11 @@ flate2 = "1.1.2"
 serde_json = "1.0.145"
 tar = "0.4.44"
 indicatif = "0.18.3"
-bytemuck = "1.24"
+bytemuck = "1.25"
+crossbeam-channel = "0.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+embed_plist = "1.2"
 
 # onnxruntime = "0.0.14"
 # hashmap = "0.0.0"

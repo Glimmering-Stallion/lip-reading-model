@@ -23,6 +23,7 @@ pub use batcher::{VsrmBatcher, Batch};
 /// Flattened grayscale frame buffer for a video clip.
 ///
 /// `data` is row-major, contiguous: `[frame0_pixels | frame1_pixels | ...]`, where each frame has `height * width` bytes.
+#[derive(Clone)]
 pub struct FramesBuffer {
     pub data: Vec<u8>,
     pub height: usize,

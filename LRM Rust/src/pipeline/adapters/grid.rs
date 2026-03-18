@@ -90,7 +90,7 @@ impl GridDataset {
     /// Initialized `GridDataset` instance with valid entries loaded from disk.
     pub fn new(
         context: &Context,
-        token_map: TokenMap,
+        token_map: &TokenMap,
         tracker_config: Option<TrackerConfig>,
         active_subset: Option<(f32, u64)>,
     ) -> Self {
@@ -112,7 +112,7 @@ impl GridDataset {
                 }
             }
         }
-        assert!(!avail_speakers.is_empty(), "No speaker directories found in {:?}", frames_path);
+        assert!(!avail_speakers.is_empty(), "no speaker directories found in {:?}", frames_path);
 
         // sort s1, s2, ..., s34
         avail_speakers.sort_by_key(|s| s[1..].parse::<i32>().unwrap_or(1));
@@ -156,7 +156,7 @@ impl GridDataset {
             }
         }
         entries.sort(); // sort for deterministic order
-        assert!(!entries.is_empty(), "Dataset instance resulted in 0 samples\nCheck if path {:?} contains .mpg files", grid_path);
+        assert!(!entries.is_empty(), "dataset instance resulted in 0 samples\ncheck if path {:?} contains .mpg files", grid_path);
 
         // apply active_subset if specified
         if let Some((pct, subset_seed)) = active_subset {
@@ -190,7 +190,7 @@ impl GridDataset {
         Self {
             grid_path,
             entries,
-            token_map,
+            token_map: token_map.clone(),
             tracker_config,
             frames_to_alignment,
         }
@@ -279,7 +279,7 @@ impl GridDataset {
             if let Some(entry) = self.get(i) {
                 if i.is_multiple_of(100) { prog_bar.set_message(format!("Processing: {}", entry.item_id)); }
 
-                let data = entry.frames.as_slice::<u8>().expect("Failed to get u8 frame pixel data");
+                let data = entry.frames.as_slice::<u8>().expect("failed to get u8 frame pixel data");
                 for &pixel in data {
                     let p = (pixel as f64) / 255.0;
                     total_sum += p;
@@ -308,7 +308,7 @@ impl GridDataset {
     pub fn preprocess_all(&self) {
         let preproc_path = self.grid_path.join("preproc_frames");
         let manifest_path = preproc_path.join("manifest.json");
-        std::fs::create_dir_all(&preproc_path).expect("Failed to create preproc_frames directory");
+        std::fs::create_dir_all(&preproc_path).expect("failed to create preproc_frames directory");
 
         #[derive(Serialize, Deserialize)]
         struct PreprocManifest { num_entries: usize }
@@ -361,7 +361,7 @@ impl GridDataset {
 
         // persist JSON manifest marker so future runs can skip this process
         let manifest = PreprocManifest { num_entries: self.len() };
-        save_json(&manifest_path, &manifest).expect("Failed to write preproc manifest");
+        save_json(&manifest_path, &manifest).expect("failed to write preproc manifest");
         prog_bar.finish_with_message("Preprocessing complete");
     }
 
@@ -460,7 +460,7 @@ impl GridDataset {
             .join(alignment_speaker)
             .join(stem)
             .with_extension("align");
-        assert!(alignment_path.exists(), "Alignment file {} for GRID entry {} not found", alignment_path.to_string_lossy(), entry);
+        assert!(alignment_path.exists(), "alignment file {} for GRID entry {} not found", alignment_path.to_string_lossy(), entry);
 
         match File::open(alignment_path) {
             Ok(file) => {
@@ -469,7 +469,7 @@ impl GridDataset {
 
                 for line in lines.map_while(Result::ok) {
                     let line_group = line.split_whitespace().collect::<Vec<_>>();
-                    assert!(line_group.len() >= 3, "Malformed alignment line: {:?}", line_group);
+                    assert!(line_group.len() >= 3, "malformed alignment line: {:?}", line_group);
 
                     let word = line_group[2];
                     if word != "sil" && word != "sp" {
@@ -479,7 +479,7 @@ impl GridDataset {
                         sequence.extend(char_ids);
                     }
                 }
-                assert!(!sequence.is_empty(), "No non-silence tokens found in alignment file");
+                assert!(!sequence.is_empty(), "no non-silence tokens found in alignment file");
 
                 Ok(sequence)
             }
@@ -509,14 +509,14 @@ impl GridDataset {
             .join("frames")
             .join(entry)
             .with_extension("mpg");
-        assert!(frames_path.exists(), "Video file {} for GRID entry {} not found", frames_path.to_string_lossy(), entry);
+        assert!(frames_path.exists(), "video file {} for GRID entry {} not found", frames_path.to_string_lossy(), entry);
 
         // frames container, dims, and single frame buffers
         let mut frames: Vec<u8> = Vec::new();
         let mut frame_dims: (usize, usize) = (0, 0); // (height, width)
         let (mut orig_frame, mut gray_frame) = (Mat::default(), Mat::default());
 
-        let path_str = frames_path.to_str().ok_or_else(|| io_err("Invalid path", ErrorKind::InvalidInput))?;
+        let path_str = frames_path.to_str().ok_or_else(|| io_err("invalid path", ErrorKind::InvalidInput))?;
 
         match VideoCapture::from_file(path_str, CAP_ANY) {
             Ok(mut cap) => {
@@ -728,7 +728,7 @@ pub fn align_grid_directories(context: &crate::context::Context, dry_run: bool) 
         println!("[DRY RUN] Planned renames:");
         let non_identity: Vec<_> = mapping.iter().filter(|(k, v)| k != v).collect();
         if non_identity.is_empty() {
-            println!("  No non-identity mappings; all alignments already match frames.");
+            println!("  No non-identity mappings; all alignments already match frames");
         } else {
             for (f, a) in non_identity {
                 println!("  alignments/{} -> alignments/{} (via _temp)", a, f);
@@ -771,7 +771,7 @@ pub fn align_grid_directories(context: &crate::context::Context, dry_run: bool) 
         }
     }
 
-    println!("Alignment directories renamed to match frames.");
+    println!("Alignment directories renamed to match frames");
     Ok(())
 }
 
@@ -811,7 +811,7 @@ mod tests {
 
         println!("Exporting {} frames for item: {}\n", t, item.item_id);
 
-        let frames = item.frames.as_slice::<u8>().expect("Failed to convert frames to slice");
+        let frames = item.frames.as_slice::<u8>().expect("failed to convert frames to slice");
         for t_idx in 0..t {
             let start_idx = t_idx * c * h * w;
             let end_idx = start_idx + (c * h * w);
@@ -828,7 +828,7 @@ mod tests {
 
             // save image
             let frame_path = output_dir.join(format!("{}_frame_{:03}.png", item_id, t_idx));
-            img_buffer.save(&frame_path).expect("Failed to save extracted frame image");
+            img_buffer.save(&frame_path).expect("failed to save extracted frame image");
         }
     }
 
@@ -838,19 +838,20 @@ mod tests {
         // extract frames, and save them as individual PNG images for visual inspection
 
         let context = Context::new();
+        let token_map = TokenMap::new(VOCAB);
         let mut rng = StdRng::seed_from_u64(SEED);
 
         // GRID dataset instance
         let dataset = GridDataset::new(
             &context,
-            TokenMap::new(VOCAB),
+            &token_map,
             None,
             None,
         );
 
         // obtain first valid GRID dataset item
         let item = dataset.get(rng.random_range(0..dataset.len()))
-            .expect("Failed to extract a valid dataset item");
+            .expect("failed to extract a valid dataset item");
         println!("Obtained item ID: {}", item.item_id);
 
         // save collection of extracted frames as pngs
@@ -863,6 +864,7 @@ mod tests {
         // extract frames, and save them as individual PNG images for visual inspection
 
         let context = Context::new();
+        let token_map = TokenMap::new(VOCAB);
         let mut rng = StdRng::seed_from_u64(SEED);
 
         let face_cascade_path = context.models_path.join("haarcascade_frontalface_alt2.xml");
@@ -880,14 +882,14 @@ mod tests {
         // GRID dataset instance
         let dataset = GridDataset::new(
             &context,
-            TokenMap::new(VOCAB),
+            &token_map,
             Some(tracker_config),
             None,
         );
 
         // obtain first valid GRID dataset item
         let item = dataset.get(rng.random_range(0..dataset.len()))
-            .expect("Failed to extract a valid dataset item");
+            .expect("failed to extract a valid dataset item");
         println!("Obtained item ID: {}", item.item_id);
 
         // save collection of extracted frames as pngs

@@ -145,12 +145,12 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
     sample_rate: f64
 ) -> impl Iterator<Item = String> {
     let file_path = file_path.as_ref();
-    assert!(file_path.exists(), "Corpus file {:?} does not exist", file_path);
+    assert!(file_path.exists(), "corpus file {:?} does not exist", file_path);
     assert!(sample_rate > 0.0 && sample_rate <= 1.0, "sample_rate must be in (0, 1]");
     println!("Streaming corpus lines from: {}", file_path.to_string_lossy());
 
-    let file = File::open(file_path).expect("Failed to open corpus file");
-    let metadata = file.metadata().expect("Failed to get file metadata");
+    let file = File::open(file_path).expect("failed to open corpus file");
+    let metadata = file.metadata().expect("failed to get file metadata");
     let file_size = metadata.len();
 
     let prog_bar = ProgressBar::new(file_size);
@@ -206,29 +206,29 @@ pub fn stream_corpus_lines<P: AsRef<Path>>(
 pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
     let zip_path = zip_path.as_ref();
     let extract_to = extract_to.as_ref();
-    assert!(zip_path.exists(), "Zip file {:?} does not exist", zip_path);
+    assert!(zip_path.exists(), "zip file {:?} does not exist", zip_path);
     
-    let input_file = File::open(zip_path).expect("Failed to open zip file.");
-    let mut archive = ZipArchive::new(input_file).expect("Failed to read zip file.");
+    let input_file = File::open(zip_path).expect("failed to open zip file");
+    let mut archive = ZipArchive::new(input_file).expect("failed to read zip file");
     
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).expect("Failed to read file from zip.");
+        let mut file = archive.by_index(i).expect("failed to read file from zip");
         let out_path = match file.enclosed_name() {
             Some(path) => extract_to.join(path),
             None => continue, // skip files with invalid names if need be
         };
         
         if file.name().ends_with('/') {
-            fs::create_dir_all(&out_path).expect("Failed to create directory.");
+            fs::create_dir_all(&out_path).expect("failed to create directory");
         } else {
             if let Some(p) = out_path.parent() {
-                fs::create_dir_all(p).expect("Failed to create parent directory.");
+                fs::create_dir_all(p).expect("failed to create parent directory");
             }
-            let mut outfile = File::create(&out_path).expect("Failed to create file.");
-            io::copy(&mut file, &mut outfile).expect("Failed to write file.");
+            let mut outfile = File::create(&out_path).expect("failed to create file");
+            io::copy(&mut file, &mut outfile).expect("failed to write file");
         }
     }
-    assert!(extract_to.exists(), "Zip destination does not exist");
+    assert!(extract_to.exists(), "zip destination does not exist");
     println!("Extracted zip file to {}", extract_to.to_string_lossy());
 }
 
@@ -242,20 +242,20 @@ pub fn extract_zip<P: AsRef<Path>, Q: AsRef<Path>>(zip_path: P, extract_to: Q) {
 pub fn extract_gzip<P: AsRef<Path>, Q: AsRef<Path>>(gzip_path: P, extract_to: Q) {
     let gzip_path = gzip_path.as_ref();
     let extract_to = extract_to.as_ref();
-    assert!(gzip_path.exists(), "GZip file {:?} does not exist", gzip_path);
+    assert!(gzip_path.exists(), "gzip file {:?} does not exist", gzip_path);
     
-    let input_file = File::open(gzip_path).expect("Failed to open gzip file.");
+    let input_file = File::open(gzip_path).expect("failed to open gzip file");
     let mut decoder = GzDecoder::new(input_file);
     
     // get folder path from the 'extract_to' string and create it
     if let Some(parent) = extract_to.parent() {
-        fs::create_dir_all(parent).expect("Failed to create parent directory for extraction.");
+        fs::create_dir_all(parent).expect("failed to create parent directory for extraction");
     }
 
-    let mut out_file = File::create(extract_to).expect("Failed to create output file.");
-    io::copy(&mut decoder, &mut out_file).expect("Failed to decompress gzip content.");
+    let mut out_file = File::create(extract_to).expect("failed to create output file");
+    io::copy(&mut decoder, &mut out_file).expect("failed to decompress gzip content");
 
-    assert!(extract_to.exists(), "GZip destination does not exist");
+    assert!(extract_to.exists(), "gzip destination does not exist");
     println!("Extracted gzip file to {}", extract_to.to_string_lossy());
 }
 
@@ -271,19 +271,19 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
     let data_dir = root_path.join("data");
     let slr_dir = data_dir.join("librispeech-lm-norm");
     let final_path = slr_dir.join("librispeech-lm-norm.txt");
-    assert!(root_path.exists(), "Root path {:?} does not exist", root_path);
+    assert!(root_path.exists(), "root path {:?} does not exist", root_path);
 
     // check if the SLR corpus exists at the given path
     if !final_path.exists() {
         println!("\nSLR corpus not found, downloading...");
 
-        fs::create_dir_all(&slr_dir).expect("Failed to create SLR directory");
+        fs::create_dir_all(&slr_dir).expect("failed to create SLR directory");
 
         // use client with NO timeout for large files
         let client = Client::builder()
             .timeout(None)
             .build()
-            .expect("Failed to create HTTP client");
+            .expect("failed to create HTTP client");
 
         let url = "https://www.openslr.org/resources/11/librispeech-lm-norm.txt";
         let output = data_dir.join("librispeech-lm-norm.gz");
@@ -292,10 +292,10 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
         match client.get(url).send() {
             Ok(mut response) => {
                 if response.status().is_success() {
-                    let mut file = File::create(&output).expect("Failed to create file.");
+                    let mut file = File::create(&output).expect("failed to create file");
                     response
                         .copy_to(&mut file)
-                        .expect("Failed to write to file.");
+                        .expect("failed to write to file");
                     println!(
                         "SLR corpus downloaded successfully to {}\n",
                         slr_dir.to_string_lossy()
@@ -303,7 +303,7 @@ pub fn extract_slr_corpus<P: AsRef<Path>>(root_path: P) {
 
                     // extract/remove gzip file
                     extract_gzip(&output, &final_path);
-                    fs::remove_file(&output).expect("Failed to delete gzip file");
+                    fs::remove_file(&output).expect("failed to delete gzip file");
 
                     assert!(final_path.exists(), "SLR corpus file missing after extraction");
                     assert!(final_path.metadata().unwrap().len() > 0, "SLR corpus file is empty");

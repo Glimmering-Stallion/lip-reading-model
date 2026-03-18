@@ -238,7 +238,7 @@ impl<B: Backend> Metric for CtcCharErrorRate<B> {
             input_item.target_lengths.clone(),
         );
 
-        debug_assert!(predictions.len() == targets.len(), "Predictions/targets batch size mismatch");
+        debug_assert!(predictions.len() == targets.len(), "predictions/targets batch size mismatch");
 
         // init per batch counts
         let mut batch_error = 0;
@@ -310,7 +310,7 @@ impl<B: Backend> Metric for CtcWordErrorRate<B> {
             input_item.target_lengths.clone(),
         );
 
-        debug_assert!(predictions.len() == targets.len(), "Predictions/targets batch size mismatch");
+        debug_assert!(predictions.len() == targets.len(), "predictions/targets batch size mismatch");
 
         // init per batch counts
         let mut batch_error = 0;
@@ -321,10 +321,10 @@ impl<B: Backend> Metric for CtcWordErrorRate<B> {
             // obtain ID sequence and convert to char sequence (for both prediction and target)
             let prediction_chars: Vec<char> = self.token_map
                 .ids_to_chars(&predictions[i])
-                .expect("Failed to convert prediction IDs to chars");
+                .expect("failed to convert prediction IDs to chars");
             let target_chars = self.token_map
                 .ids_to_chars(&targets[i])
-                .expect("Failed to convert target IDs to chars");
+                .expect("failed to convert target IDs to chars");
 
             if prediction_chars.is_empty() { log::warn!("Decoder produced empty prediction sequence"); }
             if target_chars.is_empty() { log::warn!("Encountered empty target sequence"); }
@@ -382,10 +382,10 @@ fn unpad_to_vec<B: Backend>(
     lengths_tensor: Tensor<B, 1, Int>,
 ) -> Vec<Vec<usize>> {
     let data = data_tensor.into_data().convert::<i64>();
-    let data_slice = data.as_slice::<i64>().expect("Conversion failed");
+    let data_slice = data.as_slice::<i64>().expect("conversion failed");
 
     let lengths = lengths_tensor.into_data().convert::<i64>();
-    let lengths_slice = lengths.as_slice::<i64>().expect("Conversion failed");
+    let lengths_slice = lengths.as_slice::<i64>().expect("conversion failed");
 
     let max_length = data.shape[1];
 

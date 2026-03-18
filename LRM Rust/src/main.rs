@@ -34,7 +34,11 @@
 // run real-time live inference from default webcam:                                                                         cargo run -- infer --model [model_id] --live
 // run real-time live inference from specified webcam:                                                                       cargo run -- infer --model [model_id] --live --camera [device_id]
 
-
+// embed Info.plist on macOS so AVFoundation uses AVCaptureDeviceTypeContinuityCamera
+// and does not emit the AVCaptureDeviceTypeExternal deprecation warning
+// (e.g. when using OpenCV camera capture)
+#[cfg(target_os = "macos")]
+embed_plist::embed_info_plist!("../Info.plist");
 
 // imports
 use burn::{
@@ -149,7 +153,7 @@ fn main() -> Result<(), ESS> {
     println!("Blank token char: {}\n", VOCAB.chars().nth(BLANK_ID).unwrap());
     println!("Space token ID: {}", SPACE_ID);
     println!("Blank token char: {}\n", VOCAB.chars().nth(SPACE_ID).unwrap());
-    assert!(BLANK_ID < VOCAB_SIZE, "Blank ID ({}) is out of vocabulary size bounds ({})", BLANK_ID, VOCAB_SIZE);
+    assert!(BLANK_ID < VOCAB_SIZE, "blank ID ({}) is out of vocabulary size bounds ({})", BLANK_ID, VOCAB_SIZE);
 
     // CLI control flow
     match &args.command {
@@ -287,7 +291,7 @@ fn run_train_vsrm(
     let model_id = model
         .map(String::from)
         .or_else(|| dataset.map(|d| format!("vsrm_{}", d.tag())))
-        .ok_or_else(|| io_err("Train requires `--model` or `--dataset`", ErrorKind::InvalidInput))?;
+        .ok_or_else(|| io_err("train requires `--model` or `--dataset`", ErrorKind::InvalidInput))?;
 
     let model_path = context.models_path.join(&model_id);
     let model_config = VsrModelConfig::new()
@@ -303,7 +307,7 @@ fn run_train_vsrm(
     let persisted_config = if resume_epoch.is_some() {
         let config_path = model_path.join("learner_config.json");
         Some(VsrmLearnerConfig::load(&config_path)
-            .map_err(|e| io_err(format!("Failed to load config for resume: {}", e), ErrorKind::InvalidData))?)
+            .map_err(|e| io_err(format!("failed to load config for resume: {}", e), ErrorKind::InvalidData))?)
     } else { None };
 
     // persist these values across next run
@@ -330,10 +334,9 @@ fn run_train_vsrm(
     train::<TrainBackend>(
         device,
         context,
-        dataset_src,
-        model_config,
-        learner_config,
-        token_map.as_ref().clone(),
+        &model_config,
+        &learner_config,
+        token_map.as_ref(),
     )?;
 
     Ok(())
@@ -364,13 +367,14 @@ fn run_infer_vsrm(
     camera: i32,
     token_map: &Arc<TokenMap>,
 ) -> Result<(), ESS> {
-    if !live && input.is_none() {
-        return Err(io_err("Must specify either `--input [path/to/video.mpg]` or `--live` for inference", ErrorKind::InvalidInput));
+    // error if both or neither are provided
+    if live == input.is_some() {
+        return Err(io_err("must specify either `--input [path/to/video.mpg]` or `--live` for inference", ErrorKind::InvalidInput));
     }
 
     let model_path = context.models_path.join(model_id);
     if !model_path.exists() {
-        return Err(io_err(format!("Model directory not found: {:?}", model_path), ErrorKind::NotFound));
+        return Err(io_err(format!("model directory not found: {:?}", model_path), ErrorKind::NotFound));
     }
 
     let model_config_path = model_path.join("model_config.json");
@@ -379,11 +383,11 @@ fn run_infer_vsrm(
 
     // load learner/model configs and norm stats
     let model_config = VsrModelConfig::load(&model_config_path)
-        .map_err(|e| io_err(format!("Failed to load model_config.json: {}", e), ErrorKind::InvalidData))?;
+        .map_err(|e| io_err(format!("failed to load model_config.json: {}", e), ErrorKind::InvalidData))?;
     let learner_config = VsrmLearnerConfig::load(&learner_config_path)
-        .map_err(|e| io_err(format!("Failed to load learner_config.json: {}", e), ErrorKind::InvalidData))?;
+        .map_err(|e| io_err(format!("failed to load learner_config.json: {}", e), ErrorKind::InvalidData))?;
     let norm_stats = load_json(&norm_stats_path)
-        .map_err(|e| io_err(format!("Failed to load norm_stats.json: {}", e), ErrorKind::InvalidData))?;
+        .map_err(|e| io_err(format!("failed to load norm_stats.json: {}", e), ErrorKind::InvalidData))?;
 
     let model_id = model_id.to_string();
     let frame_dims = learner_config.frame_dims;
@@ -394,18 +398,23 @@ fn run_infer_vsrm(
 
     let predictor_config = VsrmPredictorConfig::new(model_id.to_string())
         .with_frame_dims(frame_dims)
-        .with_rf_window_size(rf)
-        .with_rf_window_stride(stride)
+        .with_temporal_window(rf)
+        .with_temporal_stride(stride)
         .with_search_type(search_type);
 
-    infer::<InferBackend>(
+    let session = InferenceSession::<InferBackend>::new(
         device,
-        context,
         &model_path,
-        model_config,
-        predictor_config,
+        &model_config,
+        &predictor_config,
         norm_stats,
         token_map.as_ref().clone(),
+    )?;
+
+    infer::<InferBackend>(
+        session,
+        context,
+        &predictor_config,
         input,
         camera,
     )?;
@@ -439,7 +448,7 @@ fn run_preprocess(
         DatasetSource::Grid => {
             let grid_dataset = GridDataset::new(
                 context,
-                token_map.as_ref().clone(),
+                token_map.as_ref(),
                 Some(tracker_config),
                 None,
             );

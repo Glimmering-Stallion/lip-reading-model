@@ -143,22 +143,25 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Current Status
 
-- **I/O and data acquisition:** Helper functions are finished.
-- **Data pipeline:** Adapting (at least for GRID corpus), preprocessing, splitting, and batching are done.
-- **Offline inference:** Lip-reading inference and LM integration are functionally complete.
-- **Decoding:** Greedy and Beam Search with char-level N-gram LM work end-to-end.
-- **Training:** Training and validation pipeline implemented and wired into Burn's learner framework.
-- **Verification:** Pipeline dataflow correctness and model convergence verified via single-batch overfit unit tests.
-- **Mouth tracking:** Dynamic mouth tracking using Haar cascades implemented.
-- **CLI:** Subcommands for build-lm, preprocess, train (new/resume), and infer (static file + live cam modes) are in place.
+- **I/O and data acquisition:** Video encoding/decoding, mouth ROI extraction utilities, and dataset download/extract helpers are in place.
+- **Data pipeline:** Adapter mapping (at least for GRID), preprocessing, deterministic splitting, and batching are implemented.
+- **Loss:** Custom CTC loss implemented in log-space (forward/backward DP) with vectorized batch support for variable-length sequences.
+- **Decoding:** Greedy and prefix beam-search CTC decoding, optionally rescored with the integrated char-level N-gram LM (supports alpha/beta).
+- **Training:** Burn `Learner`-based training/validation loop with checkpointing, metrics, and LR scheduling. Uses `create_dataloaders` helper to handle train/val splits, batching, and dataloading for source-specific datasets.
+- **Inference:** Using an `InferenceSession` engine, which supports static file inference with `infer_file` and async live webcam inference with `infer_live` (main thread captures/tracks/overlays; worker thread runs model forward passes).
+- **Verification:** Unit tests for CTC loss/decoding, tracker ROI behavior, and sanity checks for model input/output dataflow; training convergence validated via overfit tests.
+- **Mouth tracking:** Haar-cascade face/mouth detection with stabilized mouth ROI per frame.
+- **CLI:** `build-lm`, `preprocess`, `train` (new/resume), and `infer` (static file / live cam input types) subcommands are available.
 
 ## Pending / Future Work
 
-- **Standardized inference framework:** Add an inference path with a standardization component that mirrors the batcher's preprocessing (reuse `VsrmBatcher`, `DatasetStats`, `TokenMap` or other components where necessary; avoid creating unnecessary files).
 - **FPS video standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
-- **Word-Level N-gram vs. Char Level Decoder Incongruity**: 
-- **Format Error Messages**: In the Rust ecosystem it is more idiomatic for error messages to be lower case and not end with a period (such that they can be chained together).
-- **Grad-CAM For Overlay Visualization**: During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
+- **Word-Level N-gram vs. Char Level Decoder Incongruity:** Current decoding uses character-level LM scoring; evaluate unifying with a word-level LM/tokenization or retraining the LM to match the decoder’s output unit.
+- **Grad-CAM For Overlay Visualization:** During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
+- **Add Landmark-Based Tracker:** Improve ROI stability and accuracy, plus rotational invariance benefits by adding a landmark/pose-based tracker backend (e.g. MediaPipe) as a separate tracker option to the existing layered Haar cascades tracker.
+- **Add Viz Overlay And Text Output For File-Mode Inference:** File-mode inference should be able to produce an overlay video and a `.txt` prediction/ground-truth transcripts file bundled in a dir when the user asks for it (e.g. via `--output-dir`).
+- **Optimize CTC Loss:** Polish by reducing unnecessary tensor cloning/allocations. Keep a prev/curr buffer and reuse them rather than clone three times for the stay/adv1/adv2 tensors. Don't clone input lengths tensor for time mask. Don't clone log probs just to slice one timestep.
+- **Optimize CTC Decoder Beam Prefix Search:** Incorporate a trie-based prefix building mechanism over the current sequence-probability Hashmaps design.
 
 ## CLI Usage
 

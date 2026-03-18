@@ -329,14 +329,14 @@ impl<B: Backend> VsrModel<B> {
             downsample(w2, s_w, k_w, p_w),
         );
 
-        assert!(rb1_out.is_multiple_of(norm_groups), "First Conv3D layer output ({}) must be divisible by Norm Groups ({})", rb1_out, norm_groups);
-        assert!(rb2_out.is_multiple_of(norm_groups), "Second Conv3D layer output ({}) must be divisible by Norm Groups ({})", rb2_out, norm_groups);
-        assert!(rb3_out.is_multiple_of(norm_groups), "Third Conv3D layer output ({}) must be divisible by Norm Groups ({})", rb3_out, norm_groups);
+        assert!(rb1_out.is_multiple_of(norm_groups), "first Conv3D layer output ({}) must be divisible by norm groups ({})", rb1_out, norm_groups);
+        assert!(rb2_out.is_multiple_of(norm_groups), "second Conv3D layer output ({}) must be divisible by norm groups ({})", rb2_out, norm_groups);
+        assert!(rb3_out.is_multiple_of(norm_groups), "third Conv3D layer output ({}) must be divisible by norm groups ({})", rb3_out, norm_groups);
 
-        assert!(frame_dims.0 >= 40 && frame_dims.1 >= 40, "Frame dimensions must be >= 40, got H = {}, W = {}", frame_dims.0, frame_dims.1);
+        assert!(frame_dims.0 >= 40 && frame_dims.1 >= 40, "frame dimensions must be >= 40, got H = {}, W = {}", frame_dims.0, frame_dims.1);
         if h3 < 4 || w3 < 4 { eprintln!("Warning: downsampled feature map is very small ({}x{}); representation quality may suffer", h3, w3); }
 
-        assert!(out_channels >= 32, "Out channels ({}) must be >= 32", out_channels);
+        assert!(out_channels >= 32, "out channels ({}) must be >= 32", out_channels);
         if rb3_out < 64 { eprintln!("Warning: third Conv3D channels ({}) is very small; representation quality may suffer", rb3_out); }
 
         let rb1 = ResidualBlockConfig::new([in_channels, rb1_out], kernel_size)
@@ -418,8 +418,8 @@ impl<B: Backend> VsrModel<B> {
         total_rf += tcn2.receptive_field_contribution() - 1;
 
         println!("Model initialized with temporal receptive field of {} frames\n", total_rf);
-        debug_assert!(total_rf > min_viable_rf, "Vision too narrow: {} frames", total_rf);
-        debug_assert!(total_rf < max_viable_rf, "Vision too wide: {} frames", total_rf);
+        debug_assert!(total_rf > min_viable_rf, "vision too narrow: {} frames", total_rf);
+        debug_assert!(total_rf < max_viable_rf, "vision too wide: {} frames", total_rf);
 
         Self {
             rb1, rb2, rb3,

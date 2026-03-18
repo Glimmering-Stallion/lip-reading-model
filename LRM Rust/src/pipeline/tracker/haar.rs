@@ -55,13 +55,13 @@ impl HaarTrackerConfig {
     /// ### Returns:
     /// A configured `HaarTracker` ready to process frames.
     pub fn init(&self) -> HaarTracker {
-        let face_cascade_path = self.face_cascade_path.to_str().expect("Invalid face cascade path");
-        let mouth_cascade_path = self.mouth_cascade_path.to_str().expect("Invalid mouth cascade path");
+        let face_cascade_path = self.face_cascade_path.to_str().expect("invalid face cascade path");
+        let mouth_cascade_path = self.mouth_cascade_path.to_str().expect("invalid mouth cascade path");
 
         let face_cascade = CascadeClassifier::new(face_cascade_path)
-            .expect("Failed to load face cascade XML");
+            .expect("failed to load face cascade XML");
         let mouth_cascade = CascadeClassifier::new(mouth_cascade_path)
-            .expect("Failed to load mouth cascade XML");
+            .expect("failed to load mouth cascade XML");
 
         HaarTracker {
             face_cascade,
@@ -326,9 +326,9 @@ impl HaarTracker {
                 0.0,
                 0.0,
                 INTER_LINEAR,
-            ).expect("Frame to target dims resize failed");
+            ).expect("frame to target dims resize failed");
         } else {
-            cropped_frame.copy_to(&mut resized_frame).expect("Cropped to resized frame copy failed");
+            cropped_frame.copy_to(&mut resized_frame).expect("cropped to resized frame copy failed");
         }
 
         resized_frame

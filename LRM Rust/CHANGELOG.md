@@ -175,8 +175,8 @@ cargo run -- infer --model vsrm_grid --input path/to/video.mpg --output pred.txt
 - Re-enabled `tcn_is_causal` unit test (now passes).
 - **Checkpoint compatibility:** Architecture change; existing checkpoints will not load. Retrain from scratch.
 - Chose per-timestep LayerNorm due to:
-    - Simplicity of implementation
-    - Small channel noise issue countered with sufficiently large number of channels being passed in (using 512 as default)
+  - Simplicity of implementation
+  - Small channel noise issue countered with sufficiently large number of channels being passed in (using 512 as default)
 
 ## 14. Word Separation in Targets ([`src/pipeline/adapters/grid.rs`](src/pipeline/adapters/grid.rs))
 
@@ -210,8 +210,6 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 **`as_deref_mut` resolution:** TLS helper uses `&mut **opt.as_mut().unwrap()` to dereference `Box<dyn LipTrackerBackend>` without requiring `Deref` on the concrete type.
 
 **No checkpoint impact.** Model weights unchanged; this is a code-organization refactor only.
-
-# Change Logs Since Last Git Commit
 
 ## 16. Inference Pipeline
 
@@ -254,28 +252,65 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **TrainBackend** / **InferBackend** type aliases in main.
 - **Error propagation**: `io_err` in utils; `ESS` type alias; resolvers return `Result`; `?` in runners.
 
+# Change Logs Since Last Git Commit
+
+## 19. Async Live Inference Mode
+
+**Live webcam inference split into UI + worker threads:**
+
+- Main loop for UI captures frames, runs mouth tracking + overlay rendering, and buffers sliding-window crops.
+- A dedicated worker thread owns the inference session and runs the expensive forward pass (`session.predict_frames`).
+- Bounded request/response channels (capacity 1) implement “most-recent-only” behavior to avoid latency creep when inference is slower than capture.
+
+## 20. Pass-By-Reference vs. Pass-By-Value Signature Consistency
+
+- Ownership-based thread messaging: `InferenceRequest` owns a `FramesBuffer`, and the worker owns the `InferenceSession`.
+- Explicit `Send` bounds enable safe cross-thread execution without shared mutable state.
+- The main loop only passes owned buffers into the request channel, keeping borrowing rules simple and preventing accidental cross-thread references.
+
+## 21. Inference Session Struct Initialized Externally to Infer Function
+
+- `infer<B>(session, ...)` now takes a pre-constructed `InferenceSession` rather than building the session internally.
+- `infer_file` / `infer_live` accept the session as a parameter, centralizing checkpoint loading and separating model setup from I/O and live orchestration, while also reducing parameter bloat.
+
+## 22. Reformat Error Messages for Clean Composures
+
+- Use `lowercase` and avoid trailing periods so error messages compose cleanly.
+
+- Applied this formatting this project-wide.
+
+## 23. macOS Continuity Camera Info.plist / embed_plist Compatibility
+
+**Suppress macOS AVFoundation camera deprecation warnings:**
+
+- Added an `Info.plist` with `NSCameraUseContinuityCameraDeviceType=true` to opt into `AVCaptureDeviceTypeContinuityCamera`.
+- Added `embed_plist` as a macOS-only dependency and embedded the plist into the executable so command-line runs get the expected macOS camera behavior.
+- Goal: remove the `AVCaptureDeviceTypeExternal is deprecated for Continuity Cameras` warning when using OpenCV-backed camera capture.
+
 ## Files Modified (Summary)
 
-| File | Changes |
-|------|---------|
-| `tracker.rs` → `tracker/` | Trait refactor: split into `mod.rs` (manifest), `backend.rs` (trait + TLS), `haar.rs` (Haar impl) |
-| `residual.rs` | New ResBlock module |
-| `tcn.rs` | GroupNorm → per-timestep LayerNorm (causal), norm_groups removed, tcn_is_causal re-enabled |
-| `grid.rs` | Word separation: SPACE_ID inserted between words in load_alignment; tracker imports updated to trait-based API |
-| `vsrm.rs` | ResBlock frontend, AAP+proj, FC init, blank bias, removed double ReLU |
-| `grid.rs` | Global stats, try_load/get fallback, pre-validation, sp filtering |
-| `dataset.rs` | DatasetStats struct |
-| `io.rs` | load_json, save_json |
-| `batcher.rs` | Global normalization with DatasetStats; inference support (max_l.max(1)) |
-| `learner.rs` | Composed LR scheduler, train/resume logic; VsrmLearnerConfig: rf, dataset_src, builder; train() returns Result |
-| `summary.rs` | New SummaryVisitor module |
-| `main.rs` | CLI subcommands; infer wired; TrainBackend/InferBackend; Preprocess DatasetSource |
-| `inference/predictor.rs` | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow |
-| `inference/loader.rs` | New: load_video, load_frame, open_camera |
-| `inference/overlay.rs` | New: OverlayRenderer |
-| `pipeline/video.rs` | Deleted; logic in inference/loader.rs |
-| `cli.rs` | Checkpoint/CLI resolution helpers; pure resolvers |
-| `utils.rs` | levenshtein, io_err |
-| `lib.rs` | Tracker re-exports updated |
-| `pipeline/mod.rs` | Tracker re-exports updated |
-| `README.md` | Project tree, CLI examples |
+| File                      | Changes                                                                                                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `tracker.rs` → `tracker/` | Trait refactor: split into `mod.rs` (manifest), `backend.rs` (trait + TLS), `haar.rs` (Haar impl)              |
+| `residual.rs`             | New ResBlock module                                                                                            |
+| `tcn.rs`                  | GroupNorm → per-timestep LayerNorm (causal), norm_groups removed, tcn_is_causal re-enabled                     |
+| `grid.rs`                 | Word separation: SPACE_ID inserted between words in load_alignment; tracker imports updated to trait-based API |
+| `vsrm.rs`                 | ResBlock frontend, AAP+proj, FC init, blank bias, removed double ReLU                                          |
+| `grid.rs`                 | Global stats, try_load/get fallback, pre-validation, sp filtering                                              |
+| `dataset.rs`              | DatasetStats struct                                                                                            |
+| `io.rs`                   | load_json, save_json                                                                                           |
+| `batcher.rs`              | Global normalization with DatasetStats; inference support (max_l.max(1))                                       |
+| `learner.rs`              | Composed LR scheduler, train/resume logic; VsrmLearnerConfig: rf, dataset_src, builder; train() returns Result |
+| `summary.rs`              | New SummaryVisitor module                                                                                      |
+| `main.rs`                 | CLI subcommands; infer wired; TrainBackend/InferBackend; Preprocess DatasetSource                              |
+| `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow                                         |
+| `inference/loader.rs`     | New: load_video, load_frame, open_camera                                                                       |
+| `inference/overlay.rs`    | New: OverlayRenderer                                                                                           |
+| `pipeline/video.rs`       | Deleted; logic in inference/loader.rs                                                                          |
+| `cli.rs`                  | Checkpoint/CLI resolution helpers; pure resolvers                                                              |
+| `utils.rs`                | levenshtein, io_err                                                                                            |
+| `lib.rs`                  | Tracker re-exports updated                                                                                     |
+| `pipeline/mod.rs`         | Tracker re-exports updated                                                                                     |
+| `README.md`               | Project tree, CLI examples                                                                                     |
+| `Info.plist`              | macOS camera key: `NSCameraUseContinuityCameraDeviceType=true`                                                  |
+| `Cargo.toml`              | Added `crossbeam-channel` + macOS-only `embed_plist`                                                           |

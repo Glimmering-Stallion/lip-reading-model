@@ -56,8 +56,8 @@ impl ResidualBlockConfig {
         let [in_channels, out_channels] = self.channels;
         let [p_t, p_h, p_w] = self.padding;
 
-        assert!(in_channels > 0 && out_channels > 0, "Channels must be positive");
-        assert!(out_channels.is_multiple_of(self.norm_groups), "Output channels ({}) must be divisible by norm_groups ({})", out_channels, self.norm_groups);
+        assert!(in_channels > 0 && out_channels > 0, "channels must be positive");
+        assert!(out_channels.is_multiple_of(self.norm_groups), "output channels ({}) must be divisible by norm groups ({})", out_channels, self.norm_groups);
 
         // handles downsample transitioning
         let conv1 = Conv3dConfig::new(self.channels, self.kernel_size)

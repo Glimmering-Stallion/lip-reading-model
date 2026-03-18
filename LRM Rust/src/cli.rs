@@ -110,14 +110,14 @@ pub fn resolve_from_checkpoint(
     match resume_from {
         // --------------- (A) ---------------
         Some(request) => {
-            if !model_path.exists() { Err(io_err(format!("Cannot resume: model directory {:?} does not exist\n", model_path), ErrorKind::InvalidInput)) }
+            if !model_path.exists() { Err(io_err(format!("cannot resume: model directory {:?} does not exist\n", model_path), ErrorKind::InvalidInput)) }
             else {
                 let epoch = match request {
                     Some(epoch) => {
                         if checkpoint_epoch_exists(model_path, epoch) { epoch }
-                        else { return Err(io_err(format!("Cannot resume: checkpoint for epoch {} not found in {:?}\n", epoch, model_path), ErrorKind::InvalidInput)); }
+                        else { return Err(io_err(format!("cannot resume: checkpoint for epoch {} not found in {:?}\n", epoch, model_path), ErrorKind::InvalidInput)); }
                     },
-                    None => find_latest_checkpoint_epoch(model_path).ok_or_else(|| io_err(format!("Cannot resume: no valid checkpoints found in {:?}\n", model_path), ErrorKind::InvalidInput))?,
+                    None => find_latest_checkpoint_epoch(model_path).ok_or_else(|| io_err(format!("cannot resume: no valid checkpoints found in {:?}\n", model_path), ErrorKind::InvalidInput))?,
                 };
                 println!("Resuming from checkpoint epoch {}\n", epoch);
                 Ok(Some(epoch))
@@ -190,7 +190,7 @@ pub fn resolve_dataset_source(
 ) -> Result<DatasetSource, ESS> {
     match learner_config {
         // fresh start case (no config with previous value to persist)
-        None => dataset_src.ok_or_else(|| io_err("A '--dataset' source is required when starting a new model from scratch", ErrorKind::InvalidInput)),
+        None => dataset_src.ok_or_else(|| io_err("a '--dataset' source is required when starting a new model from scratch", ErrorKind::InvalidInput)),
 
         // resume case (persist previous value or update with newly provided CLI arg value)
         Some(config) => {
@@ -205,7 +205,7 @@ pub fn resolve_dataset_source(
                     // provided value is diff from previous value
                     else {
                         Err(io_err(format!(
-                            "Dataset mismatch: model was trained on '{}' but '--dataset {}' was specified",
+                            "dataset mismatch: model was trained on '{}' but '--dataset {}' was specified",
                             persisted_val.tag(), val.tag(),
                         ), ErrorKind::InvalidInput))
                     }
@@ -249,8 +249,8 @@ pub fn resolve_active_subset(
                     // provided value is diff from previous value
                     else {
                         Err(io_err(format!(
-                            "Subset mismatch: Cannot change data distribution during resume\n
-                            Persisted: {:?}, Requested: {:?}",
+                            "subset mismatch: cannot change data distribution during resume\n
+                            persisted: {:?}, requested: {:?}",
                             persisted_val, val,
                         ), ErrorKind::InvalidInput))
                     }

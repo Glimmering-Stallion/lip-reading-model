@@ -82,7 +82,7 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
     /// ### Returns:
     /// Batch containing padded inputs [N, C, max_T, H, W] and targets [N, max_L].
     fn batch(&self, items: Vec<VsrmItem>, device: &B::Device) -> Batch<B> {
-        assert!(!items.is_empty(), "VsrmBatcher received an empty batch");
+        assert!(!items.is_empty(), "vsrm batcher received an empty batch");
 
         // analyze batch to find max video timesteps length and max transcript sequence length
         let max_t = items
@@ -97,7 +97,7 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
             .unwrap_or(0)
             .max(1); // max_l may be 0 for inference (no transcripts); use 1 as placeholder since targets are unused
 
-        assert!(max_t > 0, "Max time dimension is zero");
+        assert!(max_t > 0, "max time dimension is zero");
 
         // padded frames and sequence targets
         let mut padded_frames_container: Vec<Tensor<CpuB, 4>> = Vec::with_capacity(items.len());
@@ -121,7 +121,7 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
             );
             assert!(c == 1, "VSRM assumes grayscale frame inputs: expected single-channel input, got {}", c);
             assert!(t >= (2 * l), "CTC Constraint Violated: Video frames ({}) for item {} must be greater than transcript length ({})", t, item.item_id, l);
-            assert!(h > 0 && w > 0, "Invalid frame dimensions {}x{}", h, w);
+            assert!(h > 0 && w > 0, "invalid frame dimensions {}x{}", h, w);
 
             // --------------- (A) ---------------
 
@@ -153,21 +153,21 @@ impl<B: Backend> Batcher<B, VsrmItem, Batch<B>> for VsrmBatcher<B> {
                 let zeros: Tensor<CpuB, 4> = Tensor::zeros([c, pad_amount, h, w], &Default::default());
                 Tensor::cat(vec![frames, zeros], 1)
             } else { frames };
-            debug_assert!(padded_frames.shape()[1] == max_t, "Frame padding failed: expected T = {}, got {}", max_t, padded_frames.shape()[1]);
+            debug_assert!(padded_frames.shape()[1] == max_t, "frame padding failed: expected T = {}, got {}", max_t, padded_frames.shape()[1]);
 
             padded_frames_container.push(padded_frames);
 
             // --------------- (B) ---------------
 
             let mut sequence = item.transcript_ids.clone();
-            assert!(item.transcript_ids.iter().all(|&id| id < BLANK_ID), "Sequence contains out-of-range token in item {}", item.item_id);
+            assert!(item.transcript_ids.iter().all(|&id| id < BLANK_ID), "sequence contains out-of-range token in item {}", item.item_id);
 
             // if curr item's sequence length is shorter than max length, pad it
             sequence.resize(max_l, BLANK_ID);
 
             // convert padded sequence from vec to tensor
             let padded_sequence: Tensor<CpuB, 1, Int> = Tensor::from_ints(&sequence[..], &Default::default());
-            debug_assert!(padded_sequence.shape()[0] == max_l, "Sequence padding failed: expected L = {}, got {}", max_l, padded_sequence.shape()[0]);
+            debug_assert!(padded_sequence.shape()[0] == max_l, "sequence padding failed: expected L = {}, got {}", max_l, padded_sequence.shape()[0]);
 
             padded_sequences_container.push(padded_sequence);
 
