@@ -103,10 +103,11 @@ use burn::{
     }
 };
 use std::{
+    fs,
     io::{self, Write},
     sync::Arc,
     thread,
-    time::Duration,
+    time::Duration
 };
 use log;
 
@@ -314,7 +315,8 @@ where
 {
     // create output/model paths
     let output_path = context.models_path.clone();
-    let model_path = output_path.join(&learner_config.model_id.clone());
+    let model_path = output_path.join(&learner_config.model_id);
+    fs::create_dir_all(&model_path)?;
 
     assert!(learner_config.num_epochs > 0, "number of epochs must be > 0, got {}", learner_config.num_epochs);
     assert!(learner_config.batch_size > 0, "batch size must be > 0, got {}", learner_config.batch_size);

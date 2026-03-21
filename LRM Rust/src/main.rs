@@ -30,9 +30,9 @@
 // resume training from specified checkpoint:                                                                                cargo run -- train [...] --resume [epoch]
 // train using a subset of the dataset (e.g. fraction = 0.1 for 10%):                                                        cargo run -- train [...] --subset [fraction]
 // toggle keep-all-checkpoints during training (default: keep most recent only):                                             cargo run -- train [...] --keep-all-checkpoints [on|off]
-// run inference on a video file (requires --model):                                                                         cargo run -- infer --model [model_id] --input [path/to/video.mpg]
+// run inference on a video file or bundled video-transcript dir (requires --model):                                         cargo run -- infer --model [model_id] --input [path/to/video.mpg|.../bundled_dir]
 // run real-time live inference from default webcam:                                                                         cargo run -- infer --model [model_id] --live
-// run real-time live inference from specified webcam:                                                                       cargo run -- infer --model [model_id] --live --camera [device_id]
+// run real-time live inference from a specific camera index (OpenCV device id):                                             cargo run -- infer --model [model_id] --live [device_id]
 
 // embed Info.plist on macOS so AVFoundation uses AVCaptureDeviceTypeContinuityCamera
 // and does not emit the AVCaptureDeviceTypeExternal deprecation warning
@@ -42,32 +42,24 @@ embed_plist::embed_info_plist!("../Info.plist");
 
 // imports
 use burn::{
+    backend::{wgpu::WgpuDevice::DefaultDevice, Autodiff, Wgpu},
     config::Config,
-    backend::{
-        Autodiff,
-        Wgpu,
-        wgpu::WgpuDevice::DefaultDevice,
-    },
     grad_clipping::GradientClippingConfig,
-    optim::{
-        AdamConfig,
-        decay::WeightDecayConfig,
-    },
+    optim::{decay::WeightDecayConfig, AdamConfig},
 };
+use clap::{Parser, Subcommand};
 use lrm_rust::{
-    cli,
     ctc::lm::LanguageModel,
     pipeline::{
+        tracker::{HaarTrackerConfig, TrackerConfig},
         DatasetSource,
-        tracker::{TrackerConfig, HaarTrackerConfig},
     },
     prelude::*,
     vocab::SPACE_ID,
 };
-use clap::{Parser, Subcommand};
 use std::{
     io::ErrorKind,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -127,14 +119,13 @@ enum Command {
         #[arg(long)]
         model: String,
 
+        /// Video file path, or bundled video-transcript directory
         #[arg(long, conflicts_with = "live")]
         input: Option<PathBuf>,
 
-        #[arg(long, conflicts_with = "input")]
-        live: bool,
-
-        #[arg(long, default_value_t = 0)]
-        camera: i32,
+        /// Live webcam inference. Optional device index (default 0). Mutually exclusive with `--input`.
+        #[arg(long, conflicts_with = "input", num_args = 0..=1, value_name = "DEVICE_INDEX")]
+        live: Option<Option<usize>>,
     },
 }
 
@@ -157,17 +148,55 @@ fn main() -> Result<(), ESS> {
 
     // CLI control flow
     match &args.command {
-        Command::BuildLm { corpus, model, n } => {
-            run_build_lm(&context, corpus.as_deref(), model, *n, &token_map)?;
+        Command::BuildLm {
+            corpus,
+            model,
+            n,
+        } => {
+            run_build_lm(
+                &context,
+                corpus.as_deref(),
+                model,
+                *n,
+                &token_map,
+            )?;
         }
-        Command::Train { model, dataset, resume, subset, keep_all_checkpoints } => {
-            run_train_vsrm(&context, model.as_deref(), dataset.clone(), *resume, *subset, keep_all_checkpoints.as_ref().map(|o| o.as_deref()), &token_map)?;
+        Command::Train {
+            model,
+            dataset,
+            resume,
+            subset,
+            keep_all_checkpoints,
+        } => {
+            run_train_vsrm(
+                &context,
+                model.as_deref(),
+                dataset.clone(),
+                *resume,
+                *subset,
+                keep_all_checkpoints.as_ref().map(|o| o.as_deref()),
+                &token_map,
+            )?;
         }
-        Command::Infer { model, input, live, camera } => {
-            run_infer_vsrm(&context, &model, input.as_deref(), *live, *camera, &token_map)?;
+        Command::Infer {
+            model,
+            input,
+            live,
+        } => {
+            run_infer_vsrm(
+                &context,
+                model,
+                input.as_deref(),
+                *live,
+                &token_map,
+            )?;
         }
         Command::Preprocess { dataset } => {
-            run_preprocess(&context, *dataset, &token_map)?;
+            run_preprocess(
+                &context,
+                *dataset,
+                &token_map,
+            )?;
         }
     }
 
@@ -196,13 +225,14 @@ fn run_build_lm(
 ) -> Result<(), ESS> {
     extract_slr_corpus(&context.rust_root);
 
-    let corpus_path = corpus
-        .map(PathBuf::from)
-        .unwrap_or_else(|| context.data_path.join("librispeech-lm-norm").join("librispeech-lm-norm.txt"));
+    let corpus_path = corpus.map(PathBuf::from).unwrap_or_else(|| {
+        context
+            .data_path
+            .join("librispeech-lm-norm")
+            .join("librispeech-lm-norm.txt")
+    });
 
-    if !corpus_path.exists() {
-        return Err(format!("Corpus path {:?} does not exist", corpus_path).into());
-    }
+    if !corpus_path.exists() { return Err(format!("Corpus path {:?} does not exist", corpus_path).into()); }
 
     let lm_output_path = context.models_path.join(model);
     let corpus_str = corpus_path.to_string_lossy().to_string();
@@ -232,7 +262,11 @@ fn run_build_lm(
 
     let perplexity = lm.perplexity(Box::new(eval_sequences.into_iter()));
     println!("N-gram LM perplexity on eval set: {:.3}\n", perplexity);
-    assert!(perplexity.is_finite(), "LM perplexity ({}) is non-finite", perplexity);
+    assert!(
+        perplexity.is_finite(),
+        "LM perplexity ({}) is non-finite",
+        perplexity
+    );
 
     Ok(())
 }
@@ -242,17 +276,17 @@ fn run_build_lm(
 /// Loads a VSRM dataset and runs training with fresh start or resume.
 ///
 /// Resolves `model_id` from `--model` or `--dataset` (default `vsrm_{dataset_src}`).
-/// 
+///
 /// Validates resume intent against checkpoint state before loading any config.
-/// 
+///
 /// If resuming, loads persisted `learner_config` and merges with CLI overrides
 /// for `keep_all_checkpoints`, `active_subset`, and `dataset_src`.
-/// 
+///
 /// Builds `model_config` and `learner_config`, then delegates to `train()`.
 ///
 /// ### Params:
 /// - `context`: Filesystem context.
-/// - `model`: Optional model ID; if `None`, uses default.
+/// - `model_id`: Optional model ID; if `None`, uses default.
 /// - `resume`: Optional resume spec; `None` for fresh start, `Some(None)` for latest checkpoint, `Some(Some(epoch))` for specific epoch.
 /// - `active_subset`: Optional fraction of dataset to use (e.g. 0.1 for 10%).
 /// - `keep_all_checkpoints_cli`: Optional CLI override; `None` = use persisted, `Some(Some("on"))` = keep all checkpoints, `Some(Some("off"))` = keep most recent only.
@@ -262,7 +296,7 @@ fn run_build_lm(
 /// `Ok(())` on success, or an error on training failure.
 fn run_train_vsrm(
     context: &Context,
-    model: Option<&str>,
+    model_id: Option<&str>,
     dataset: Option<DatasetSource>,
     resume: Option<Option<usize>>,
     active_subset: Option<f32>,
@@ -288,10 +322,10 @@ fn run_train_vsrm(
         .with_weight_decay(Some(WeightDecayConfig::new(1e-4)))
         .with_grad_clipping(Some(GradientClippingConfig::Norm(5.0)));
 
-    let model_id = model
+    let model_id = model_id
         .map(String::from)
         .or_else(|| dataset.map(|d| format!("vsrm_{}", d.tag())))
-        .ok_or_else(|| io_err("train requires `--model` or `--dataset`", ErrorKind::InvalidInput))?;
+        .ok_or_else(|| { io_err("train requires `--model` or `--dataset`", ErrorKind::InvalidInput) })?;
 
     let model_path = context.models_path.join(&model_id);
     let model_config = VsrModelConfig::new()
@@ -301,25 +335,21 @@ fn run_train_vsrm(
 
     // validate resume vs fresh-start intent first (before loading any config)
     // this is the epoch to resume from if not a fresh start
-    let resume_epoch = cli::resolve_from_checkpoint(&model_path, resume)
-        .map_err(|e| { cli::display_train_cli_help(); e })?; // show help before returning error
+    let resume_epoch = resolve_from_checkpoint(&model_path, resume)
+        .map_err(|e| { display_train_cli_help(); e })?; // show help before returning error
 
     let persisted_config = if resume_epoch.is_some() {
         let config_path = model_path.join("learner_config.json");
         Some(VsrmLearnerConfig::load(&config_path)
-            .map_err(|e| io_err(format!("failed to load config for resume: {}", e), ErrorKind::InvalidData))?)
+            .map_err(|e| { io_err(format!("failed to load config for resume: {}", e), ErrorKind::InvalidData) })?)
     } else { None };
 
     // persist these values across next run
-    let keep_all_checkpoints = cli::resolve_keep_all_checkpoints(persisted_config.as_ref(), keep_all_checkpoints_cli)?;
-    let active_subset = cli::resolve_active_subset(persisted_config.as_ref(), active_subset, seed)?;
-    let dataset_src = cli::resolve_dataset_source(persisted_config.as_ref(), dataset)?;
+    let keep_all_checkpoints = resolve_keep_all_checkpoints(persisted_config.as_ref(), keep_all_checkpoints_cli)?;
+    let active_subset = resolve_active_subset(persisted_config.as_ref(), active_subset, seed)?;
+    let dataset_src = resolve_dataset_source(persisted_config.as_ref(), dataset)?;
 
-    let learner_config = VsrmLearnerConfig::new(
-        model_id,
-        dataset_src,
-        optimizer_config,
-    )
+    let learner_config = VsrmLearnerConfig::new(model_id, dataset_src, optimizer_config)
         .with_resume_from(resume_epoch)
         .with_keep_all_checkpoints(keep_all_checkpoints)
         .with_frame_dims(frame_dims)
@@ -352,9 +382,8 @@ fn run_train_vsrm(
 /// ### Params:
 /// - `context`: Filesystem context.
 /// - `model_id`: Model directory name (required).
-/// - `input`: Video file path for file mode; `None` for live.
-/// - `live`: Whether to run live webcam mode.
-/// - `camera`: Camera device ID (when live).
+/// - `input`: Video file path or bundled GRID utterance directory for file mode; `None` for live.
+/// - `live`: `None` for file mode; `Some(None)` for default webcam; `Some(Some(i))` for OpenCV camera index `i`.
 /// - `token_map`: Bidirectional char-to-ID mapping.
 ///
 /// ### Returns:
@@ -362,20 +391,22 @@ fn run_train_vsrm(
 fn run_infer_vsrm(
     context: &Context,
     model_id: &str,
-    input: Option<&std::path::Path>,
-    live: bool,
-    camera: i32,
+    input: Option<&Path>,
+    live: Option<Option<usize>>,
     token_map: &Arc<TokenMap>,
 ) -> Result<(), ESS> {
     // error if both or neither are provided
-    if live == input.is_some() {
-        return Err(io_err("must specify either `--input [path/to/video.mpg]` or `--live` for inference", ErrorKind::InvalidInput));
-    }
+    if live.is_some() == input.is_some() { return Err(io_err("must specify either `--input [path/to/bundled_dir]` or `--live [device_index]` for inference", ErrorKind::InvalidInput)); }
+
+    let camera: i32 = match live {
+        None => 0,
+        Some(None) => 0,
+        Some(Some(n)) => i32::try_from(n)
+            .map_err(|_| { io_err("camera device index is out of range for this platform", ErrorKind::InvalidInput) })?,
+    };
 
     let model_path = context.models_path.join(model_id);
-    if !model_path.exists() {
-        return Err(io_err(format!("model directory not found: {:?}", model_path), ErrorKind::NotFound));
-    }
+    if !model_path.exists() { return Err(io_err( format!("model directory not found: {:?}", model_path), ErrorKind::NotFound)); }
 
     let model_config_path = model_path.join("model_config.json");
     let learner_config_path = model_path.join("learner_config.json");
@@ -383,11 +414,11 @@ fn run_infer_vsrm(
 
     // load learner/model configs and norm stats
     let model_config = VsrModelConfig::load(&model_config_path)
-        .map_err(|e| io_err(format!("failed to load model_config.json: {}", e), ErrorKind::InvalidData))?;
+        .map_err(|e| { io_err(format!("failed to load model_config.json: {}", e), ErrorKind::InvalidData) })?;
     let learner_config = VsrmLearnerConfig::load(&learner_config_path)
-        .map_err(|e| io_err(format!("failed to load learner_config.json: {}", e), ErrorKind::InvalidData))?;
+        .map_err(|e| { io_err(format!("failed to load learner_config.json: {}", e), ErrorKind::InvalidData) })?;
     let norm_stats = load_json(&norm_stats_path)
-        .map_err(|e| io_err(format!("failed to load norm_stats.json: {}", e), ErrorKind::InvalidData))?;
+        .map_err(|e| { io_err(format!("failed to load norm_stats.json: {}", e), ErrorKind::InvalidData) })?;
 
     let model_id = model_id.to_string();
     let frame_dims = learner_config.frame_dims;
@@ -446,15 +477,14 @@ fn run_preprocess(
 
     match dataset_src {
         DatasetSource::Grid => {
-            let grid_dataset = GridDataset::new(
-                context,
-                token_map.as_ref(),
-                Some(tracker_config),
-                None,
-            );
+            lrm_rust::pipeline::adapters::grid::align_grid_directories(context, false)?;
+            lrm_rust::pipeline::adapters::grid::bundle_grid_utterances(context)?;
+            lrm_rust::pipeline::adapters::grid::normalize_to_standard_formats(context)?;
+            lrm_rust::pipeline::adapters::grid::clean_corpus(context, false)?;
+
+            let grid_dataset = GridDataset::new(context, token_map.as_ref(), Some(tracker_config), None);
             grid_dataset.preprocess_all();
-        }
-        // DatasetSource::Lrw => {}  // stubbed for future
+        } // DatasetSource::Lrw => {}  // stubbed for future
     }
 
     Ok(())

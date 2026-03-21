@@ -7,7 +7,13 @@
 
 use burn::config::Config;
 use opencv::{
-    core::{Mat, Point2f, Rect, Size, Vector},
+    core::{
+        Mat,
+        Point2f,
+        Rect,
+        Size,
+        Vector,
+    },
     imgproc::{self, INTER_LINEAR},
     objdetect::CascadeClassifier,
     prelude::*,
@@ -18,7 +24,11 @@ use std::{
     path::PathBuf,
 };
 
-use super::tracker::{LipTrackerBackend, TrackerResult, VizMetadata};
+use super::tracker::{
+    LipTrackerBackend,
+    TrackerResult,
+    VizMetadata,
+};
 
 
 

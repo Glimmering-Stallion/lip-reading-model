@@ -9,4 +9,4 @@ pub mod loader;
 pub mod overlay;
 
 pub use predictor::{VsrmPredictorConfig, InferenceSession, SlidingWindow, infer};
-pub use overlay::OverlayRenderer;
+pub use overlay::{FrameAnnotator, LiveWindow};

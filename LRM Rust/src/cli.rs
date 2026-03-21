@@ -5,14 +5,17 @@
 
 
 use crate::{
-    pipeline::DatasetSource,
+    pipeline::{
+        io::file_nonempty,
+        DatasetSource,
+    },
     prelude::*,
     training::VsrmLearnerConfig,
 };
 use std::{
     fs,
     io::ErrorKind,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 
@@ -258,6 +261,52 @@ pub fn resolve_active_subset(
             }
         },
     }
+}
+
+
+
+/// Resolves an inference `--input` bundle path to the concrete video file contained inside it.
+///
+/// - `path` must be a **directory** (bundled video-transcript layout), prefers
+///   `<sample_dir>/<sample_id>.mp4`, where `sample_id` is the directory name.
+///
+/// ### Params:
+/// - `path`: User-supplied `--input` bundle path.
+///
+/// ### Returns:
+/// Two paths to an existing, non-empty `.mp4` and `.txt` file, or an error.
+pub fn resolve_inference_input(path: &Path) -> Result<(PathBuf, PathBuf), ESS> {
+    if !path.exists() {
+        return Err(io_err(
+            format!("inference input bundle path does not exist: {:?}", path),
+            ErrorKind::NotFound,
+        ));
+    }
+
+    if path.is_dir() {
+        let stem = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| { io_err("inference input directory has an invalid name", ErrorKind::InvalidInput) })?;
+
+        let mp4 = path.join(stem).with_extension("mp4");
+        let txt = path.join(stem).with_extension("txt");
+
+        if file_nonempty(&mp4)
+        && file_nonempty(&txt)
+        { return Ok((mp4, txt)); }
+
+        return Err(io_err(
+            format!("expected video file at {:?} and transcript file at {:?}", mp4, txt),
+            ErrorKind::NotFound,
+        ));
+    }
+
+    Err(io_err(
+        format!("inference input path is not a bundled video-transcript directory: {:?}", path),
+        ErrorKind::InvalidInput,
+    ))
 }
 
 

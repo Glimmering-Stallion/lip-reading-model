@@ -7,40 +7,74 @@
 
 // custom imports
 use crate::{
-    cli::find_latest_checkpoint_epoch,
+    cli::{find_latest_checkpoint_epoch, resolve_inference_input},
     context::Context,
-    ctc::ctc_decode::{CtcDecodeType, CtcDecoder, CtcDecoderConfig},
+    ctc::ctc_decode::{
+        CtcDecodeType,
+        CtcDecoder,
+        CtcDecoderConfig
+    },
     inference::{
-        loader::{load_frame, load_video, open_camera},
-        overlay::OverlayRenderer,
+        loader::{
+            load_frame,
+            load_video,
+            load_transcript,
+            open_camera
+        },
+        overlay::{FrameAnnotator, LiveWindow},
     },
     pipeline::{
+        FramesBuffer,
         batcher::{VsrmBatcher, VsrmItem},
         dataset::DatasetStats,
-        tracker::{HaarTrackerConfig, TrackerConfig},
-        FramesBuffer,
+        tracker::{HaarTrackerConfig, TrackerConfig}
     },
-    prelude::{io_err, ESS},
-    vocab::{TokenMap, BLANK_ID},
+    prelude::{ESS, io_err},
+    vocab::{BLANK_ID, TokenMap},
     vsrm::{VsrModel, VsrModelConfig},
 };
 // imports
 use burn::{
-    config::Config, data::dataloader::batcher::Batcher, module::Module, prelude::Backend,
-    record::CompactRecorder, tensor::TensorData,
+    config::Config,
+    data::dataloader::batcher::Batcher,
+    module::Module,
+    prelude::Backend,
+    record::CompactRecorder,
+    tensor::TensorData,
 };
-use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender};
-use opencv::core::{Mat, MatTraitConstManual};
+use crossbeam_channel::{
+    bounded,
+    Receiver,
+    RecvTimeoutError,
+    Sender
+};
+use opencv::{
+    prelude::*,
+    core::{
+        Size,
+        AlgorithmHint,
+        Mat,
+        MatTraitConstManual,
+    },
+    imgproc, videoio::{
+        CAP_ANY,
+        CAP_PROP_FPS,
+        VideoCapture,
+        VideoCaptureTraitConst,
+        VideoWriter,
+    }
+};
 use std::{
-    collections::VecDeque,
-    io::ErrorKind,
+    fs,
     path::Path,
+    io::ErrorKind,
+    collections::VecDeque,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering}
     },
     thread,
-    time::Duration,
+    time::Duration
 };
 
 
@@ -55,19 +89,19 @@ pub type InferenceResponse = String;
 /// Serializable configuration knobs for inference with the VSR model.
 #[derive(Config, Debug)]
 pub struct VsrmPredictorConfig {
-    pub model_id: String,            // model name to be saved as
+    pub model_id: String, // model name to be saved as
 
     #[config(default = "(50, 100)")]
-    pub frame_dims: (usize, usize),  // input video frame dimensions (height, width)
+    pub frame_dims: (usize, usize), // input video frame dimensions (height, width)
 
     #[config(default = "0")]
-    pub temporal_window: usize,      // sliding window capacity (default `0` value means auto-derive from `model.total_receptive_field()`)
+    pub temporal_window: usize, // sliding window capacity (default `0` value means auto-derive from `model.total_receptive_field()`)
 
     #[config(default = "10")]
-    pub temporal_stride: usize,      // stride length of the sliding window
+    pub temporal_stride: usize, // stride length of the sliding window
 
     #[config(default = "CtcDecodeType::GreedySearch")]
-    pub search_type: CtcDecodeType,  // decoding search type strategy (Greedy vs. Prefix Beam)
+    pub search_type: CtcDecodeType, // decoding search type strategy (Greedy vs. Prefix Beam)
 }
 
 
@@ -88,7 +122,7 @@ pub struct InferenceSession<B: Backend> {
 /// Sliding window buffer for accumulating mouth crop frames in live mode.
 ///
 /// Frames are pushed one at a time from the live camera loop.
-/// 
+///
 /// When the window reaches its capacity, it can be flushed to a
 /// `FramesBuffer` for prediction, then shifted forward by a
 /// configurable stride.
@@ -121,12 +155,8 @@ impl<B: Backend> InferenceSession<B> {
         norm_stats: DatasetStats,
         token_map: TokenMap,
     ) -> Result<Self, ESS> {
-        let checkpoint_epoch = find_latest_checkpoint_epoch(model_path).ok_or_else(|| {
-            io_err(
-                format!("No checkpoints found in {:?}", model_path),
-                ErrorKind::NotFound,
-            )
-        })?;
+        let checkpoint_epoch = find_latest_checkpoint_epoch(model_path)
+            .ok_or_else(|| { io_err(format!("No checkpoints found in {:?}", model_path), ErrorKind::NotFound) })?;
         let checkpoint_path = model_path
             .join("checkpoint")
             .join(format!("model-{}", checkpoint_epoch));
@@ -136,8 +166,8 @@ impl<B: Backend> InferenceSession<B> {
             .load_file(checkpoint_path, &CompactRecorder::new(), &device)
             .map_err(|e| format!("Failed to load model checkpoint: {}", e))?;
 
-        let resolved_temporal_window = if predictor_config.temporal_window == 0 { model.total_receptive_field() }
-        else { predictor_config.temporal_window };
+        let resolved_temporal_window = if predictor_config.temporal_window == 0
+        { model.total_receptive_field() } else { predictor_config.temporal_window };
 
         let decoder = CtcDecoderConfig::new()
             .with_search_type(predictor_config.search_type)
@@ -147,11 +177,11 @@ impl<B: Backend> InferenceSession<B> {
         let batcher = VsrmBatcher::<B>::new(device.clone(), Some(norm_stats));
 
         println!("=== Inference session loaded ===");
-        println!("  Model:           {}",          predictor_config.model_id);
-        println!("  Receptive field: {} frames",   model.total_receptive_field());
-        println!("  Window size:     {} frames",   resolved_temporal_window);
-        println!("  Window stride:   {} frames",   predictor_config.temporal_stride);
-        println!("  Decoder:         {:?}",        predictor_config.search_type);
+        println!("  Model:           {}",        predictor_config.model_id);
+        println!("  Receptive field: {} frames", model.total_receptive_field());
+        println!("  Window size:     {} frames", resolved_temporal_window);
+        println!("  Window stride:   {} frames", predictor_config.temporal_stride);
+        println!("  Decoder:         {:?}",      predictor_config.search_type);
         println!("================================\n");
 
         Ok(Self {
@@ -172,7 +202,7 @@ impl<B: Backend> InferenceSession<B> {
     /// - `frames`: Contiguous grayscale mouth crop frames.
     ///
     /// ### Returns:
-    /// The decoded prediction string.
+    /// The decoded prediction string, or an Error String.
     pub fn predict_frames(&self, frames: FramesBuffer) -> Result<String, ESS> {
         let (h, w) = (frames.height, frames.width);
         let t = frames.data.len() / (h * w);
@@ -228,9 +258,7 @@ impl SlidingWindow {
     }
 
     /// Returns `true` when the window has accumulated enough frames for prediction.
-    pub fn is_full(&self) -> bool {
-        self.frames.len() >= self.capacity
-    }
+    pub fn is_full(&self) -> bool { self.frames.len() >= self.capacity }
 
     /// Flattens the current window contents into a contiguous `FramesBuffer`
     /// suitable for `InferenceSession::predict_frames`.
@@ -269,8 +297,11 @@ impl SlidingWindow {
 /// - `session`: Pre-built inference session (model, decoder, batcher, vocab).
 /// - `context`: Filesystem context (used for tracker cascade paths).
 /// - `predictor_config`: Inference knobs (frame_dims, temporal_window, search_type).
-/// - `input`: Video file path for file mode; `None` for live webcam mode.
-/// - `camera`: Camera device index (when live).
+/// - `input`: Bundled video-transcript dir path for static file mode; `None` for live webcam mode.
+/// - `camera`: OpenCV camera device index (used only when `input` is `None`; typically `0` for the default webcam).
+/// 
+/// ### Returns:
+/// `Ok(())` on clean exit, or an Error String if file IO or tracking fails.
 pub fn infer<B: Backend>(
     session: InferenceSession<B>,
     context: &Context,
@@ -284,13 +315,254 @@ pub fn infer<B: Backend>(
         predictor_config.frame_dims,
     ));
 
-    if let Some(video_path) = input {
+    if let Some(bundle_path) = input {
         // ----------------- mode (A): static video inference ----------------
-        infer_file(video_path, session, &tracker_config)?;
+        infer_file(bundle_path, session, context, &tracker_config)?;
     } else {
         // ------------------ mode (B): live camera inference ----------------
         infer_live(camera, session, &tracker_config, predictor_config)?;
     }
+
+    Ok(())
+}
+
+
+
+/// Runs prediction on a video file by tracking and cropping each frame,
+/// then delegating to `predict_frames`.
+///
+/// ### Params:
+/// - `input_path`: Path to the bundled video-transcript dir.
+/// - `session`: Initialized session engine holding inference-related components.
+/// - `context`: Filesystem context.
+/// - `tracker_config`: Configuration for the tracker backend to use.
+/// 
+/// ### Returns:
+/// `Ok(())` on clean exit, or an Error String if file IO or tracking fails.
+fn infer_file<B: Backend>(
+    input_path: &Path,
+    session: InferenceSession<B>,
+    context: &Context,
+    tracker_config: &TrackerConfig,
+) -> Result<(), ESS> {
+    let mut tracker = tracker_config.init();
+    let (video_path, transcript_path) = resolve_inference_input(input_path)?;
+
+    let frames = load_video(&video_path, tracker.as_mut())?;
+    let transcript = load_transcript(&transcript_path)?;
+    let prediction = session.predict_frames(frames)?;
+
+    let bundle_id = input_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .expect("failed to obtain bundle dir");
+
+    let output_path = context.outputs_path.join(bundle_id);
+    let output_txt_path = output_path.join(format!("{}.txt", bundle_id));
+    let output_viz_path = output_path.join(format!("{}.mp4", bundle_id));
+    fs::create_dir_all(&output_path)?;
+
+    let txt_contents = format!("{}\n{}", prediction, transcript);
+    fs::write(&output_txt_path, txt_contents.as_bytes())?;
+    annotate_video(&video_path, &output_viz_path, &prediction, tracker_config)?;
+
+    println!("Prediction: {}", prediction);
+    println!("Ground Truth: {}", transcript);
+    println!("\nWrote {:?} and {:?}\n", output_txt_path, output_viz_path);
+
+    Ok(())
+}
+
+
+
+/// Runs live webcam inference with a dedicated inference worker thread.
+///
+/// Coordinates a producer-consumer pipeline where the main thread handles
+/// high-frequency UI tasks (capture, tracking, visualization) and a
+/// background worker handles expensive model forward passes.
+///
+/// ### Params:
+/// - `session`: Initialized session engine holding inference-related components.
+/// - `tracker_config`: Configuration for the face/mouth tracking backend.
+/// - `predictor_config`: User-defined inference knobs (stride, dims, etc).
+/// - `camera`: The hardware index of the camera to open.
+///
+/// ### Returns:
+/// `Ok(())` on clean exit (ESC pressed), or an Error String if hardware/tracking fails.
+fn infer_live<B>(
+    camera: i32,
+    session: InferenceSession<B>,
+    tracker_config: &TrackerConfig,
+    predictor_config: &VsrmPredictorConfig,
+) -> Result<(), ESS>
+where
+    B: Backend + Send,
+    B::Device: Send,
+{
+    // initialize CV tracker, camera capture, annotator + HighGUI window
+    let mut tracker = tracker_config.init();
+    let mut cap = open_camera(camera)?;
+    let annotator = FrameAnnotator;
+    let live_window = LiveWindow::new("LRM Live Inference")?;
+
+    // create sliding window using session's resolved receptive field
+    let (h, w) = predictor_config.frame_dims;
+    let t = if predictor_config.temporal_window == 0
+    { session.model.total_receptive_field() } else { predictor_config.temporal_window };
+
+    let mut window = SlidingWindow::new(t, h, w);
+
+    // req: main (UI) --> worker (infer) (bounded 1 to prevent latency if model falls behind)
+    // res: worker (infer) --> main (UI) (bounded 1 as we only care about most recent prediction)
+    let (req_tx, req_rx) = bounded::<InferenceRequest>(1);
+    let (res_tx, res_rx) = bounded::<InferenceResponse>(1);
+
+    // atomic flag to signal worker to stop if UI loop breaks (such as from ESC press)
+    let shutdown_main = Arc::new(AtomicBool::new(false));
+    let shutdown_worker = shutdown_main.clone();
+
+    // spawn worker thread
+    let join_handle = thread::spawn(move || {
+        inference_worker(session, req_rx, res_tx, shutdown_worker);
+    });
+
+    println!("Live inference started, press ESC to quit\n");
+
+    // main UI loop
+    println!("Predictions:");
+    let mut last_prediction = String::new();
+    let result = loop {
+        // grab frame from camera
+        let frame = match load_frame(&mut cap)? {
+            Some(f) => f,
+            None => break Ok(()),
+        };
+
+        // detect face/mouth, overlay on display only frame clone
+        let mut display = frame.clone();
+        let result = tracker.process_frame(&frame)?;
+        annotator.draw_tracker_info(&mut display, &result.metadata);
+
+        // push current crop into sliding window buffer
+        window.push(&result.crop);
+        if window.is_full() {
+            // if buffer ready, try to hand off to worker (infer) thread
+            // if worker busy, send fails and window buffer dropped
+            let buffer = window.to_buffer();
+            let _ = req_tx.try_send(buffer);
+            window.shift(predictor_config.temporal_stride);
+        }
+
+        // check if worker (infer) thread has finished a prediction
+        if let Ok(pred) = res_rx.try_recv() {
+            last_prediction = pred.clone();
+            if !last_prediction.is_empty() { println!(">> {}", last_prediction); }
+        }
+
+        annotator.draw_prediction(&mut display, &last_prediction);
+        if !live_window.show(&display)? { break Ok(()); }
+    };
+
+    // signal exit to worker (infer) thread and drop sender to close channel
+    // wait for worker to finish its last pass and shut down
+    shutdown_main.store(true, Ordering::Relaxed);
+    drop(req_tx);
+    join_handle
+        .join()
+        .map_err(|_| io_err("inference worker thread panicked", ErrorKind::Other))?;
+
+    println!("\nLive inference ended\n");
+
+    result
+}
+
+
+
+/// Re-encodes a source video with tracker overlays and the decoded prediction caption.
+///
+/// Single-pass decode: for each frame, runs same lip tracker as inference, draws
+/// [`VizMetadata`] (face/mouth boxes, etc.) and prediction string with [`FrameAnnotator`],
+/// converts grayscale frames to BGR, and writes to `output_path` using `VideoWriter` (H.264/MPEG-4
+/// fourcc `mp4v`, FPS from the container or 25.0 when missing).
+///
+/// Does **not** run VSRM; intended as a visualization pass after `predict_frames`.
+///
+/// ### Params:
+/// - `video_path`: Path to the input video file (e.g. bundle-resolved `<stem>.mp4`).
+/// - `output_path`: Destination path for the annotated video (e.g. `…/<stem>.mp4` under `outputs/`).
+/// - `prediction`: Final decoded text string to draw on every frame.
+/// - `tracker_config`: Configuration for the tracker backend to use.
+///
+/// ### Returns:
+/// `Ok(())` when at least one frame was written; error if capture fails, no frames are decoded, or writing fails.
+pub fn annotate_video(
+    video_path: &Path,
+    output_path: &Path,
+    prediction: &str,
+    tracker_config: &TrackerConfig,
+) -> Result<(), ESS> {
+    // initialize file capture
+    let path_str = video_path
+        .to_str()
+        .ok_or_else(|| io_err("invalid video path", ErrorKind::InvalidInput))?;
+    let mut cap = VideoCapture::from_file(path_str, CAP_ANY)
+        .map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
+
+    // obtain FPS and bound it
+    let fps = cap.get(CAP_PROP_FPS)
+        .map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
+    let fps = if fps.is_finite() && fps > 1e-3 { fps } else { 25.0 };
+
+    // initialize annotator and CV tracker
+    let annotator = FrameAnnotator;
+    let mut tracker = tracker_config.init();
+    tracker.reset_state();
+
+    let mut writer: Option<VideoWriter> = None;
+    let mut bgr = Mat::default();
+
+    while let Some(frame) = load_frame(&mut cap)? {
+        let result = tracker.process_frame(&frame)?;
+        let mut display = frame.clone();
+        annotator.draw_tracker_info(&mut display, &result.metadata);
+        annotator.draw_prediction(&mut display, prediction);
+
+        // if writer none (meaning first frame):
+        // - obtain native frame dims
+        // - establish MP4 FOURCC code
+        // - create `VideoWriter`
+        if writer.is_none() {
+            let (h, w) = (display.rows(), display.cols());
+            let size = Size::new(w, h);
+
+            let fourcc = VideoWriter::fourcc('m', 'p', '4', 'v')
+                .map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
+            let out_str = output_path.to_str()
+                .ok_or_else(|| io_err("bad output path", ErrorKind::InvalidInput))?;
+            let wtr = VideoWriter::new(out_str, fourcc, fps, size, true)
+                .map_err(|e| io_err(format!("VideoWriter::new: {}", e), ErrorKind::Other))?;
+
+            writer = Some(wtr);
+        }
+
+        // convert frame from grayscale to BGR
+        imgproc::cvt_color(
+            &display,
+            &mut bgr,
+            imgproc::COLOR_GRAY2BGR,
+            0,
+            AlgorithmHint::ALGO_HINT_DEFAULT,
+        ).map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
+
+        // write BGR frame to output file
+        writer
+            .as_mut()
+            .expect("writer set on first frame")
+            .write(&bgr)
+            .map_err(|e| io_err(e.to_string(), ErrorKind::Other))?;
+    }
+
+    if writer.is_none() { return Err(io_err("no frames decoded; cannot write video", ErrorKind::InvalidData)); }
 
     Ok(())
 }
@@ -329,133 +601,4 @@ fn inference_worker<B>(
             Err(RecvTimeoutError::Disconnected) => break,
         }
     }
-}
-
-
-
-/// Runs prediction on a video file by tracking and cropping each frame,
-/// then delegating to `predict_frames`.
-///
-/// ### Params:
-/// - `session`: Initialized session engine holding inference-related components.
-/// - `video_path`: Path to the video file.
-/// - `tracker_config`: Configuration for the tracker backend to use.
-///
-/// ### Returns:
-/// The decoded prediction string.
-fn infer_file<B: Backend>(
-    video_path: &Path,
-    session: InferenceSession<B>,
-    tracker_config: &TrackerConfig,
-) -> Result<(), ESS> {
-    let mut tracker = tracker_config.init();
-    let frames = load_video(video_path, tracker.as_mut())?;
-    let prediction = session.predict_frames(frames)?;
-
-    println!("Prediction: {}\n", prediction);
-
-    Ok(())
-}
-
-
-
-/// Runs live webcam inference with a dedicated inference worker thread.
-/// 
-/// Coordinates a producer-consumer pipeline where the main thread handles 
-/// high-frequency UI tasks (capture, tracking, visualization) and a 
-/// background worker handles expensive model forward passes.
-///
-/// ### Params:
-/// - `session`: Initialized session engine holding inference-related components.
-/// - `tracker_config`: Configuration for the face/mouth tracking backend.
-/// - `predictor_config`: User-defined inference knobs (stride, dims, etc).
-/// - `camera`: The hardware index of the camera to open.
-///
-/// ### Returns:
-/// `Ok(())` on clean exit (ESC pressed), or an Error String if hardware/tracking fails.
-fn infer_live<B>(
-    camera: i32,
-    session: InferenceSession<B>,
-    tracker_config: &TrackerConfig,
-    predictor_config: &VsrmPredictorConfig,
-) -> Result<(), ESS>
-where
-    B: Backend + Send,
-    B::Device: Send,
-{
-    // initialize CV tracker, camera capture, and OpenCV high-gui renderer
-    let mut tracker = tracker_config.init();
-    let mut cap = open_camera(camera)?;
-    let renderer = OverlayRenderer::new("LRM Live Inference")?;
-
-    // create sliding window using session's resolved receptive field
-    let (h, w) = predictor_config.frame_dims;
-    let t = if predictor_config.temporal_window == 0 { session.model.total_receptive_field() }
-    else { predictor_config.temporal_window };
-
-    let mut window = SlidingWindow::new(t, h, w);
-
-    // req: main (UI) --> worker (infer) (bounded 1 to prevent latency if model falls behind)
-    // res: worker (infer) --> main (UI) (bounded 1 as we only care about most recent prediction)
-    let (req_tx, req_rx) = bounded::<InferenceRequest>(1);
-    let (res_tx, res_rx) = bounded::<InferenceResponse>(1);
-
-    // atomic flag to signal worker to stop if UI loop breaks (such as from ESC press)
-    let shutdown_main = Arc::new(AtomicBool::new(false));
-    let shutdown_worker = shutdown_main.clone();
-
-    // spawn worker thread
-    let join_handle = thread::spawn(move || {
-        inference_worker(session, req_rx, res_tx, shutdown_worker);
-    });
-
-    println!("Live inference started, press ESC to quit\n");
-
-    // main UI loop
-    println!("Predictions:");
-    let mut last_prediction = String::new();
-    let result = loop {
-        // grab frame from camera
-        let frame = match load_frame(&mut cap)? {
-            Some(f) => f,
-            None => break Ok(()),
-        };
-
-        // detect face/mouth, overlay on display only frame clone
-        let mut display = frame.clone();
-        let result = tracker.process_frame(&frame)?;
-        renderer.draw_tracker_info(&mut display, &result.metadata);
-
-        // push current crop into sliding window buffer
-        window.push(&result.crop);
-        if window.is_full() {
-            // if buffer ready, try to hand off to worker (infer) thread
-            // if worker busy, send fails and window buffer dropped
-            let buffer = window.to_buffer();
-            let _ = req_tx.try_send(buffer);
-            window.shift(predictor_config.temporal_stride);
-        }
-
-        // check if worker (infer) thread has finished a prediction
-        if let Ok(pred) = res_rx.try_recv() {
-            last_prediction = pred.clone();
-            if !last_prediction.is_empty()
-            { println!(">> {}", last_prediction); }
-        }
-
-        renderer.draw_prediction(&mut display, &last_prediction);
-        if !renderer.show(&display)? { break Ok(()); }
-    };
-
-    // signal exit to worker (infer) thread and drop sender to close channel
-    // wait for worker to finish its last pass and shut down
-    shutdown_main.store(true, Ordering::Relaxed);
-    drop(req_tx);
-    join_handle
-        .join()
-        .map_err(|_| io_err("inference worker thread panicked", ErrorKind::Other))?;
-
-    println!("\nLive inference ended\n");
-
-    result
 }

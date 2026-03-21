@@ -1,7 +1,7 @@
 //! Live inference visualization overlay.
 //!
-//! Draws tracker bounding boxes, landmark points, and prediction text
-//! onto display frames for real-time visual feedback during webcam inference.
+//! - [`FrameAnnotator`]: stateless drawing of ML metadata on any `Mat` (live window, file export, etc.)
+//! - [`LiveWindow`]: OpenCV HighGUI window for displaying frames and handling user input (e.g. ESC)
 
 
 
@@ -18,30 +18,21 @@ use opencv::{
 
 
 
-/// Renders visualization overlays onto display frames for live inference.
+/// Stateless overlay drawing (backend-agnostic [`VizMetadata`] + prediction text).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FrameAnnotator;
+
+
+
+/// Manages the OpenCV HighGUI display window for live inference.
 ///
-/// Draws tracker metadata (bounding boxes, landmarks) and prediction text
-/// onto cloned display frames. Uses `opencv::highgui` for window management.
-pub struct OverlayRenderer {
-    window_name: String,
-}
+/// Handles `named_window`, `imshow`, `wait_key`, and destroys the window on drop.
+pub struct LiveWindow { window_name: String }
 
 
 
-impl OverlayRenderer {
-    /// Creates a new overlay renderer and initializes the display window.
-    ///
-    /// ### Params:
-    /// - `window_name`: Title for the OpenCV display window.
-    pub fn new(window_name: &str) -> Result<Self, ESS> {
-        highgui::named_window(window_name, highgui::WINDOW_AUTOSIZE)
-            .map_err(|e| io_err(e.to_string(), std::io::ErrorKind::Other))?;
-        Ok(Self {
-            window_name: window_name.to_string(),
-        })
-    }
-
-    /// Draws tracker bounding boxes and stabilized center onto a display frame.
+impl FrameAnnotator {
+    /// Draws tracker bounding boxes and stabilized center onto a frame.
     ///
     /// Renders whatever metadata the tracker backend populated:
     /// - Face bounding box (green)
@@ -50,7 +41,7 @@ impl OverlayRenderer {
     /// - Stabilized center (red dot)
     ///
     /// ### Params:
-    /// - `frame`: The display frame to draw on (mutated in place).
+    /// - `frame`: The image to draw on (mutated in place).
     /// - `metadata`: Visualization metadata from the tracker backend.
     pub fn draw_tracker_info(&self, frame: &mut Mat, metadata: &VizMetadata) {
         let green = Scalar::new(0.0, 255.0, 0.0, 0.0);
@@ -75,15 +66,15 @@ impl OverlayRenderer {
 
         if let Some(center) = metadata.stabilized_center {
             let pt = Point::new(center.x as i32, center.y as i32);
-            let _ = imgproc::circle(frame, pt, 4, red, -1, imgproc::LINE_8, 0);
+            let _ = imgproc::circle(frame, pt, 2, red, -1, imgproc::LINE_8, 0);
         }
     }
 
-    /// Draws the current prediction text onto the bottom of the display frame.
+    /// Draws prediction text along the bottom of the frame.
     ///
     /// ### Params:
-    /// - `frame`: The display frame to draw on (mutated in place).
-    /// - `text`: The predicted text string to display.
+    /// - `frame`: The image to draw on (mutated in place).
+    /// - `text`: The predicted text string to display; if empty, does nothing.
     pub fn draw_prediction(&self, frame: &mut Mat, text: &str) {
         if text.is_empty() { return; }
 
@@ -94,14 +85,31 @@ impl OverlayRenderer {
         let origin = Point::new(10, rows - 20);
 
         let font = imgproc::FONT_HERSHEY_SIMPLEX;
-        let _ = imgproc::put_text(frame, text, origin, font, 0.8, black, 3, imgproc::LINE_8, false);
-        let _ = imgproc::put_text(frame, text, origin, font, 0.8, white, 2, imgproc::LINE_8, false);
+        let _ = imgproc::put_text(frame, text, origin, font, 0.8, black, 1, imgproc::LINE_8, false);
+        let _ = imgproc::put_text(frame, text, origin, font, 0.8, white, 1, imgproc::LINE_8, false);
+    }
+}
+
+
+
+impl LiveWindow {
+    /// Creates a new display window.
+    ///
+    /// ### Params:
+    /// - `window_name`: Title for the OpenCV display window.
+    ///
+    /// ### Returns:
+    /// An initialized [`LiveWindow`], or an error if the window could not be created.
+    pub fn new(window_name: &str) -> Result<Self, ESS> {
+        highgui::named_window(window_name, highgui::WINDOW_AUTOSIZE)
+            .map_err(|e| io_err(e.to_string(), std::io::ErrorKind::Other))?;
+        Ok(Self { window_name: window_name.to_string() })
     }
 
     /// Displays the frame in the window and waits briefly for key input.
     ///
     /// ### Params:
-    /// - `frame`: The frame to display.
+    /// - `frame`: The frame to display (already annotated if desired).
     ///
     /// ### Returns:
     /// `false` if ESC was pressed or the window was closed, signaling the
@@ -117,8 +125,6 @@ impl OverlayRenderer {
 
 
 
-impl Drop for OverlayRenderer {
-    fn drop(&mut self) {
-        let _ = highgui::destroy_window(&self.window_name);
-    }
+impl Drop for LiveWindow {
+    fn drop(&mut self) { let _ = highgui::destroy_window(&self.window_name); }
 }

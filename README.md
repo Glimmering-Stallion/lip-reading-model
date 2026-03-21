@@ -5,31 +5,33 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Accomplishments to Date
 
-### Data Ingestion (`pipeline/io.rs` and `pipeline/adapters/grid.rs`)
+### Data Ingestion (`pipeline/io.rs` and `pipeline/adapters/grid/grid_dataset.rs`)
 
-- For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") data organized into "frames" and "alignments" directories under a self created "data/grid-lr-corpus").
+- For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") data organized into sample bundles under `data/grid-lr-corpus/<speaker>/<sample_id>/`). Each sample folder holds video (`<sample_id>.mp4` preferred after preprocess, else `.mpg`) and transcript (`<sample_id>.txt` preferred after preprocess, else `.align`).
 - In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
 - Built dataset utilities that:
   - Infer file name stems automatically.
   - Pair videos with alignment annotations.
   - Download and extract compressed datasets when missing.
-- Implemented a video pipeline using OpenCV in `grid.rs` that:
+- Implemented a video pipeline using OpenCV in `grid_dataset.rs` that:
   - Decodes video files frame by frame.
   - Converts frames to grayscale.
   - Uses pre-trained Haar Cascade detectors for face and mouth localization (see [Attributions](#attributions)).
   - Crops a dynamic mouth ROI per frame.
   - Flattens pixel data into contiguous `Vec<u8>` tensors.
 
-### Data Standardization (`adapters/`)
+### Data Standardization & Normalization (`adapters/`)
 
-- Implemented dataset adapter `adapters/` that:
-  - Contains source-specific logic to map raw datasets (GRID, LRW, etc.) into a standardized `VsrmItem` format.
-  - Relies on the more abstract `DatasetSplit` utility in `pipeline/dataset.rs` for train/val/test partitioning.
+- Implemented dataset adapters that contain source-specific logic to:
+  - Transcode src video files into `.mp4`, and write `.txt` from src transcript files, then remove redundant src video/transcript files when safe.
+  - Map raw datasets (GRID, LRW, etc.) into a standardized `VsrmItem` format.
+  - Rely on the more abstract `DatasetSplit` utility in `pipeline/dataset.rs` for train/val/test partitioning.
+- The adapter modules are to reshape a dataset into a dir containing sharded video-transcript bundles, where video files are `.mp4` and transcript files are `.txt` (GRID adapter modules enforces this currently, but other dataset sources are intended to follow the same form).
 - In future, will consider FPS standardization to a target FPS (25) as well (frame dropping preferred over interpolation due to simplicity and avoidance of ghost data).
 
 ### Data Batching (`pipeline/batcher.rs`)
 
-- Developed a custom `VsrmBatcher` that standardizes and pads data:
+- Developed a custom `VsrmBatcher` that takes a collection of standardized `VsrmItem`  standardizes and pads data.
 - Standardization handled by:
   - Scaling pixel values to [0, 1].
   - Centering pixel values to zero mean and unit variance.
@@ -42,7 +44,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 ### Data Partitioning (`pipeline/dataset.rs`)
 
 - Dataset splitting policy is delegated to a generic and source-agnostic `DatasetSplit` wrapper, to allow any dataset (GRID, LRW, etc.) to be partitioned through index-mapping without modifying the more specialized adapter logic.
-- Applies a random but deterministic shuffle to the index-mapping. 
+- Applies a random but deterministic shuffle to the index-mapping.
 - Then partitions dataset instances into train/val/test splits.
 
 ### Alignment & Vocabulary Handling (`vocab.rs`)
@@ -148,10 +150,11 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - **Loss:** Custom CTC loss implemented in log-space (forward/backward DP) with vectorized batch support for variable-length sequences.
 - **Decoding:** Greedy and prefix beam-search CTC decoding, optionally rescored with the integrated char-level N-gram LM (supports alpha/beta).
 - **Training:** Burn `Learner`-based training/validation loop with checkpointing, metrics, and LR scheduling. Uses `create_dataloaders` helper to handle train/val splits, batching, and dataloading for source-specific datasets.
-- **Inference:** Using an `InferenceSession` engine, which supports static file inference with `infer_file` and async live webcam inference with `infer_live` (main thread captures/tracks/overlays; worker thread runs model forward passes).
+- **Inference:** Using an `InferenceSession` engine, which supports static file inference (as a bundled video-transcript input) with `infer_file` and async live webcam inference with `infer_live` (main thread captures/tracks/overlays; worker thread runs model forward passes).
 - **Verification:** Unit tests for CTC loss/decoding, tracker ROI behavior, and sanity checks for model input/output dataflow; training convergence validated via overfit tests.
 - **Mouth tracking:** Haar-cascade face/mouth detection with stabilized mouth ROI per frame.
 - **CLI:** `build-lm`, `preprocess`, `train` (new/resume), and `infer` (static file / live cam input types) subcommands are available.
+- **Inference Viz Overlay:** Inference pipeline's visualization overlay for both static file and live camera inference modes is implemented.
 
 ## Pending / Future Work
 
@@ -159,9 +162,9 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - **Word-Level N-gram vs. Char Level Decoder Incongruity:** Current decoding uses character-level LM scoring; evaluate unifying with a word-level LM/tokenization or retraining the LM to match the decoder’s output unit.
 - **Grad-CAM For Overlay Visualization:** During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
 - **Add Landmark-Based Tracker:** Improve ROI stability and accuracy, plus rotational invariance benefits by adding a landmark/pose-based tracker backend (e.g. MediaPipe) as a separate tracker option to the existing layered Haar cascades tracker.
-- **Add Viz Overlay And Text Output For File-Mode Inference:** File-mode inference should be able to produce an overlay video and a `.txt` prediction/ground-truth transcripts file bundled in a dir when the user asks for it (e.g. via `--output-dir`).
 - **Optimize CTC Loss:** Polish by reducing unnecessary tensor cloning/allocations. Keep a prev/curr buffer and reuse them rather than clone three times for the stay/adv1/adv2 tensors. Don't clone input lengths tensor for time mask. Don't clone log probs just to slice one timestep.
 - **Optimize CTC Decoder Beam Prefix Search:** Incorporate a trie-based prefix building mechanism over the current sequence-probability Hashmaps design.
+- **Talking vs. Non-Talking States:** Live inference still runs the lip-reading model whenever the camera stream is active. Add a **gating or state layer** (audio-free): e.g. mouth-ROI motion / frame-difference energy, tracker confidence (face/mouth found), or optional logits-based confidence, to classify **active visual speech** vs **idle/silent** and suppress, clear, or hold the displayed prediction accordingly.
 
 ## CLI Usage
 
@@ -169,7 +172,7 @@ From the `LRM Rust` directory (project root):
 
 ```
 # Build N-gram LM (trains if missing, else loads and evaluates perplexity)
-cargo run -- build-lm --model [lm.bin] --corpus [path/to/corpus.txt] --n [N-gram order]
+cargo run -- build-lm --model [my_lm.bin] --corpus [path/to/corpus.txt] --n [n_gram_order]
 
 # Preprocess a specific dataset for the VSRM:
 cargo run -- preprocess --dataset [dataset_src]
@@ -192,17 +195,14 @@ cargo run -- train --model [...] --subset [fraction]
 # Keep all checkpoints (default: keep most recent only; enables resume from earlier epochs):
 cargo run -- train --model [...] --keep-all-checkpoints [on|off]
 
-# Inference on a video file with default model ID "vsrm_{dataset_src}" (predictions printed to stdout):
-cargo run -- infer --dataset [dataset_src] --input [path/to/video.mpg]
+# Inference on a bundled video-transcript directory (predictions printed to stdout):
+cargo run -- infer --model [my_vsrm] --input [path/to/dir_id]
 
-# Inference with specific model ID:
-cargo run -- infer --model [my_model] --input [path/to/video.mpg]
+# Live inference from default webcam (device index 0):
+cargo run -- infer --model [my_vsrm] --live
 
-# Live inference from default webcam:
-cargo run -- infer --model [my_model] --live
-
-# Live inference from specified camera:
-cargo run -- infer --model [my_model] --live --camera [my_camera]
+# Live inference from a specific camera (OpenCV device index):
+cargo run -- infer --model [my_vsrm] --live [my_camera]
 ```
 
 ## Attributions
@@ -218,16 +218,17 @@ These cascade files are obtained from [opencv-processing/cascade-files](https://
 
 **Research use:** If you use these detectors or related ideas, please cite one of the following papers:
 
-- Castrillón Santana, M., Déniz Suárez, O., Hernández Tejera, M., & Guerra Artal, C. (2007). **ENCARA2: Real-time Detection of Multiple Faces at Different Resolutions in Video Streams.** *Journal of Visual Communication and Image Representation*, 18(2), 130–140.
-- Castrillón Santana, M., Déniz Suárez, O., Hernández Sosa, D., & Lorenzo Navarro, J. (2007). **Using Incremental Principal Component Analysis to Learn a Gender Classifier Automatically.** *1st Spanish Workshop on Biometrics*, Girona, Spain.
-- Castrillón-Santana, M., Déniz-Suárez, O., Antón-Canalís, L., & Lorenzo-Navarro, J. (2008). **Face and Facial Feature Detection Evaluation.** *Third International Conference on Computer Vision Theory and Applications (VISAPP)*.
+- Castrillón Santana, M., Déniz Suárez, O., Hernández Tejera, M., & Guerra Artal, C. (2007). **ENCARA2: Real-time Detection of Multiple Faces at Different Resolutions in Video Streams.** _Journal of Visual Communication and Image Representation_, 18(2), 130–140.
+- Castrillón Santana, M., Déniz Suárez, O., Hernández Sosa, D., & Lorenzo Navarro, J. (2007). **Using Incremental Principal Component Analysis to Learn a Gender Classifier Automatically.** _1st Spanish Workshop on Biometrics_, Girona, Spain.
+- Castrillón-Santana, M., Déniz-Suárez, O., Antón-Canalís, L., & Lorenzo-Navarro, J. (2008). **Face and Facial Feature Detection Evaluation.** _Third International Conference on Computer Vision Theory and Applications (VISAPP)_.
 
 ## References / Further Reading
 
 Resources that informed the implementation of concepts in this project:
+
 - **CTC loss:** [Sequence Modeling with CTC](https://distill.pub/2017/ctc/) (Hannun, 2017, Distill)
 - **CTC (original):** Graves et al. (2006). Connectionist Temporal Classification. ICML. [PDF](https://www.cs.toronto.edu/~graves/icml_2006.pdf)
-- **N-gram language models, smoothing (Witten-Bell, etc.):** Jurafsky, D. & Martin, J. H. *Speech and Language Processing* (3rd ed.), Ch. 3. [PDF](https://web.stanford.edu/~jurafsky/slp3/3.pdf)
+- **N-gram language models, smoothing (Witten-Bell, etc.):** Jurafsky, D. & Martin, J. H. _Speech and Language Processing_ (3rd ed.), Ch. 3. [PDF](https://web.stanford.edu/~jurafsky/slp3/3.pdf)
 - **LipNet:** Assael et al. (2016). End-to-End Sentence-level Lipreading. [arXiv](https://arxiv.org/abs/1611.01599)
 - **Temporal Convolutional Networks (original):** Lea et al. (2016). Temporal Convolutional Networks for Action Segmentation and Detection. [arXiv](https://arxiv.org/abs/1611.05267)
 - **TCNs for sequence modeling (popularized):** Bai et al. (2018). An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling. [arXiv](https://arxiv.org/abs/1803.01271)
@@ -253,14 +254,14 @@ Lip Reading Model
 │  ├─ Cargo.toml
 │  ├─ data
 │  │  ├─ grid-lr-corpus
-│  │  │  ├─ alignments
-│  │  │  │  ├─ s1
-│  │  │  │  │  ⋮
-│  │  │  │  └─ s34
-│  │  │  └─ frames
-│  │  │     ├─ s1
-│  │  │     │  ⋮
-│  │  │     └─ s34
+│  │  │  ├─ s1
+│  │  │  │  └─ <utterance_id>
+│  │  │  │  ⋮  ├─ <utterance_id>.mpg
+│  │  │  │  ⋮  └─ <utterance_id>.align
+│  │  │  └─ s34
+│  │  │     └─ <utterance_id>
+│  │  │        ├─ <utterance_id>.mpg
+│  │  │        └─ <utterance_id>.align
 │  │  └─ librispeech-lm-norm
 │  │     └─ librispeech-lm-norm.txt
 │  ├─ models
@@ -284,7 +285,10 @@ Lip Reading Model
 │  │  ├─ main.rs
 │  │  ├─ pipeline
 │  │  │  ├─ adapters
-│  │  │  │  ├─ grid.rs
+│  │  │  │  ├─ grid/
+│  │  │  │  │  ├─ grid_dataset.rs
+│  │  │  │  │  ├─ grid_adapter.rs
+│  │  │  │  │  └─ mod.rs
 │  │  │  │  └─ mod.rs
 │  │  │  ├─ batcher.rs
 │  │  │  ├─ dataset.rs

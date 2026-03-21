@@ -16,7 +16,11 @@ use serde::{
 };
 use crate::prelude::ESS;
 use std::{
-    fs::{self, File},
+    fs::{
+        self,
+        File,
+        metadata,
+    },
     io::{
         self,
         BufRead,
@@ -26,14 +30,20 @@ use std::{
     },
     path::Path,
     sync::{
-        atomic::{
-            AtomicU64,
-            Ordering,
-        },
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
 };
 use zip::ZipArchive;
+
+
+
+/// Helper to check if a given path to a file is non-empty.
+pub fn file_nonempty(path: &Path) -> bool {
+    path.is_file() && metadata(path)
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+}
 
 
 
@@ -53,9 +63,9 @@ where
     P: AsRef<Path>,
 {
     let path = path.as_ref();
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
+    if let Some(parent) = path.parent()
+    { fs::create_dir_all(parent)?; }
+
     let mut file = File::create(path)?;
     let (h, w, t) = shape;
 

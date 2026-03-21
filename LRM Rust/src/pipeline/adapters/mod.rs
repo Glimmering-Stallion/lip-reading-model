@@ -1,6 +1,6 @@
 // src/preprocessors/mod.rs
 
-//! data preprocessing and standardization components
+//! data preprocessing and standardization components (turns datasets into video-transcript form)
 //!
 //! - `grid`: preprocessor and adapter for GRID audio-visual sentence corpus
 

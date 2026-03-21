@@ -36,6 +36,7 @@ pub struct TrackerResult {
 ///
 /// Each tracker backend populates the fields it can produce;
 /// the visualization module draws whatever is `Some`.
+#[derive(Clone)]
 pub struct VizMetadata {
     pub face_rect: Option<Rect>,
     pub mouth_rect: Option<Rect>,

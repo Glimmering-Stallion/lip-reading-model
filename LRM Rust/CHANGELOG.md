@@ -48,7 +48,7 @@ This document records all modifications to the project for future reference and 
 
 ## 3. Global Video Pixel Normalization
 
-**Grid dataset** ([`src/pipeline/adapters/grid.rs`](src/pipeline/adapters/grid.rs)):
+**Grid dataset** ([`src/pipeline/adapters/grid/grid.rs`](src/pipeline/adapters/grid/grid.rs)):
 
 - `calc_global_stats()`: computes mean and std dev across all video frame pixels in the dataset
 - Stats cached to `grid_stats.json` via JSON serialization (avoids ~4.5 hour recomputation)
@@ -87,7 +87,7 @@ This document records all modifications to the project for future reference and 
 - `SchedulerReduction::Prod`: multiplies outputs of both schedulers
 - Warmup prevents destructive early updates that can cause CTC collapse
 
-## 7. GRID Data Pipeline Robustness ([`src/pipeline/adapters/grid.rs`](src/pipeline/adapters/grid.rs))
+## 7. GRID Data Pipeline Robustness ([`src/pipeline/adapters/grid/grid.rs`](src/pipeline/adapters/grid/grid.rs))
 
 **Problem:** Burn's `BatchDataloaderIterator` treats any `None` from `dataset.get()` as end-of-dataset, causing epochs to stop after the first failed item (~37 batches instead of ~2800).
 
@@ -115,7 +115,7 @@ cargo run -- build-lm --corpus data/librispeech-lm-norm/librispeech-lm-norm.txt 
 cargo run -- train --model vsrm_grid
 cargo run -- train --model vsrm_grid --resume
 cargo run -- train --model vsrm_grid --resume 5
-cargo run -- infer --model vsrm_grid --input path/to/video.mpg --output pred.txt
+cargo run -- infer --model vsrm_grid --input path/to/bundled_dir
 ```
 
 ## 9. Train New / Resume Logic ([`src/training/learner.rs`](src/training/learner.rs))
@@ -178,7 +178,7 @@ cargo run -- infer --model vsrm_grid --input path/to/video.mpg --output pred.txt
   - Simplicity of implementation
   - Small channel noise issue countered with sufficiently large number of channels being passed in (using 512 as default)
 
-## 14. Word Separation in Targets ([`src/pipeline/adapters/grid.rs`](src/pipeline/adapters/grid.rs))
+## 14. Word Separation in Targets ([`src/pipeline/adapters/grid/grid.rs`](src/pipeline/adapters/grid/grid.rs))
 
 - `load_alignment()` now inserts `SPACE_ID` between consecutive words when building target sequences.
 - Enables meaningful WER metrics (targets and predictions split by whitespace).
@@ -217,8 +217,8 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 
 - **`InferenceSession`** ([`src/inference/predictor.rs`](src/inference/predictor.rs)): Loads trained VSRM checkpoint and frame batcher. Exposes `predict_file()` for single-video mode and `predict_frames()` for sliding-window inference. Takes pre-loaded configs; no filesystem access except checkpoint.
 - **`infer()` free function**: Mirrors `train()`; receives configs, builds session internally, runs file or live loop.
-- **`inference/loader.rs`**: `load_video` (video file + tracker → `FramesBuffer`), `load_frame`, `open_camera`. `pipeline/video.rs` deleted.
-- **`OverlayRenderer`** ([`src/inference/overlay.rs`](src/inference/overlay.rs)): Draws tracker metadata and prediction text on live frames.
+- **`inference/loader.rs`**: `load_video` (video file + tracker → `FramesBuffer`), `load_frame`, `open_camera`, `resolve_inference_video_path` (sample dir → `.mp4`). `pipeline/video.rs` deleted.
+- **`FrameAnnotator`** / **`LiveWindow`** ([`src/inference/overlay.rs`](src/inference/overlay.rs)): `FrameAnnotator` draws tracker metadata and prediction text on any `Mat`; `LiveWindow` owns the HighGUI display window and key handling for live inference.
 - **`SlidingWindow`**: Buffers frames for live inference; when full, flushes to `FramesBuffer` and runs CTC decode.
 - **`run_infer_vsrm`**: Loads configs from model dir (hard block on missing), builds `VsrmPredictorConfig` from `learner_config` (frame_dims, rf), delegates to `infer()`.
 
@@ -231,7 +231,9 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 
 **Infer CLI**
 
-- Requires `--model`; `--input` or `--live`; `--camera` for webcam mode.
+- Requires `--model`; exactly one of `--input` or `--live`.
+- `--input` may be a bare video file or a bundled video-transcript sample directory (`.../<speaker>/<sample_id>` → loads `<sample_id>.mpg` inside it).
+- `--live` accepts an optional camera device index (`--live` = default device `0`; `--live 1` = second camera). OpenCV uses `i32` device indices; the CLI parses a `usize` and rejects values that do not fit.
 
 **Preprocess**
 
@@ -251,8 +253,6 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **Batcher**: Supports inference (no transcripts): `max_l.max(1)` as placeholder; targets unused during inference.
 - **TrainBackend** / **InferBackend** type aliases in main.
 - **Error propagation**: `io_err` in utils; `ESS` type alias; resolvers return `Result`; `?` in runners.
-
-# Change Logs Since Last Git Commit
 
 ## 19. Async Live Inference Mode
 
@@ -287,6 +287,34 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - Added `embed_plist` as a macOS-only dependency and embedded the plist into the executable so command-line runs get the expected macOS camera behavior.
 - Goal: remove the `AVCaptureDeviceTypeExternal is deprecated for Continuity Cameras` warning when using OpenCV-backed camera capture.
 
+# Change Logs Since Last Git Commit
+
+## 24. New Filesystem Formatter for GRID Dataset
+
+- Added a GRID filesystem formatter that bundles `*.mpg` + `*.align` into `data/grid-lr-corpus/<speaker>/<sample_id>/<sample_id>.{mpg,align}` for consistent adapter loading.
+
+## 25. Inference Input Paths and Live CLI
+
+- `--input` for `infer` may be a **bundled video-transcript directory** (path ending at specific input `sample_id`); the binary resolves it to `<sample_id>.mp4` if present, else `<sample_id>.mpg`.
+- Removed `--camera`; optional OpenCV device index is now `infer --live [DEVICE_INDEX]` (same pattern as `train --resume [epoch]`). `--live` alone uses device `0`.
+
+**Note:** The static file-mode contract for `--input` was tightened later (see **§27**): the resolver now requires a bundle directory with both non-empty `<stem>.mp4` and `<stem>.txt`—not `.mpg`/`.align` fallback as in training loaders.
+
+## 26. Standardized Corpus Formats Established and Conversion Helpers Implemented for GRID
+
+- Established a new standardized dataset corpus format to adhere to, in the form of sharded video-transcript bundles (with videos as .mp4 files and transcripts as .txt files).
+- `grid_adapter`: `convert_to_standard_mp4` (ffmpeg H.264), `convert_to_standard_txt` (word line from `.align`), `normalize_grid_standard_formats`, `clean_corpus` (optional dry-run; drops `.mpg`/`.align` only when `.mp4`/`.txt` exist and are non-empty).
+- `preprocess` for GRID runs normalize + clean after bundle; **ffmpeg** must be on `PATH` when `.mpg` files need transcoding.
+- `GridDataset` / inference resolution: prefer `.mp4` and `.txt`, fall back to `.mpg` / `.align`.
+
+**Note:** That fallback applies to **dataset loading** and corpus layout; **`infer --input`** bundle rules are stricter and are summarized in **§27**.
+
+## 27. Static File Visualization Overlay
+
+- **Bundle-only file infer:** `infer --input` must be a bundled video_transcript **directory** whose name is the sample stem (`.../<stem>/`). [`resolve_inference_input`](LRM Rust/src/cli.rs) selects non-empty `<stem>.mp4` and `<stem>.txt` beside it.
+- **Post-predict artifacts:** After `predict_frames`, results are written under `outputs/<stem>/`: a text file (prediction and reference transcript) and an **annotated MP4** re-encoded from the source video with tracker overlays and caption text ([`annotate_video`](LRM Rust/src/inference/predictor.rs)—second pass, does not run the VSRM).
+- **Live mode unchanged:** Webcam path still uses `FrameAnnotator` + `LiveWindow` as before.
+
 ## Files Modified (Summary)
 
 | File                      | Changes                                                                                                        |
@@ -305,7 +333,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `main.rs`                 | CLI subcommands; infer wired; TrainBackend/InferBackend; Preprocess DatasetSource                              |
 | `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow                                         |
 | `inference/loader.rs`     | New: load_video, load_frame, open_camera                                                                       |
-| `inference/overlay.rs`    | New: OverlayRenderer                                                                                           |
+| `inference/overlay.rs`    | New: FrameAnnotator (draw), LiveWindow (HighGUI)                                                                |
 | `pipeline/video.rs`       | Deleted; logic in inference/loader.rs                                                                          |
 | `cli.rs`                  | Checkpoint/CLI resolution helpers; pure resolvers                                                              |
 | `utils.rs`                | levenshtein, io_err                                                                                            |

@@ -17,6 +17,14 @@ pub mod prelude {
 
     pub use crate::{
         context::Context,
+        cli::{
+            resolve_from_checkpoint,
+            resolve_keep_all_checkpoints,
+            resolve_active_subset,
+            resolve_dataset_source,
+            resolve_inference_input,
+            display_train_cli_help,
+        },
         utils::{
             io_err,
             log_sum_exp_2_scalar,
@@ -85,10 +93,10 @@ pub mod prelude {
                 infer,
             },
             loader::{
-                open_camera,
                 load_frame,
+                open_camera,
             },
-            overlay::OverlayRenderer,
+            overlay::{FrameAnnotator, LiveWindow},
         },
     };
 }
