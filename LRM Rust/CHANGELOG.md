@@ -287,8 +287,6 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - Added `embed_plist` as a macOS-only dependency and embedded the plist into the executable so command-line runs get the expected macOS camera behavior.
 - Goal: remove the `AVCaptureDeviceTypeExternal is deprecated for Continuity Cameras` warning when using OpenCV-backed camera capture.
 
-# Change Logs Since Last Git Commit
-
 ## 24. New Filesystem Formatter for GRID Dataset
 
 - Added a GRID filesystem formatter that bundles `*.mpg` + `*.align` into `data/grid-lr-corpus/<speaker>/<sample_id>/<sample_id>.{mpg,align}` for consistent adapter loading.
@@ -315,6 +313,24 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **Post-predict artifacts:** After `predict_frames`, results are written under `outputs/<stem>/`: a text file (prediction and reference transcript) and an **annotated MP4** re-encoded from the source video with tracker overlays and caption text ([`annotate_video`](LRM Rust/src/inference/predictor.rs)—second pass, does not run the VSRM).
 - **Live mode unchanged:** Webcam path still uses `FrameAnnotator` + `LiveWindow` as before.
 
+# Change Logs Since Last Git Commit
+
+## 28. CTC Loss Forward Optimizations ([`src/ctc/ctc_loss.rs`](src/ctc/ctc_loss.rs), [`src/utils.rs`](src/utils.rs))
+
+- **Pre-gather target log-probs:** A single `gather` over `[N, T, V]` with broadcast indices builds `[N, T, L']` target-aligned log-probs once; the time loop slices by `t_idx` instead of repeating gather/expand each step.
+- **Pre-compute time mask:** Build `[N, T]` validity once (frame index vs `input_lengths` via `lower` / comparable ops); each step slices the column for `t_idx` and expands to `[N, L']` instead of recomputing `greater_elem` on lengths every iteration.
+- **Log-sum-exp tensors:** [`log_sum_exp_2_tensor`](src/utils.rs) uses `.sub(max.clone())` and `max.add(sum.log())` to avoid an extra `max.clone()` on the final add. [`log_sum_exp_3_tensor`](src/utils.rs) uses a **single** fused path: `max_pair` chain over `a,b,c`, then one `log` after summing shifted exponentials (no nested `log_sum_exp_2_tensor` composition).
+
+## 29. CTC Beam Decode Optimizations ([`src/ctc/ctc_decode.rs`](src/ctc/ctc_decode.rs))
+
+- **Use FxHashMap over HashMap and preallocate with capacity:** Faster hasher for controlled keys; `with_capacity_and_hasher` reduces reallocations during the timestep loop.
+- **Quickselect instead of sorting for prefix candidates:** `sort_by` on all surviving prefixes costs $O(P \log P)$; only the top `beam_width` matter. `select_nth_unstable_by` partitions in expected $O(P)$, then `truncate(beam_width)`.
+- **Truncate over take:** Prune `next_prefixes_vec` in place instead of allocating a new `Vec` from an iterator chain.
+- **BeamPrefix constructor:** `BeamPrefix::new` precomputes `combined_log_prob` (acoustic lse + $\alpha$ LM + $\beta$ length) so pruning compares cached floats instead of recomputing `score()` on every comparator invocation.
+- **Single CPU materialization per sample:** After `log_softmax`, one `to_data()` / `Vec<f32>` holds `[T, V]` in row-major order; each timestep indexes `t_idx * V ..` for the frame row. Avoids per-frame GPU `topk` + host sync (major win on Wgpu).
+- **CPU top-k per frame:** Reuse a length-`V` buffer of `(token_id, log_prob)` pairs, fill from the current row, then `select_nth_unstable_by(k - 1, …)` and read `top_k_pairs[..k]`; blank log-prob read directly from the row slice.
+- **Batch decode:** `log_probs.dims()` without cloning the tensor solely for shape.
+
 ## Files Modified (Summary)
 
 | File                      | Changes                                                                                                        |
@@ -336,9 +352,11 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `inference/overlay.rs`    | New: FrameAnnotator (draw), LiveWindow (HighGUI)                                                                |
 | `pipeline/video.rs`       | Deleted; logic in inference/loader.rs                                                                          |
 | `cli.rs`                  | Checkpoint/CLI resolution helpers; pure resolvers                                                              |
-| `utils.rs`                | levenshtein, io_err                                                                                            |
+| `utils.rs`                | levenshtein, io_err; fused `log_sum_exp_3_tensor`; fewer `max` clones in `log_sum_exp_2_tensor`                 |
 | `lib.rs`                  | Tracker re-exports updated                                                                                     |
 | `pipeline/mod.rs`         | Tracker re-exports updated                                                                                     |
-| `README.md`               | Project tree, CLI examples                                                                                     |
+| `README.md`               | Project tree, CLI examples; CTC module paths and decode/loss optimization notes                                                                 |
 | `Info.plist`              | macOS camera key: `NSCameraUseContinuityCameraDeviceType=true`                                                  |
-| `Cargo.toml`              | Added `crossbeam-channel` + macOS-only `embed_plist`                                                           |
+| `Cargo.toml`              | `crossbeam-channel`, macOS `embed_plist`, `rustc-hash` (decoder `FxHashMap`)                                                                   |
+| `ctc_loss.rs`             | Pre-gather target log-probs; precomputed `[N,T]` time mask; DP loop slices                                                                     |
+| `ctc_decode.rs`           | CPU slab beam acoustics; `FxHashMap`; `select_nth_unstable_by` pruning; `BeamPrefix::new`; reused `(id, log_prob)` buffer                     |

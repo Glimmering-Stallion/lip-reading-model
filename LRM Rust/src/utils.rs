@@ -77,8 +77,8 @@ pub fn log_sum_exp_2_tensor<B: Backend, const D: usize>(
     b: Tensor<B, D>,
 ) -> Tensor<B, D> {
     let max = a.clone().max_pair(b.clone()); // element-wise maxxing
-    let sum = (a - max.clone()).exp().add((b - max.clone()).exp());
-    let lse = max.clone().add(sum.log());
+    let sum = (a.sub(max.clone())).exp().add((b.sub(max.clone())).exp());
+    let lse = max.add(sum.log());
 
     // handle pairwise (-inf, -inf) cases (to avoid NaNs from -inf - -inf)
     let nan_mask = lse.clone().is_nan();
@@ -91,7 +91,13 @@ pub fn log_sum_exp_3_tensor<B: Backend, const D: usize>(
     b: Tensor<B, D>,
     c: Tensor<B, D>,
 ) -> Tensor<B, D> {
-    log_sum_exp_2_tensor(log_sum_exp_2_tensor(a, b), c)
+    let max = a.clone().max_pair(b.clone()).max_pair(c.clone());
+    let sum = (a.sub(max.clone())).exp().add((b.sub(max.clone())).exp()).add((c.sub(max.clone())).exp());
+    let lse = max.add(sum.log());
+
+    // handle pairwise (-inf, -inf) cases (to avoid NaNs from -inf - -inf)
+    let nan_mask = lse.clone().is_nan();
+    lse.mask_fill(nan_mask, f32::NEG_INFINITY)
 }
 
 

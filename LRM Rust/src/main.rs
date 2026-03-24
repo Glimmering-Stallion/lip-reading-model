@@ -237,9 +237,8 @@ fn run_build_lm(
     let lm_output_path = context.models_path.join(model);
     let corpus_str = corpus_path.to_string_lossy().to_string();
     let train_token_map = Arc::clone(token_map);
-    let train_sequences: Vec<Vec<usize>> = if lm_output_path.exists() {
-        vec![]
-    } else {
+    let train_sequences: Vec<Vec<usize>> = if lm_output_path.exists() { vec![] }
+    else {
         stream_corpus_lines(&corpus_str, 0.05)
             .filter_map(move |line| {
                 let chars = line.chars().collect::<Vec<char>>();
@@ -262,11 +261,7 @@ fn run_build_lm(
 
     let perplexity = lm.perplexity(Box::new(eval_sequences.into_iter()));
     println!("N-gram LM perplexity on eval set: {:.3}\n", perplexity);
-    assert!(
-        perplexity.is_finite(),
-        "LM perplexity ({}) is non-finite",
-        perplexity
-    );
+    assert!(perplexity.is_finite(), "LM perplexity ({}) is non-finite", perplexity);
 
     Ok(())
 }

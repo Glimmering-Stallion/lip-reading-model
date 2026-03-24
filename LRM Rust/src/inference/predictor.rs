@@ -74,7 +74,7 @@ use std::{
         atomic::{AtomicBool, Ordering}
     },
     thread,
-    time::Duration
+    time::Duration,
 };
 
 
@@ -525,7 +525,7 @@ pub fn annotate_video(
         let result = tracker.process_frame(&frame)?;
         let mut display = frame.clone();
         annotator.draw_tracker_info(&mut display, &result.metadata);
-        annotator.draw_prediction(&mut display, prediction);
+        // annotator.draw_prediction(&mut display, prediction);
 
         // if writer none (meaning first frame):
         // - obtain native frame dims

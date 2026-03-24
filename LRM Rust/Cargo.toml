@@ -14,7 +14,7 @@ log = "0.4"
 image = "0.25.8" # for image processing
 ndarray = "0.17.2"
 num-traits = "0.2.19"
-opencv = "0.98.1" # for CV tasks
+opencv = "0.98.2" # for CV tasks
 rand = "0.9.2"
 clap = { version = "4.5.48", features = ["derive"] } # for terminal arg parsing
 reqwest = { version = "0.13.1", features = [
@@ -29,6 +29,7 @@ tar = "0.4.44"
 indicatif = "0.18.3"
 bytemuck = "1.25"
 crossbeam-channel = "0.5"
+rustc-hash = "2.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 embed_plist = "1.2"

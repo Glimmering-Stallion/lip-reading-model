@@ -100,15 +100,15 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ### Custom CTC Loss (`ctc/ctc_loss.rs`)
 
-- Implemented Connectionist Temporal Classification (CTC) loss from scratch.
+- Implemented custom Connectionist Temporal Classification (CTC) loss.
 - Uses forward-backward dynamic programming.
 - Performs all computations in log-space for numerical stability.
 - Correctly handles blank symbols, repeated labels, and variable-length input/target sequences
 - Designed to be framework-agnostic within Burn.
 
-### Custom CTC Decoding & Inference (`ctc/ctc_decoder.rs`)
+### Custom CTC Decoding & Inference (`ctc/ctc_decode.rs`)
 
-- Implemented CTC decoding (greedy and prefix beam search methods) from scratch.
+- Implemented custom CTC decoding (greedy and prefix beam search).
 - Prefix beam search decoding has:
   - Separate blank and non-blank probability tracking
   - Log-probability accumulation
@@ -158,12 +158,10 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Pending / Future Work
 
+- **Add Landmark-Based Tracker:** Improve ROI stability and accuracy, plus rotational invariance benefits by adding a landmark/pose-based tracker backend (e.g. MediaPipe) as a separate tracker option to the existing layered Haar cascades tracker.
+- **Grad-CAM For Overlay Visualization:** During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
 - **FPS video standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
 - **Word-Level N-gram vs. Char Level Decoder Incongruity:** Current decoding uses character-level LM scoring; evaluate unifying with a word-level LM/tokenization or retraining the LM to match the decoder’s output unit.
-- **Grad-CAM For Overlay Visualization:** During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
-- **Add Landmark-Based Tracker:** Improve ROI stability and accuracy, plus rotational invariance benefits by adding a landmark/pose-based tracker backend (e.g. MediaPipe) as a separate tracker option to the existing layered Haar cascades tracker.
-- **Optimize CTC Loss:** Polish by reducing unnecessary tensor cloning/allocations. Keep a prev/curr buffer and reuse them rather than clone three times for the stay/adv1/adv2 tensors. Don't clone input lengths tensor for time mask. Don't clone log probs just to slice one timestep.
-- **Optimize CTC Decoder Beam Prefix Search:** Incorporate a trie-based prefix building mechanism over the current sequence-probability Hashmaps design.
 - **Talking vs. Non-Talking States:** Live inference still runs the lip-reading model whenever the camera stream is active. Add a **gating or state layer** (audio-free): e.g. mouth-ROI motion / frame-difference energy, tracker confidence (face/mouth found), or optional logits-based confidence, to classify **active visual speech** vs **idle/silent** and suppress, clear, or hold the displayed prediction accordingly.
 
 ## CLI Usage
@@ -244,8 +242,7 @@ Lip Reading Model
 │  │  ├─ animation.gif
 │  │  ├─ general_utils.py
 │  │  ├─ lipread.py
-│  │  ├─ model_utils.py
-│  │  └─ test_video.mpg
+│  │  └─ model_utils.py
 │  ├─ lipread.ipynb
 │  ├─ main.py
 │  └─ requirements.txt
@@ -255,17 +252,17 @@ Lip Reading Model
 │  ├─ data
 │  │  ├─ grid-lr-corpus
 │  │  │  ├─ s1
-│  │  │  │  └─ <utterance_id>
-│  │  │  │  ⋮  ├─ <utterance_id>.mpg
-│  │  │  │  ⋮  └─ <utterance_id>.align
+│  │  │  │  └─ <stem_id>
+│  │  │  │  ⋮  ├─ <stem_id>.mp4
+│  │  │  │  ⋮  └─ <stem_id>.text
 │  │  │  └─ s34
-│  │  │     └─ <utterance_id>
-│  │  │        ├─ <utterance_id>.mpg
-│  │  │        └─ <utterance_id>.align
+│  │  │     └─ <stem_id>
+│  │  │        ├─ <stem_id>.mp4
+│  │  │        └─ <stem_id>.text
 │  │  └─ librispeech-lm-norm
 │  │     └─ librispeech-lm-norm.txt
 │  ├─ models
-│  │  └─ ⋯
+│  ├─ outputs
 │  ├─ rust-toolchain.toml
 │  ├─ rustfmt.toml
 │  ├─ src
@@ -311,8 +308,7 @@ Lip Reading Model
 │  │     ├─ summary.rs
 │  │     ├─ tcn.rs
 │  │     └─ vsrm.rs
-│  ├─ target
-│  └─ tests
+│  └─ target
 ├─ NOTES.md
 └─ README.md
 ```

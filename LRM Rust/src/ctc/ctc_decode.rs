@@ -34,7 +34,7 @@ use burn::{
         Tensor,
     },
 };
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 
 
@@ -43,19 +43,36 @@ struct BeamPrefix {
     log_prob_blank: f32,        // log-prob of prefix ending in blank
     log_prob_non_blank: f32,    // log-prob of prefix ending in non-blank
     log_prob_lm: f32,           // log-prob from language model (for LM fusion)
+    combined_log_prob: f32,     // combined accumulated log-prob score of this prefix
 }
 
 
 
 impl BeamPrefix {
-    fn score(&self, alpha: f32, beta: f32) -> f32 {
-        let vsrm_score = log_sum_exp_2_scalar(self.log_prob_blank, self.log_prob_non_blank);
-        let lm_score = self.log_prob_lm;
-        let length_reward = self.sequence.len() as f32;
+    fn new(
+        sequence: Vec<usize>,
+        log_prob_blank: f32,
+        log_prob_non_blank: f32,
+        log_prob_lm: f32,
+        alpha: f32,
+        beta: f32,
+    ) -> Self {
+        let vsrm_score = log_sum_exp_2_scalar(log_prob_blank, log_prob_non_blank);
+        let lm_score = log_prob_lm;
+        let length_reward = sequence.len() as f32;
 
-        // total score
-        vsrm_score + (alpha * lm_score) + (beta * length_reward)  // shallow LM fusion
+        // combined accumulated log-prob score of this prefix
+        let combined_log_prob = vsrm_score + (alpha * lm_score) + (beta * length_reward); // shallow LM fusion
+
+        Self {
+            sequence,
+            log_prob_blank,
+            log_prob_non_blank,
+            log_prob_lm,
+            combined_log_prob,
+        }
     }
+
     fn last_char(&self) -> Option<usize> { self.sequence.last().copied() }
 }
 
@@ -202,7 +219,7 @@ impl CtcDecoder {
         inputs: Tensor<B, 3>
     ) -> Vec<Vec<i64>> {
         let log_probs = log_softmax(inputs, 2); // [N, T, V]
-        let [n, t, vocab_size] = log_probs.clone().dims();
+        let [n, t, vocab_size] = log_probs.dims();
         let mut top_seq_ids = Vec::with_capacity(n);
 
         assert!(self.blank_id < vocab_size, "blank ID ({}) is out of vocabulary size bounds ({})", self.blank_id, vocab_size);
@@ -243,42 +260,57 @@ impl CtcDecoder {
         let blank = self.blank_id;
         // let sentinel_value = -1e30;
         let sentinel_value = f32::NEG_INFINITY;
-        let (timesteps, vocab_size) = (log_probs.dims()[0], log_probs.dims()[1]);
-        let k = (self.beam_width + 1).min(vocab_size - 1); // plus 1 to account for possible blank skipping
-        assert!(timesteps > 0, "no timesteps in input");
-        assert!(blank < vocab_size, "blank ID ({}) is out of vocabulary size bounds ({})", blank, vocab_size);
+        let [t, v] = log_probs.dims();
+        let w = self.beam_width;
+        let k = (w + 1).min(v); // plus 1 to account for possible blank skipping
+        assert!(t > 0, "no timesteps in input");
+        assert!(v > 0);
+        assert!(blank < v, "blank ID ({}) is out of vocabulary size bounds ({})", blank, v);
 
         // t = -1 (base case)
-        // initialize beam with empty prefix (starts with size 1 and grows to beam_width)
+        // initialize prefix beam container with empty prefix (starts with size 1 and grows to beam_width)
         let mut prefixes = vec![
-            BeamPrefix {
-                sequence: Vec::new(),
-                log_prob_blank: 0.0, // log(1)
-                log_prob_non_blank: sentinel_value, // log(0)
-                log_prob_lm: 0.0,
-            }
+            BeamPrefix::new(
+                Vec::new(),
+                0.0,            // log(1)
+                sentinel_value, // log(0)
+                0.0,
+                self.lm_alpha,
+                self.lm_beta,
+            )
         ];
 
+        // vector buffer to store per-timestep (ID, log-prob) pairs
+        let mut id_prob_pairs: Vec<(usize, f32)> = vec![(0, 0.0); v];
+
+        // pull log-probs GPU tensor to CPU
+        let log_probs = log_probs
+            .to_data()
+            .convert::<f32>()
+            .to_vec::<f32>()
+            .unwrap();
+
         // 0 ≤ t ≤ T - 1 (recurrence case)
-        for t in 0..timesteps {
-            // reset buffer
+        for t_idx in 0..t {
+            // reset HashMap buffer
             // maps sequence of symbol IDs to a (log_prob_blank, log_prob_non_blank, log_prob_lm) tuple
-            let mut next_prefixes: HashMap<Vec<usize>, (f32, f32, f32)> = HashMap::new();
+            let max_capacity = w * (k + 1);
+            let mut next_prefixes: FxHashMap<Vec<usize>, (f32, f32, f32)> = FxHashMap::with_capacity_and_hasher(max_capacity, Default::default());
 
             // grab log-probs of each symbol given by model at current timestep
-            let curr_log_probs = log_probs.clone()
-                .slice([t..(t + 1), 0..vocab_size])
-                .squeeze::<1>();
+            let t_chunk = t_idx * v;
+            let curr_log_probs = &log_probs[t_chunk..(t_chunk + v)];
 
-            // get log-probs/IDs of top K highest log-prob symbols on GPU
-            let (top_k_log_probs, top_k_ids) = curr_log_probs.clone().topk_with_indices(k, 0);
+            // fill (ID, log-prob) pairs buffer with current timestep's pair values
+            for (char_id, &char_log_prob) in curr_log_probs.iter().enumerate()
+            { id_prob_pairs[char_id] = (char_id, char_log_prob); }
 
-            // pull only those top K symbol candidates to CPU
-            let (top_k_log_probs, log_prob_blank, top_k_ids) = (
-                top_k_log_probs.to_data().convert::<f32>().to_vec::<f32>().unwrap(),
-                curr_log_probs.slice([blank..(blank + 1)]).to_data().convert::<f32>().to_vec::<f32>().unwrap()[0],
-                top_k_ids.to_data().convert::<i64>().to_vec::<i64>().unwrap(),
-            );
+            // get top K highest log-prob from those (ID, log-prob) pairs
+            id_prob_pairs.select_nth_unstable_by((k - 1), |a, b| {
+                b.1.partial_cmp(&a.1).unwrap() // sort by log-prob (descending)
+            });
+            let top_k_pairs = &id_prob_pairs[..k];
+            let log_prob_blank = curr_log_probs[blank];
 
             for prefix in prefixes.into_iter() {
                 // build key for next prefix sequence hypothesis
@@ -299,12 +331,7 @@ impl CtcDecoder {
                 entry.0 = log_sum_exp_2_scalar(entry.0, ext_log_prob);
 
                 // extend with non-blank characters (char is the candidate symbol ID in vocab)
-                for i in 0..k {
-                    let (char_id, char_log_prob) = (
-                        top_k_ids[i] as usize,
-                        top_k_log_probs[i],
-                    );
-
+                for &(char_id, char_log_prob) in top_k_pairs {
                     if char_id == blank { continue; }
 
                     // case A (skip):       same char, previous path ended with non-blank
@@ -347,7 +374,8 @@ impl CtcDecoder {
 
                             // optional language model score adjustment (applied for extending with duplicate char)
                             let mut new_lm_log_prob = prefix.log_prob_lm;
-                            if let Some(lm) = self.lm.as_ref() { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
+                            if let Some(lm) = self.lm.as_ref()
+                            { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
 
                             // update log-prob for current prefix path (ending with non-blanks)
                             // accumulate total log-prob of prefix ending with non-blank
@@ -377,7 +405,8 @@ impl CtcDecoder {
 
                             // optional language model score adjustment (applied for extending with different char)
                             let mut new_lm_log_prob = prefix.log_prob_lm;
-                            if let Some(lm) = self.lm.as_ref() { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
+                            if let Some(lm) = self.lm.as_ref()
+                            { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
 
                             // update log-prob for current prefix path (ending with non-blanks)
                             // accumulate total log-prob of prefix ending with non-blank
@@ -391,32 +420,38 @@ impl CtcDecoder {
             }
 
             // convert HashMap to Vec<BeamPrefix> for sorting
-            let mut next_prefixes_vec: Vec<BeamPrefix> = next_prefixes
+            let mut next_prefixes: Vec<BeamPrefix> = next_prefixes
                 .into_iter()
-                .map(|(sequence, (log_prob_blank, log_prob_non_blank, log_prob_lm))| BeamPrefix {
-                    sequence,
-                    log_prob_blank,
-                    log_prob_non_blank,
-                    log_prob_lm,
+                .map(|(sequence, (log_prob_blank, log_prob_non_blank, log_prob_lm))| {
+                    BeamPrefix::new(
+                        sequence,
+                        log_prob_blank,
+                        log_prob_non_blank,
+                        log_prob_lm,
+                        self.lm_alpha,
+                        self.lm_beta,
+                    )
                 }).collect();
 
-            // sort by score (descending)
-            next_prefixes_vec.sort_by(|a, b|
-                b.score(self.lm_alpha, self.lm_beta)
-                    .partial_cmp(&a.score(self.lm_alpha, self.lm_beta))
-                    .unwrap()
-            );
+            // if next_prefixes expanded past beam_width
+            // partition to top w by log-prob score
+            // then drop remaining candidates
+            let num_candidates = next_prefixes.len();
+            if num_candidates > w {
+                // select top beam_width prefix candidates
+                next_prefixes.select_nth_unstable_by((w - 1), |a, b| {
+                    b.combined_log_prob.partial_cmp(&a.combined_log_prob).unwrap() // sort by score (descending)
+                });
+                next_prefixes.truncate(w); // remove non-top beam_width prefixes
+            };
 
-            // keep top beam_width prefixes
-            prefixes = next_prefixes_vec.into_iter().take(self.beam_width).collect();
+            prefixes = next_prefixes;
         }
 
         // return highest scoring prefix sequence
         let best_prefix = prefixes.into_iter()
             .max_by(|a, b|
-                a.score(self.lm_alpha, self.lm_beta)
-                    .partial_cmp(&b.score(self.lm_alpha, self.lm_beta))
-                    .unwrap()
+                a.combined_log_prob.partial_cmp(&b.combined_log_prob).unwrap()
             )
             .unwrap();
 
@@ -430,6 +465,7 @@ impl CtcDecoder {
 /// Helper function for greedy search to collapse a path by:
 /// - removing blanks and false duplicates (repeated chars between blanks),
 /// - keeping true duplicates (repeated chars separated by blanks).
+/// 
 /// This helps to align time-based predictions with text-based targets.
 ///
 /// ### Params:
