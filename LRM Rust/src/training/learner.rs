@@ -478,7 +478,7 @@ where B: AutodiffBackend,
 /// (80% train / 10% valid / 10% test), and builds Burn dataloaders with
 /// `VsrmBatcher`.
 /// 
-/// Uses pre-extracted mouth crops from `preproc_frames/` when
+/// Uses pre-extracted mouth crops from `cropped_frames/` when
 /// available; otherwise decodes video and runs `LipTracker` on demand.
 ///
 /// ### Params:

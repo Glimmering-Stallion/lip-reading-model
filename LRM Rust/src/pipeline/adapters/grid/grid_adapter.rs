@@ -16,6 +16,7 @@ use crate::{
     prelude::{io_err, ESS},
     pipeline::io::file_nonempty,
 };
+use indicatif::{ProgressBar, ProgressStyle};
 use std::{
     collections::{HashMap, HashSet},
     fs::{
@@ -54,7 +55,7 @@ fn is_grid_speaker_dir(name: &str) -> bool {
 
 
 
-fn is_bundled_utterance_path(
+fn is_bundled_path(
     grid_root: &PathBuf,
     path: &PathBuf,
     speaker: &str,
@@ -79,8 +80,8 @@ fn insert_indexed_path(
     let entry = map.entry(speaker.to_string()).or_default();
     if let Some(existing) = entry.get(utterance_id) {
         // prefer already-bundled destination paths to avoid picking a legacy duplicate
-        let existing_bundled = is_bundled_utterance_path(grid_root, &existing.clone(), speaker, utterance_id);
-        let new_bundled = is_bundled_utterance_path(grid_root, &path, speaker, utterance_id);
+        let existing_bundled = is_bundled_path(grid_root, &existing.clone(), speaker, utterance_id);
+        let new_bundled = is_bundled_path(grid_root, &path, speaker, utterance_id);
 
         if existing_bundled { return; }
         if new_bundled { entry.insert(utterance_id.to_string(), path); }
@@ -211,12 +212,8 @@ fn assert_speaker_mapping_is_not_many_to_one(mapping: &HashMap<String, String>) 
     { align_to_video.entry(a.clone()).or_default().push(v.clone()); }
 
     for (a, vs) in &align_to_video {
-        if vs.len() > 1 {
-            return Err(io_err(
-                format!("Ambiguous mapping: alignment speaker {} is best match for multiple video speakers: {:?}", a, vs),
-                ErrorKind::InvalidInput,
-            ));
-        }
+        if vs.len() > 1
+        { return Err(io_err(format!("Ambiguous mapping: alignment speaker {} is best match for multiple video speakers: {:?}", a, vs), ErrorKind::InvalidInput)); }
     }
 
     Ok(())
@@ -224,17 +221,11 @@ fn assert_speaker_mapping_is_not_many_to_one(mapping: &HashMap<String, String>) 
 
 
 
-/// Visits each `grid_root/<speaker>/<utterance_id>/` directory where `speaker` matches GRID layout.
-fn for_each_bundled_dir<F>(grid_root: &Path, mut f: F) -> Result<(), ESS>
-where
-    F: FnMut(&Path, &str, &str) -> Result<(), ESS>,
-{
-    let rd = read_dir(grid_root).map_err(|e| {
-        io_err(
-            format!("failed to read GRID corpus dir {:?}: {}", grid_root, e),
-            ErrorKind::Other,
-        )
-    })?;
+/// Visits each `grid_root/<speaker>/<utterance_id>/` directory where `speaker` matches GRID layout and returns a list of (utterance_path, speaker, utterance_id) items.
+fn list_bundled_dirs(grid_root: &Path) -> Result<Vec<(PathBuf, String, String)>, ESS> {
+    let mut bundles_list = Vec::new();
+    let rd = read_dir(grid_root)
+        .map_err(|e| { io_err(format!("failed to read GRID corpus dir {:?}: {}", grid_root, e), ErrorKind::Other) })?;
 
     for speaker_ent in rd.flatten() {
         let speaker_path = speaker_ent.path();
@@ -247,22 +238,25 @@ where
             .to_string();
 
         if !is_grid_speaker_dir(&speaker) { continue; }
-        let ud = read_dir(&speaker_path).map_err(|e| {
-            io_err(
-                format!("failed to read speaker dir {:?}: {}", speaker_path, e),
-                ErrorKind::Other,
-            )
-        })?;
+        let entries = read_dir(&speaker_path)
+            .map_err(|e| { io_err(format!("failed to read speaker dir {:?}: {}", speaker_path, e), ErrorKind::Other) })?;
 
-        for u_ent in ud.flatten() {
-            let u_path = u_ent.path();
-            if !u_path.is_dir() { continue; }
-            let utterance_id = u_ent.file_name().to_str().unwrap_or("").to_string();
-            if utterance_id.is_empty() { continue; }
-            f(&u_path, &speaker, &utterance_id)?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() { continue; }
+
+            let entry_id = entry
+                .file_name()
+                .to_str()
+                .unwrap_or("")
+                .to_string();
+            if entry_id.is_empty() { continue; }
+
+            bundles_list.push((path, speaker.clone(), entry_id));
         }
     }
-    Ok(())
+
+    Ok(bundles_list)
 }
 
 
@@ -279,35 +273,18 @@ where
 /// Idempotent: if `dest_mp4` exists and is non-empty, returns `Ok(())` immediately.
 pub fn convert_to_standard_mp4(src_mpg: &Path, dest_mp4: &Path) -> Result<(), ESS> {
     if file_nonempty(dest_mp4) { return Ok(()); }
-    if !src_mpg.is_file() {
-        return Err(io_err(
-            format!("source mpg not found: {:?}", src_mpg),
-            ErrorKind::NotFound,
-        ));
-    }
+    if !src_mpg.is_file() { return Err(io_err(format!("source mpg not found: {:?}", src_mpg), ErrorKind::NotFound)); }
 
     if let Some(parent) = dest_mp4.parent() {
-        create_dir_all(parent).map_err(|e| {
-            io_err(
-                format!("failed to create parent dir {:?}: {}", parent, e),
-                ErrorKind::Other,
-            )
-        })?;
+        create_dir_all(parent)
+            .map_err(|e| { io_err(format!("failed to create parent dir {:?}: {}", parent, e), ErrorKind::Other) })?;
     }
 
-    let src_str = src_mpg.to_str().ok_or_else(|| {
-        io_err(
-            "source mpg path is not valid UTF-8",
-            ErrorKind::InvalidInput,
-        )
-    })?;
+    let src_str = src_mpg.to_str()
+        .ok_or_else(|| { io_err("source mpg path is not valid UTF-8", ErrorKind::InvalidInput) })?;
 
-    let dest_str = dest_mp4.to_str().ok_or_else(|| {
-        io_err(
-            "destination mp4 path is not valid UTF-8",
-            ErrorKind::InvalidInput,
-        )
-    })?;
+    let dest_str = dest_mp4.to_str()
+        .ok_or_else(|| { io_err("destination mp4 path is not valid UTF-8", ErrorKind::InvalidInput) })?;
 
     let output = Command::new("ffmpeg")
         .args([
@@ -317,7 +294,6 @@ pub fn convert_to_standard_mp4(src_mpg: &Path, dest_mp4: &Path) -> Result<(), ES
             "-y",
             "-i",
             src_str,
-            "-an",
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -332,28 +308,18 @@ pub fn convert_to_standard_mp4(src_mpg: &Path, dest_mp4: &Path) -> Result<(), ES
         ])
         .output()
         .map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                io_err(
-                    "ffmpeg not found on PATH; install ffmpeg to convert .mpg to .mp4",
-                    ErrorKind::NotFound,
-                )
-            } else { io_err(format!("failed to spawn ffmpeg: {}", e), ErrorKind::Other) }
+            if e.kind() == ErrorKind::NotFound
+            { io_err("ffmpeg not found on PATH; install ffmpeg to convert .mpg to .mp4", ErrorKind::NotFound) }
+            else { io_err(format!("failed to spawn ffmpeg: {}", e), ErrorKind::Other) }
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(io_err(
-            format!("ffmpeg failed: {}", stderr.trim()),
-            ErrorKind::Other,
-        ));
+        return Err(io_err(format!("ffmpeg failed: {}", stderr.trim()), ErrorKind::Other));
     }
 
-    if !file_nonempty(dest_mp4) {
-        return Err(io_err(
-            format!("ffmpeg produced no output at {:?}", dest_mp4),
-            ErrorKind::Other,
-        ));
-    }
+    if !file_nonempty(dest_mp4)
+    { return Err(io_err(format!("ffmpeg produced no output at {:?}", dest_mp4), ErrorKind::Other)); }
 
     Ok(())
 }
@@ -362,12 +328,8 @@ pub fn convert_to_standard_mp4(src_mpg: &Path, dest_mp4: &Path) -> Result<(), ES
 
 /// Parses GRID `.align` lines into space-separated reference words (skips `sil` / `sp`).
 pub fn parse_align(src_align: &Path) -> Result<String, ESS> {
-    let file = File::open(src_align).map_err(|e| {
-        io_err(
-            format!("failed to open align file {:?}: {}", src_align, e),
-            ErrorKind::Other,
-        )
-    })?;
+    let file = File::open(src_align)
+        .map_err(|e| { io_err(format!("failed to open align file {:?}: {}", src_align, e), ErrorKind::Other) })?;
 
     let mut words_out: Vec<String> = Vec::new();
     for line in BufReader::new(file).lines().map_while(Result::ok) {
@@ -378,12 +340,8 @@ pub fn parse_align(src_align: &Path) -> Result<String, ESS> {
         if word != "sil" && word != "sp" { words_out.push(word.to_string()); }
     }
 
-    if words_out.is_empty() {
-        return Err(io_err(
-            format!("no non-silence words found in {:?}", src_align),
-            ErrorKind::InvalidData,
-        ));
-    }
+    if words_out.is_empty()
+    { return Err(io_err(format!("no non-silence words found in {:?}", src_align), ErrorKind::InvalidData)); }
 
     Ok(words_out.join(" "))
 }
@@ -402,39 +360,21 @@ pub fn parse_align(src_align: &Path) -> Result<String, ESS> {
 /// Idempotent: if `dest_txt` exists and is non-empty, returns `Ok(())` immediately.
 pub fn convert_to_standard_txt(src_align: &Path, dest_txt: &Path) -> Result<(), ESS> {
     if file_nonempty(dest_txt) { return Ok(()); }
-    if !src_align.is_file() {
-        return Err(io_err(
-            format!("source align not found: {:?}", src_align),
-            ErrorKind::NotFound,
-        ));
-    }
+    if !src_align.is_file()
+    { return Err(io_err(format!("source align not found: {:?}", src_align), ErrorKind::NotFound)); }
 
     let line = parse_align(src_align)?;
     let tmp_path = dest_txt.with_extension("tmp");
     {
-        let mut f = File::create(&tmp_path).map_err(|e| {
-            io_err(
-                format!("failed to create temp file {:?}: {}", tmp_path, e),
-                ErrorKind::Other,
-            )
-        })?;
-        f.write_all(line.as_bytes()).map_err(|e| {
-            io_err(
-                format!("failed to write temp file {:?}: {}", tmp_path, e),
-                ErrorKind::Other,
-            )
-        })?;
+        let mut f = File::create(&tmp_path)
+            .map_err(|e| { io_err(format!("failed to create temp file {:?}: {}", tmp_path, e), ErrorKind::Other) })?;
+        f.write_all(line.as_bytes())
+            .map_err(|e| { io_err(format!("failed to write temp file {:?}: {}", tmp_path, e), ErrorKind::Other) })?;
     }
 
     rename(&tmp_path, dest_txt).map_err(|e| {
         let _ = remove_file(&tmp_path);
-        io_err(
-            format!(
-                "failed to rename {:?} -> {:?}: {}",
-                tmp_path, dest_txt, e
-            ),
-            ErrorKind::Other,
-        )
+        io_err(format!("failed to rename {:?} -> {:?}: {}", tmp_path, dest_txt, e), ErrorKind::Other)
     })?;
 
     Ok(())
@@ -451,14 +391,24 @@ pub fn convert_to_standard_txt(src_align: &Path, dest_txt: &Path) -> Result<(), 
 /// `Ok(())` when the pass completes; errors if any conversion fails.
 pub fn normalize_to_standard_formats(context: &Context) -> Result<(), ESS> {
     let grid_path = context.data_path.join("grid-lr-corpus");
-    if !grid_path.is_dir() {
-        return Err(io_err(
-            format!("GRID corpus directory does not exist at {:?}", grid_path),
-            ErrorKind::NotFound,
-        ));
-    }
+    if !grid_path.is_dir()
+    { return Err(io_err(format!("GRID corpus directory does not exist at {:?}", grid_path), ErrorKind::NotFound)); }
 
-    for_each_bundled_dir(&grid_path, |dir, _speaker, id| {
+    let bundles = list_bundled_dirs(&grid_path)?;
+    let n = bundles.len() as u64;
+
+    println!("Standardizing GRID corpus for {} samples...", n);
+
+    let prog_bar = ProgressBar::new(n);
+    prog_bar.set_style(
+        ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({msg}) (ETA: {eta})\n")
+        .unwrap()
+        .progress_chars("#>-"),
+    );
+
+    for (dir, speaker, id) in bundles {
+        prog_bar.set_message(format!("{}/{}", speaker, id));
+
         let mpg = dir.join(format!("{}.mpg", id));
         let mp4 = dir.join(format!("{}.mp4", id));
         if mpg.is_file() { convert_to_standard_mp4(&mpg, &mp4)?; }
@@ -467,10 +417,11 @@ pub fn normalize_to_standard_formats(context: &Context) -> Result<(), ESS> {
         let txt = dir.join(format!("{}.txt", id));
         if align.is_file() { convert_to_standard_txt(&align, &txt)?; }
 
-        Ok(())
-    })?;
+        prog_bar.inc(1);
+    }
 
-    println!("GRID standard-format pass finished (.mp4 / .txt, idempotent per file)\n");
+    prog_bar.finish_with_message("GRID standard-format pass finished (.mp4 / .txt, idempotent per file)");
+    println!("\n");
 
     Ok(())
 }
@@ -490,25 +441,20 @@ pub fn normalize_to_standard_formats(context: &Context) -> Result<(), ESS> {
 /// Only deletes when the replacement standard file exists and is non-empty.
 pub fn clean_corpus(context: &Context, dry_run: bool) -> Result<(), ESS> {
     let grid_path = context.data_path.join("grid-lr-corpus");
-    if !grid_path.is_dir() {
-        return Err(io_err(
-            format!("GRID corpus directory does not exist at {:?}", grid_path),
-            ErrorKind::NotFound,
-        ));
-    }
+    if !grid_path.is_dir()
+    { return Err(io_err(format!("GRID corpus directory does not exist at {:?}", grid_path), ErrorKind::NotFound)); }
 
+    let bundles = list_bundled_dirs(&grid_path)?;
     let mut removed = 0usize;
-    for_each_bundled_dir(&grid_path, |dir, _speaker, id| {
+
+    for (dir, _, id) in bundles {
         let mpg = dir.join(format!("{}.mpg", id));
         let mp4 = dir.join(format!("{}.mp4", id));
         if file_nonempty(&mp4) && mpg.is_file() {
-            if dry_run { println!("[dry-run] would remove {:?}\n", mpg); } else {
-                remove_file(&mpg).map_err(|e| {
-                    io_err(
-                        format!("failed to remove {:?}: {}", mpg, e),
-                        ErrorKind::Other,
-                    )
-                })?;
+            if dry_run { println!("[dry-run] would remove {:?}\n", mpg); }
+            else {
+                remove_file(&mpg)
+                    .map_err(|e| { io_err(format!("failed to remove {:?}: {}", mpg, e), ErrorKind::Other) })?;
             }
             removed += 1;
         }
@@ -516,22 +462,17 @@ pub fn clean_corpus(context: &Context, dry_run: bool) -> Result<(), ESS> {
         let align = dir.join(format!("{}.align", id));
         let txt = dir.join(format!("{}.txt", id));
         if file_nonempty(&txt) && align.is_file() {
-            if dry_run { println!("[dry-run] would remove {:?}\n", align); } else {
-                remove_file(&align).map_err(|e| {
-                    io_err(
-                        format!("failed to remove {:?}: {}", align, e),
-                        ErrorKind::Other,
-                    )
-                })?;
+            if dry_run { println!("[dry-run] would remove {:?}\n", align); }
+            else {
+                remove_file(&align)
+                    .map_err(|e| { io_err(format!("failed to remove {:?}: {}", align, e), ErrorKind::Other) })?;
             }
             removed += 1;
         }
+    };
 
-        Ok(())
-    })?;
-
-    if dry_run { println!("clean_corpus dry-run: {} file(s) would be removed\n", removed); }
-    else { println!("clean_corpus: removed {} redundant file(s)\n", removed); }
+    if dry_run { println!("Clean corpus dry-run: {} file(s) would be removed\n", removed); }
+    else { println!("Clean corpus: removed {} redundant file(s)\n", removed); }
 
     Ok(())
 }
@@ -549,12 +490,8 @@ pub fn clean_corpus(context: &Context, dry_run: bool) -> Result<(), ESS> {
 pub fn align_grid_directories(context: &Context, dry_run: bool) -> Result<(), ESS> {
     let grid_path = context.data_path.join("grid-lr-corpus");
 
-    if !grid_path.exists() {
-        return Err(io_err(
-            format!("GRID corpus directory does not exist at {:?}", grid_path),
-            ErrorKind::NotFound,
-        ));
-    }
+    if !grid_path.exists()
+    { return Err(io_err(format!("GRID corpus directory does not exist at {:?}", grid_path), ErrorKind::NotFound)); }
 
     let discovery = discover_grid_files_at_any_depth(&grid_path);
     let mapping = determine_speaker_mapping_from_stems(
@@ -593,12 +530,8 @@ pub fn align_grid_directories(context: &Context, dry_run: bool) -> Result<(), ES
 pub fn bundle_grid_utterances(context: &Context) -> Result<(), ESS> {
     let grid_path = context.data_path.join("grid-lr-corpus");
 
-    if !grid_path.exists() {
-        return Err(io_err(
-            format!("GRID corpus directory does not exist at {:?}", grid_path),
-            ErrorKind::NotFound,
-        ));
-    }
+    if !grid_path.exists()
+    { return Err(io_err(format!("GRID corpus directory does not exist at {:?}", grid_path), ErrorKind::NotFound)); }
 
     let discovery = discover_grid_files_at_any_depth(&grid_path);
     let mapping = determine_speaker_mapping_from_stems(
@@ -635,33 +568,18 @@ pub fn bundle_grid_utterances(context: &Context) -> Result<(), ESS> {
             let dest_align = utterance_dir.join(format!("{}.align", utterance_id));
             if dest_mpg.exists() && dest_align.exists() { continue; }
 
-            create_dir_all(&utterance_dir).map_err(|e| {
-                io_err(
-                    format!("failed to create utterance dir {:?}: {}", utterance_dir, e),
-                    ErrorKind::Other,
-                )
-            })?;
+            create_dir_all(&utterance_dir)
+                .map_err(|e| { io_err(format!("failed to create utterance dir {:?}: {}", utterance_dir, e), ErrorKind::Other) })?;
 
             if !dest_mpg.exists() && src_mpg != &dest_mpg && src_mpg.exists() {
-                rename(src_mpg, &dest_mpg).map_err(|e| {
-                    io_err(
-                        format!("failed to move {:?} -> {:?}: {}", src_mpg, dest_mpg, e),
-                        ErrorKind::Other,
-                    )
-                })?;
+                rename(src_mpg, &dest_mpg)
+                    .map_err(|e| { io_err(format!("failed to move {:?} -> {:?}: {}", src_mpg, dest_mpg, e), ErrorKind::Other) })?;
                 moved += 1;
             }
 
             if !dest_align.exists() && src_align != &dest_align && src_align.exists() {
-                rename(src_align, &dest_align).map_err(|e| {
-                    io_err(
-                        format!(
-                            "failed to move {:?} -> {:?}: {}",
-                            src_align, dest_align, e
-                        ),
-                        ErrorKind::Other,
-                    )
-                })?;
+                rename(src_align, &dest_align)
+                    .map_err(|e| { io_err(format!("failed to move {:?} -> {:?}: {}", src_align, dest_align, e), ErrorKind::Other) })?;
                 moved += 1;
             }
         }
@@ -677,13 +595,18 @@ pub fn bundle_grid_utterances(context: &Context) -> Result<(), ESS> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::{
+        fs,
+        env,
+        process,
+        io::Write,
+    };
 
     #[test]
     fn convert_to_standard_txt_writes_words() {
-        let dir = std::env::temp_dir().join(format!("lrm_grid_txt_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = env::temp_dir().join(format!("lrm_grid_txt_{}", process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
 
         let align = dir.join("utt.align");
         let txt = dir.join("utt.txt");
@@ -695,7 +618,7 @@ mod tests {
         drop(f);
 
         convert_to_standard_txt(&align, &txt).unwrap();
-        let s = std::fs::read_to_string(&txt).unwrap();
+        let s = fs::read_to_string(&txt).unwrap();
 
         assert_eq!(s.trim(), "hello world");
         convert_to_standard_txt(&align, &txt).unwrap();

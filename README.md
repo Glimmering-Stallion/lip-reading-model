@@ -8,6 +8,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 ### Data Ingestion (`pipeline/io.rs` and `pipeline/adapters/grid/grid_dataset.rs`)
 
 - For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") data organized into sample bundles under `data/grid-lr-corpus/<speaker>/<sample_id>/`). Each sample folder holds video (`<sample_id>.mp4` preferred after preprocess, else `.mpg`) and transcript (`<sample_id>.txt` preferred after preprocess, else `.align`).
+- For GRID, `cargo preprocess --dataset grid` also writes mouth-crop frame tensors as `.bin` files under `data/grid-lr-corpus/cropped_frames/` (`GridDataset::pre_extract_all`), so training can load crops from disk instead of re-decoding video every epoch.
 - In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
 - Built dataset utilities that:
   - Infer file name stems automatically.
@@ -146,7 +147,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 ## Current Status
 
 - **I/O and data acquisition:** Video encoding/decoding, mouth ROI extraction utilities, and dataset download/extract helpers are in place.
-- **Data pipeline:** Adapter mapping (at least for GRID), preprocessing, deterministic splitting, and batching are implemented.
+- **Data pipeline:** Adapter mapping (at least for GRID), preprocessing (including optional on-disk mouth-crop cache in `cropped_frames/`), deterministic splitting, and batching are implemented.
 - **Loss:** Custom CTC loss implemented in log-space (forward/backward DP) with vectorized batch support for variable-length sequences.
 - **Decoding:** Greedy and prefix beam-search CTC decoding, optionally rescored with the integrated char-level N-gram LM (supports alpha/beta).
 - **Training:** Burn `Learner`-based training/validation loop with checkpointing, metrics, and LR scheduling. Uses `create_dataloaders` helper to handle train/val splits, batching, and dataloading for source-specific datasets.
@@ -251,6 +252,7 @@ Lip Reading Model
 │  ├─ Cargo.toml
 │  ├─ data
 │  │  ├─ grid-lr-corpus
+│  │  │  ├─ cropped_frames
 │  │  │  ├─ s1
 │  │  │  │  └─ <stem_id>
 │  │  │  │  ⋮  ├─ <stem_id>.mp4

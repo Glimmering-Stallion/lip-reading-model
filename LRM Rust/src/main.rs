@@ -52,6 +52,7 @@ use lrm_rust::{
     ctc::lm::LanguageModel,
     pipeline::{
         tracker::{HaarTrackerConfig, TrackerConfig},
+        adapters::grid,
         DatasetSource,
     },
     prelude::*,
@@ -140,10 +141,10 @@ fn main() -> Result<(), ESS> {
     // debugging
     println!("\nVocabulary: {:?}", VOCAB);
     println!("Vocabulary size: {}", VOCAB_SIZE);
-    println!("Blank token ID: {}", BLANK_ID);
-    println!("Blank token char: {}\n", VOCAB.chars().nth(BLANK_ID).unwrap());
+    println!("Blank token ID: {:?}", BLANK_ID);
+    println!("Blank token char: {:?}", VOCAB.chars().nth(BLANK_ID).unwrap());
     println!("Space token ID: {}", SPACE_ID);
-    println!("Blank token char: {}\n", VOCAB.chars().nth(SPACE_ID).unwrap());
+    println!("Space token char: {:?}\n", VOCAB.chars().nth(SPACE_ID).unwrap());
     assert!(BLANK_ID < VOCAB_SIZE, "blank ID ({}) is out of vocabulary size bounds ({})", BLANK_ID, VOCAB_SIZE);
 
     // CLI control flow
@@ -472,13 +473,13 @@ fn run_preprocess(
 
     match dataset_src {
         DatasetSource::Grid => {
-            lrm_rust::pipeline::adapters::grid::align_grid_directories(context, false)?;
-            lrm_rust::pipeline::adapters::grid::bundle_grid_utterances(context)?;
-            lrm_rust::pipeline::adapters::grid::normalize_to_standard_formats(context)?;
-            lrm_rust::pipeline::adapters::grid::clean_corpus(context, false)?;
+            grid::align_grid_directories(context, false)?;
+            grid::bundle_grid_utterances(context)?;
+            grid::normalize_to_standard_formats(context)?;
+            grid::clean_corpus(context, false)?;
 
             let grid_dataset = GridDataset::new(context, token_map.as_ref(), Some(tracker_config), None);
-            grid_dataset.preprocess_all();
+            grid_dataset.pre_extract_all();
         } // DatasetSource::Lrw => {}  // stubbed for future
     }
 

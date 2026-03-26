@@ -63,6 +63,9 @@ use std::{
     },
 };
 
+/// Subdirectory of `grid-lr-corpus` for pre-extracted mouth-crop `.bin` tensors per dataset entry.
+const CROPPED_FRAMES_DIR: &str = "cropped_frames";
+
 
 
 pub struct GridDataset {
@@ -86,7 +89,7 @@ impl GridDataset {
     /// ### Params:
     /// - `context`: Filesystem context (that should contain `data/grid-lr-corpus/<speaker>/<utterance_id>/`
     /// - `token_map`: Bidirectional mapping of tokens to IDs for transcript encoding.
-    /// - `tracker_config`: Optional lip tracker config for on-the-fly cropping when preproc bins are missing.
+    /// - `tracker_config`: Optional lip tracker config for on-the-fly cropping when pre-extracted `.bin` crops are missing.
     /// - `active_subset`: Optional `(fraction, seed)` for subsetting (e.g. `Some((0.1, 69))` = 10% with seed 69). `None` = full dataset.
     ///
     /// ### Returns:
@@ -174,7 +177,7 @@ impl GridDataset {
 
     /// Attempts to load a single dataset entry by index.
     ///
-    /// Fast path: loads video frames from preprocessed `.bin` in `preproc_frames/` if present.
+    /// Fast path: loads video frames from pre-extracted `.bin` mouth crops in `cropped_frames/` if present.
     /// Slow path: decodes video and runs `LipTracker` (or full frames if no tracker).
     ///
     /// ### Params:
@@ -184,14 +187,14 @@ impl GridDataset {
     /// Standardized `VsrmItem` with [C, T, H, W] frames / transcript IDs, or `None` on any failure.
     fn try_load(&self, index: usize) -> Option<VsrmItem> {
         let entry = self.entries.get(index)?;
-        let preproc_path = self.grid_path.join("preproc_frames");       // path to preprocessed collection of videos for each speaker
-        let bin_path = preproc_path.join(entry).with_extension("bin");  // path to individual video frames as a binary file
+        let pre_extract_path = self.grid_path.join(CROPPED_FRAMES_DIR);
+        let bin_path = pre_extract_path.join(entry).with_extension("bin");
 
         // load GRID transcripts and video frames
         let transcript_ids = self.load_transcript(entry).ok()?;
-        // preproc_frames contain mouth crops; only use fast path when we want cropped (tracker_config is Some)
+        // cropped_frames holds mouth crops; only use fast path when we want cropped (tracker_config is Some)
         let frames = if bin_path.exists() && self.tracker_config.is_some() {
-            // fast path: load from preprocessed binary (mouth crops)
+            // fast path: load from pre-extracted binary (mouth crops)
             let (data, (h, w, t)) = read_tensor_3d::<u8, _>(&bin_path).ok()?;
             if data.is_empty() || t == 0 { return None; }
             TensorData::new(data, vec![1, t, h, w])
@@ -427,21 +430,21 @@ impl GridDataset {
         (mean as f32, std_dev as f32)
     }
 
-    /// Preprocesses video frames as mouth crops to disk for faster training.
+    /// Pre-extracts mouth-crop frames to disk (`cropped_frames/{entry}.bin`) for faster training.
     ///
-    /// Skips if `preproc_frames/manifest.json` exists and `num_entries == len()` (run-once-and-skip).
-    /// 
-    /// Otherwise iterates entries, loads from video when bin missing, saves to `preproc_frames/{entry}.bin`.
-    pub fn preprocess_all(&self) {
-        let preproc_path = self.grid_path.join("preproc_frames");
-        let manifest_path = preproc_path.join("manifest.json");
-        std::fs::create_dir_all(&preproc_path).expect("failed to create preproc_frames directory");
+    /// Skips if `cropped_frames/manifest.json` exists and `num_entries == len()` (run-once-and-skip).
+    ///
+    /// Otherwise iterates entries, loads from video when bin missing, saves to `cropped_frames/{entry}.bin`.
+    pub fn pre_extract_all(&self) {
+        let pre_extract_path = self.grid_path.join(CROPPED_FRAMES_DIR);
+        let manifest_path = pre_extract_path.join("manifest.json");
+        std::fs::create_dir_all(&pre_extract_path).expect("failed to create cropped_frames directory");
 
         #[derive(Serialize, Deserialize)]
-        struct PreprocManifest { num_entries: usize }
+        struct PreExtractManifest { num_entries: usize }
 
         if manifest_path.exists() {
-            if let Ok(manifest) = load_json::<_, PreprocManifest>(&manifest_path) {
+            if let Ok(manifest) = load_json::<_, PreExtractManifest>(&manifest_path) {
                 if manifest.num_entries == self.len() {
                     println!("Pre-extracted crops already complete ({} entries)\n", manifest.num_entries);
                     return;
@@ -449,7 +452,7 @@ impl GridDataset {
             }
         }
 
-        println!("Preprocessing mouth regions for {} samples...", self.len());
+        println!("Pre-extracting GRID mouth regions for {} samples...", self.len());
 
         let prog_bar = ProgressBar::new(self.len() as u64);
         prog_bar.set_style(
@@ -460,7 +463,7 @@ impl GridDataset {
 
         for i in 0..self.len() {
             let entry = &self.entries[i];
-            let bin_path = preproc_path.join(entry).with_extension("bin");
+            let bin_path = pre_extract_path.join(entry).with_extension("bin");
 
             if !bin_path.exists() {
                 if let Some(item) = self.try_load(i) {
@@ -476,9 +479,11 @@ impl GridDataset {
             prog_bar.inc(1);
         }
 
-        let manifest = PreprocManifest { num_entries: self.len() };
-        save_json(&manifest_path, &manifest).expect("failed to write preproc manifest");
-        prog_bar.finish_with_message("Preprocessing complete");
+        let manifest = PreExtractManifest { num_entries: self.len() };
+        save_json(&manifest_path, &manifest).expect("failed to write pre_extract manifest");
+        prog_bar.finish_with_message("Pre-extraction complete");
+        println!("\n");
+
     }
 }
 

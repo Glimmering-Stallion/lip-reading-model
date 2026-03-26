@@ -75,6 +75,7 @@ use std::{
     },
     thread,
     time::Duration,
+    process::Command,
 };
 
 
@@ -202,7 +203,7 @@ impl<B: Backend> InferenceSession<B> {
     /// - `frames`: Contiguous grayscale mouth crop frames.
     ///
     /// ### Returns:
-    /// The decoded prediction string, or an Error String.
+    /// The decoded prediction string, or [`ESS`].
     pub fn predict_frames(&self, frames: FramesBuffer) -> Result<String, ESS> {
         let (h, w) = (frames.height, frames.width);
         let t = frames.data.len() / (h * w);
@@ -301,7 +302,7 @@ impl SlidingWindow {
 /// - `camera`: OpenCV camera device index (used only when `input` is `None`; typically `0` for the default webcam).
 /// 
 /// ### Returns:
-/// `Ok(())` on clean exit, or an Error String if file IO or tracking fails.
+/// `Ok(())` on clean exit, or [`ESS`] if file IO or tracking fails.
 pub fn infer<B: Backend>(
     session: InferenceSession<B>,
     context: &Context,
@@ -338,7 +339,7 @@ pub fn infer<B: Backend>(
 /// - `tracker_config`: Configuration for the tracker backend to use.
 /// 
 /// ### Returns:
-/// `Ok(())` on clean exit, or an Error String if file IO or tracking fails.
+/// `Ok(())` on clean exit, or [`ESS`] if file IO or tracking fails.
 fn infer_file<B: Backend>(
     input_path: &Path,
     session: InferenceSession<B>,
@@ -360,11 +361,25 @@ fn infer_file<B: Backend>(
     let output_path = context.outputs_path.join(bundle_id);
     let output_txt_path = output_path.join(format!("{}.txt", bundle_id));
     let output_viz_path = output_path.join(format!("{}.mp4", bundle_id));
+    let temp_viz_path = output_path.join(format!("{}_silent.mp4", bundle_id));
     fs::create_dir_all(&output_path)?;
 
     let txt_contents = format!("{}\n{}", prediction, transcript);
     fs::write(&output_txt_path, txt_contents.as_bytes())?;
-    annotate_video(&video_path, &output_viz_path, &prediction, tracker_config)?;
+
+    annotate_video(&video_path, &temp_viz_path, &prediction, tracker_config)?;
+    match mux_audio(&temp_viz_path, &video_path, &output_viz_path) {
+        Ok(_) => {
+            // clean up temporary silent video on success
+            let _ = fs::remove_file(&temp_viz_path);
+        }
+        Err(e) => {
+            // if FFmpeg fails or isn't installed, just use silent video as final output
+            eprintln!("audio muxing failed ({}), proceeding with silent video", e);
+            let _ = fs::remove_file(&output_viz_path);
+            fs::rename(&temp_viz_path, &output_viz_path)?;
+        }
+    }
 
     println!("Prediction: {}", prediction);
     println!("Ground Truth: {}", transcript);
@@ -388,7 +403,7 @@ fn infer_file<B: Backend>(
 /// - `camera`: The hardware index of the camera to open.
 ///
 /// ### Returns:
-/// `Ok(())` on clean exit (ESC pressed), or an Error String if hardware/tracking fails.
+/// `Ok(())` on clean exit (ESC pressed), or [`ESS`] if hardware/tracking fails.
 fn infer_live<B>(
     camera: i32,
     session: InferenceSession<B>,
@@ -484,6 +499,9 @@ where
 /// [`VizMetadata`] (face/mouth boxes, etc.) and prediction string with [`FrameAnnotator`],
 /// converts grayscale frames to BGR, and writes to `output_path` using `VideoWriter` (H.264/MPEG-4
 /// fourcc `mp4v`, FPS from the container or 25.0 when missing).
+/// 
+/// **Video only** – OpenCV does not write an audio track;
+/// file-mode [`infer_file`] can mux source audio afterward via [`mux_audio`].
 ///
 /// Does **not** run VSRM; intended as a visualization pass after `predict_frames`.
 ///
@@ -494,7 +512,7 @@ where
 /// - `tracker_config`: Configuration for the tracker backend to use.
 ///
 /// ### Returns:
-/// `Ok(())` when at least one frame was written; error if capture fails, no frames are decoded, or writing fails.
+/// `Ok(())` when at least one frame was written; [`ESS`] if capture fails, no frames are decoded, or writing fails.
 pub fn annotate_video(
     video_path: &Path,
     output_path: &Path,
@@ -563,6 +581,69 @@ pub fn annotate_video(
     }
 
     if writer.is_none() { return Err(io_err("no frames decoded; cannot write video", ErrorKind::InvalidData)); }
+
+    Ok(())
+}
+
+
+
+/// Muxes an optional source audio signal into a video-only file using ffmpeg.
+///
+/// Maps video stream `0:v:0` from the video-only `video_path` and `1:a:0?` from `audio_path` (optional
+/// audio requires a recent ffmpeg).
+/// 
+/// Video is copied (`-c:v copy`); audio is re-encoded to AAC for MP4.
+///
+/// ### Params:
+/// - `video_path`: Annotated or other video-only MP4 (no audio required) path.
+/// - `audio_path`: Original source file path to take the audio track from (often same file used for inference).
+/// - `output_path`: Final muxed MP4 destination path (`-y` arg overwrites).
+///
+/// ### Returns:
+/// `Ok(())` if ffmpeg exits successfully; [`ESS`] if ffmpeg is missing, arguments are invalid, or mux fails.
+pub fn mux_audio(
+    video_path: &Path,
+    audio_path: &Path,
+    output_path: &Path,
+) -> Result<(), ESS> {
+    let vid_path_str = video_path.to_str()
+        .ok_or_else(|| io_err("invalid video-only path", ErrorKind::InvalidInput))?;
+    let aud_path_str = audio_path.to_str()
+        .ok_or_else(|| io_err("invalid audio source path", ErrorKind::InvalidInput))?;
+    let out_path_str = output_path.to_str()
+        .ok_or_else(|| io_err("invalid output path", ErrorKind::InvalidInput))?;
+
+    let output = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            vid_path_str,
+            "-i",
+            aud_path_str,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+            out_path_str,
+        ])
+        .output()
+        .map_err(|e| {
+            if e.kind() == ErrorKind::NotFound { io_err("ffmpeg not found on PATH; annotated video will have no audio", ErrorKind::NotFound) }
+            else { io_err(format!("failed to spawn ffmpeg: {}", e), ErrorKind::Other) }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(io_err(format!("ffmpeg mux failed: {}", stderr.trim()), ErrorKind::Other));
+    }
 
     Ok(())
 }

@@ -301,8 +301,8 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 ## 26. Standardized Corpus Formats Established and Conversion Helpers Implemented for GRID
 
 - Established a new standardized dataset corpus format to adhere to, in the form of sharded video-transcript bundles (with videos as .mp4 files and transcripts as .txt files).
-- `grid_adapter`: `convert_to_standard_mp4` (ffmpeg H.264), `convert_to_standard_txt` (word line from `.align`), `normalize_grid_standard_formats`, `clean_corpus` (optional dry-run; drops `.mpg`/`.align` only when `.mp4`/`.txt` exist and are non-empty).
-- `preprocess` for GRID runs normalize + clean after bundle; **ffmpeg** must be on `PATH` when `.mpg` files need transcoding.
+- `grid_adapter`: `convert_to_standard_mp4` (ffmpeg H.264), `convert_to_standard_txt` (word line from `.align`), `normalize_to_standard_formats`, `clean_corpus` (optional dry-run; drops `.mpg`/`.align` only when `.mp4`/`.txt` exist and are non-empty).
+- `preprocess` for GRID runs align/bundle, normalize + clean, then `GridDataset::pre_extract_all` (mouth-crop `.bin` under `cropped_frames/`; see **§30** for later renames from `preproc_frames/` / `preprocess_all`); **ffmpeg** must be on `PATH` when `.mpg` files need transcoding.
 - `GridDataset` / inference resolution: prefer `.mp4` and `.txt`, fall back to `.mpg` / `.align`.
 
 **Note:** That fallback applies to **dataset loading** and corpus layout; **`infer --input`** bundle rules are stricter and are summarized in **§27**.
@@ -310,10 +310,8 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 ## 27. Static File Visualization Overlay
 
 - **Bundle-only file infer:** `infer --input` must be a bundled video_transcript **directory** whose name is the sample stem (`.../<stem>/`). [`resolve_inference_input`](LRM Rust/src/cli.rs) selects non-empty `<stem>.mp4` and `<stem>.txt` beside it.
-- **Post-predict artifacts:** After `predict_frames`, results are written under `outputs/<stem>/`: a text file (prediction and reference transcript) and an **annotated MP4** re-encoded from the source video with tracker overlays and caption text ([`annotate_video`](LRM Rust/src/inference/predictor.rs)—second pass, does not run the VSRM).
+- **Post-predict artifacts:** After `predict_frames`, results are written under `outputs/<stem>/`: a text file (prediction and reference transcript) and an **annotated MP4** re-encoded from the source video with tracker overlays ([`annotate_video`](LRM Rust/src/inference/predictor.rs)—second pass, does not run the VSRM). **§32:** optional **source audio** is muxed into that MP4 when ffmpeg succeeds.
 - **Live mode unchanged:** Webcam path still uses `FrameAnnotator` + `LiveWindow` as before.
-
-# Change Logs Since Last Git Commit
 
 ## 28. CTC Loss Forward Optimizations ([`src/ctc/ctc_loss.rs`](src/ctc/ctc_loss.rs), [`src/utils.rs`](src/utils.rs))
 
@@ -331,6 +329,26 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **CPU top-k per frame:** Reuse a length-`V` buffer of `(token_id, log_prob)` pairs, fill from the current row, then `select_nth_unstable_by(k - 1, …)` and read `top_k_pairs[..k]`; blank log-prob read directly from the row slice.
 - **Batch decode:** `log_probs.dims()` without cloning the tensor solely for shape.
 
+# Change Logs Since Last Git Commit
+
+## 30. `GridDataset` mouth-crop cache API rename
+
+- `GridDataset::preprocess_all` was renamed to **`pre_extract_all`** to reflect that it only writes mouth-crop `.bin` files (the CLI **`preprocess`** subcommand is unchanged and still runs the full GRID pipeline).
+- The pre-extract cache directory under `grid-lr-corpus` is **`cropped_frames/`** (replaces `preproc_frames/`); rename the folder or re-run `pre_extract_all` to migrate existing caches.
+
+## 31. Normalize GRID corpus has a progress bar ([`grid_adapter.rs`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs))
+
+- [`normalize_to_standard_formats`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs) now drives an **indicatif** progress bar over bundled utterances (same template and `#>-` bar chars as [`GridDataset::pre_extract_all`](LRM Rust/src/pipeline/adapters/grid/grid_dataset.rs): spinner, elapsed, 40-char bar, `pos`/`len`, per-step message, ETA).
+- Added **`list_bundled_dirs`**: walks `grid-lr-corpus/<speaker>/<utterance_id>/` and returns `Vec<(PathBuf, speaker, id)>` so the normalize pass has a total count before converting `.mpg`→`.mp4` and `.align`→`.txt`.
+- **`clean_corpus`** iterates the same list helper (no duplicate directory-walk logic).
+
+## 32. Inference file annotated video output with mux audio ([`predictor.rs`](LRM Rust/src/inference/predictor.rs))
+
+- **Problem:** OpenCV `VideoWriter` produces **video-only** MP4s, so the annotated output lost the bundle clip’s audio when played back.
+- **Pipeline:** `infer_file` writes a temporary **`{stem}_silent.mp4`** via [`annotate_video`](LRM Rust/src/inference/predictor.rs), then [`mux_audio`](LRM Rust/src/inference/predictor.rs) runs **ffmpeg** with `-map 0:v:0 -map 1:a:0?`, `-c:v copy`, `-c:a aac`, `-shortest` to build the final **`{stem}.mp4`** (video from the temp file, optional audio from the original bundle video). The temp file is removed on success.
+- **Fallback:** If ffmpeg is missing or muxing fails, the temp file is **renamed** to `{stem}.mp4` after best-effort removal of any partial output—inference still completes (**video-only**). User-facing message: video-only output, not “silent” in the sense of black frames.
+- **Docs:** `annotate_video` documents video-only output; `mux_audio` documents ffmpeg-only muxing (no tracking or overlays).
+
 ## Files Modified (Summary)
 
 | File                      | Changes                                                                                                        |
@@ -347,7 +365,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `learner.rs`              | Composed LR scheduler, train/resume logic; VsrmLearnerConfig: rf, dataset_src, builder; train() returns Result |
 | `summary.rs`              | New SummaryVisitor module                                                                                      |
 | `main.rs`                 | CLI subcommands; infer wired; TrainBackend/InferBackend; Preprocess DatasetSource                              |
-| `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow                                         |
+| `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow; **§32** `mux_audio`, `infer_file` temp + ffmpeg mux |
 | `inference/loader.rs`     | New: load_video, load_frame, open_camera                                                                       |
 | `inference/overlay.rs`    | New: FrameAnnotator (draw), LiveWindow (HighGUI)                                                                |
 | `pipeline/video.rs`       | Deleted; logic in inference/loader.rs                                                                          |
