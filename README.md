@@ -55,11 +55,9 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - Inserts spaces between words in alignment-derived targets (`SPACE_ID`) for WER metrics.
 - Converts labels into integer sequences using a bidirectional vocabulary map.
 - Designed a character-level vocabulary including:
-  - Lowercase letters
-  - Digits
-  - Punctuation
-  - Space
-  - A dedicated CTC blank symbol
+  - Lowercase letters (a–z)
+  - Space (word boundaries)
+  - Dedicated CTC blank symbol
 - Ensured the blank symbol:
   - Appears only in model outputs.
   - Never appears in training targets.
@@ -163,7 +161,6 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - **Grad-CAM For Overlay Visualization:** During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
 - **FPS video standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
 - **Word-Level N-gram vs. Char Level Decoder Incongruity:** Current decoding uses character-level LM scoring; evaluate unifying with a word-level LM/tokenization or retraining the LM to match the decoder’s output unit.
-- **Talking vs. Non-Talking States:** Live inference still runs the lip-reading model whenever the camera stream is active. Add a **gating or state layer** (audio-free): e.g. mouth-ROI motion / frame-difference energy, tracker confidence (face/mouth found), or optional logits-based confidence, to classify **active visual speech** vs **idle/silent** and suppress, clear, or hold the displayed prediction accordingly.
 
 ## CLI Usage
 

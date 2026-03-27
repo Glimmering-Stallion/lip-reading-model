@@ -7,6 +7,7 @@
 
 use burn::config::Config;
 use opencv::{
+    core as cv_core,
     core::{
         Mat,
         Point2f,
@@ -46,6 +47,9 @@ pub struct HaarTrackerConfig {
 
     #[config(default = "0.5")]
     pub smoothing_alpha: f32,             // smoothing factor to control amount of weight to most recent frame versus last frame (higher values mean smoother but slower averages)
+
+    #[config(default = "10.0")]
+    pub energy_threshold: f64,            // min temporal energy threshold to consider the mouth as in motion, determined using MAD (Mean Absolute Deviation)
 }
 
 
@@ -54,6 +58,7 @@ pub struct HaarTracker {
     pub face_cascade: CascadeClassifier,
     pub mouth_cascade: CascadeClassifier,
     pub prev_center: Option<Point2f>,
+    pub prev_crop: Option<Mat>,
     config: HaarTrackerConfig,
 }
 
@@ -77,6 +82,7 @@ impl HaarTrackerConfig {
             face_cascade,
             mouth_cascade,
             prev_center: None,
+            prev_crop: None,
             config: self.clone(),
         }
     }
@@ -97,15 +103,15 @@ impl LipTrackerBackend for HaarTracker {
     /// - `frame`: The frame to process.
     ///
     /// ### Returns:
-    /// A [`TrackerResult`] containing the mouth crop and visualization metadata.
+    /// A [`TrackerResult`] containing the mouth crop, visualization metadata, and tracker/speech statuses.
     fn process_frame(&mut self, frame: &Mat) -> Result<TrackerResult, ESS> {
         let face_roi = match self.detect_face_roi(frame) {
             Some(roi) => roi,
             None => {
-                let center = self.prev_center.unwrap_or_else(|| {
-                    Point2f::new(frame.cols() as f32 / 2.0, frame.rows() as f32 / 2.0)
-                });
+                let center = self.prev_center
+                    .unwrap_or_else(|| { Point2f::new(frame.cols() as f32 / 2.0, frame.rows() as f32 / 2.0) });
                 self.prev_center = Some(center);
+                self.prev_crop = None;
                 let fallback_roi = Rect::new(
                     (center.x as i32) - (self.config.target_dims.1 as i32 / 2),
                     (center.y as i32) - (self.config.target_dims.0 as i32 / 2),
@@ -120,6 +126,8 @@ impl LipTrackerBackend for HaarTracker {
                         landmarks: None,
                         stabilized_center: Some(center),
                     },
+                    has_lock: false,
+                    has_lip_motion: false,
                 });
             }
         };
@@ -145,9 +153,8 @@ impl LipTrackerBackend for HaarTracker {
             );
             self.stabilize_position(abs_center)
         } else {
-            self.prev_center.unwrap_or_else(|| {
-                Point2f::new(frame.cols() as f32 / 2.0, frame.rows() as f32 / 2.0)
-            })
+            self.prev_center
+                .unwrap_or_else(|| { Point2f::new(frame.cols() as f32 / 2.0, frame.rows() as f32 / 2.0) })
         };
 
         self.prev_center = Some(curr_center);
@@ -159,6 +166,8 @@ impl LipTrackerBackend for HaarTracker {
             self.config.target_dims.0 as i32,
         );
 
+        let final_crop = self.rescale_to_target_dims(frame, final_roi);
+
         // convert mouth_roi from half-face-relative to frame-absolute for visualization
         let abs_mouth_rect = mouth_roi.map(|mr| Rect::new(
             half_face_roi.x + mr.x,
@@ -167,19 +176,58 @@ impl LipTrackerBackend for HaarTracker {
             mr.height,
         ));
 
+        let metadata = VizMetadata {
+            face_rect: Some(face_roi),
+            mouth_rect: abs_mouth_rect,
+            landmarks: None,
+            stabilized_center: Some(curr_center),
+        };
+
+        // tracker lock and per-frame lip-motion proxy (MAD on consecutive crops)
+        let has_lock = self.has_lock(&metadata);
+        let has_lip_motion = if has_lock { self.has_lip_motion(&final_crop) }
+        else { self.prev_crop = None; false };
+
         Ok(TrackerResult {
-            crop: self.rescale_to_target_dims(frame, final_roi),
-            metadata: VizMetadata {
-                face_rect: Some(face_roi),
-                mouth_rect: abs_mouth_rect,
-                landmarks: None,
-                stabilized_center: Some(curr_center),
-            },
+            crop: final_crop,
+            metadata,
+            has_lock,
+            has_lip_motion,
         })
     }
 
-    /// Resets temporal smoothing state for a new video.
-    fn reset_state(&mut self) { self.prev_center = None; }
+    /// Returns `true` when mean absolute difference (MAD) between current crop and the stored previous crop exceeds [`HaarTrackerConfig::energy_threshold`].
+    ///
+    /// This is a **visual lip-motion** cue, not linguistic “talking.” Updates the lip-motion baseline for the next frame.
+    fn has_lip_motion(&mut self, curr_crop: &Mat) -> bool {
+        let mut is_moving = false;
+
+        if let Some(ref prev_crop) = self.prev_crop {
+            if prev_crop.size().unwrap() == curr_crop.size().unwrap() {
+                let mut diff = Mat::default();
+                if cv_core::absdiff(prev_crop, curr_crop, &mut diff).is_ok() {
+                    if let Ok(mean_scalar) = cv_core::mean(&diff, &cv_core::no_array()) {
+                        let energy = mean_scalar[0];
+                        is_moving = energy > self.config.energy_threshold;
+                    }
+                }
+            }
+        }
+
+        // save current crop for next frame comparison
+        self.prev_crop = Some(curr_crop.clone());
+        is_moving
+    }
+
+    /// Returns `true` when tracking has lock on a valid face and mouth region to feed a cropped frame to the VSRM sliding window.
+    fn has_lock(&self, metadata: &VizMetadata) -> bool
+    { metadata.face_rect.is_some() && metadata.mouth_rect.is_some() }
+
+    /// Resets temporal smoothing and lip-motion baseline states for a new video.
+    fn reset_state(&mut self) {
+        self.prev_center = None;
+        self.prev_crop = None;
+    }
 
     /// Returns the target output dimensions `(height, width)` for the mouth crop.
     fn target_dims(&self) -> (usize, usize) { self.config.target_dims }

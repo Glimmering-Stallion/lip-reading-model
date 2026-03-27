@@ -70,23 +70,21 @@ impl FrameAnnotator {
         }
     }
 
-    /// Draws prediction text along the bottom of the frame.
+    /// Draws a given text at a given position within a given frame.
     ///
     /// ### Params:
-    /// - `frame`: The image to draw on (mutated in place).
-    /// - `text`: The predicted text string to display; if empty, does nothing.
-    pub fn draw_prediction(&self, frame: &mut Mat, text: &str) {
+    /// - `frame`: The image frame to draw on (mutated in place).
+    /// - `text`: The text string to display (if empty, does nothing).
+    /// - `position`: The origin position in the frame to draw the text string at.
+    pub fn draw_text(&self, frame: &mut Mat, text: &str, position: Point) {
         if text.is_empty() { return; }
 
+        let font = imgproc::FONT_HERSHEY_SIMPLEX;
         let white = Scalar::new(255.0, 255.0, 255.0, 0.0);
         let black = Scalar::new(0.0, 0.0, 0.0, 0.0);
 
-        let rows = frame.rows();
-        let origin = Point::new(10, rows - 20);
-
-        let font = imgproc::FONT_HERSHEY_SIMPLEX;
-        let _ = imgproc::put_text(frame, text, origin, font, 0.8, black, 1, imgproc::LINE_8, false);
-        let _ = imgproc::put_text(frame, text, origin, font, 0.8, white, 1, imgproc::LINE_8, false);
+        let _ = imgproc::put_text(frame, text, position, font, 0.8, black, 1, imgproc::LINE_8, false);
+        let _ = imgproc::put_text(frame, text, position, font, 0.8, white, 1, imgproc::LINE_8, false);
     }
 }
 

@@ -24,10 +24,12 @@ thread_local! {
 /// Standardized output from any tracker backend.
 ///
 /// Contains the mouth crop tensor (for the model) alongside optional
-/// visualization metadata (for the display fork).
+/// visualization metadata (for the display fork) and tracker/speech statuses.
 pub struct TrackerResult {
     pub crop: Mat,
     pub metadata: VizMetadata,
+    pub has_lock: bool,
+    pub has_lip_motion: bool,
 }
 
 
@@ -61,11 +63,19 @@ pub trait LipTrackerBackend: Send {
     /// A [`TrackerResult`] containing the mouth crop and visualization metadata.
     fn process_frame(&mut self, frame: &Mat) -> Result<TrackerResult, ESS>;
 
-    /// Resets temporal smoothing state for processing a new video.
+    /// Clears backend-specific temporal state so a new video or session does not reuse previous-frame memory.
     fn reset_state(&mut self);
 
     /// Returns the target output dimensions `(height, width)` for the mouth crop.
     fn target_dims(&self) -> (usize, usize);
+
+    /// Returns `true` when tracking is reliable enough to feed the VSRM sliding window (backend-specific interpretation of [`VizMetadata`]).
+    fn has_lock(&self, metadata: &VizMetadata) -> bool;
+
+    /// Returns `true` if physical mouth activity is detected in the current frame.
+    /// - Haar backends implement this using Temporal Energy (MAD) on the `crop`.
+    /// - Landmark backends implement this using Mouth Aspect Ratio (MAR) on the `metadata`.
+    fn has_lip_motion(&mut self, curr_crop: &Mat) -> bool;
 }
 
 
@@ -120,9 +130,7 @@ where
 {
     TRACKER_TLS.with(|cell| {
         let mut opt = cell.borrow_mut();
-        if opt.is_none() {
-            *opt = Some(config.init());
-        }
+        if opt.is_none() { *opt = Some(config.init()); }
         f(&mut **opt.as_mut().unwrap())
     })
 }

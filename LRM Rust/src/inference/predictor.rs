@@ -7,7 +7,10 @@
 
 // custom imports
 use crate::{
-    cli::{find_latest_checkpoint_epoch, resolve_inference_input},
+    cli::{
+        find_latest_checkpoint_epoch,
+        resolve_inference_input,
+    },
     context::Context,
     ctc::ctc_decode::{
         CtcDecodeType,
@@ -22,6 +25,7 @@ use crate::{
             open_camera
         },
         overlay::{FrameAnnotator, LiveWindow},
+        speech_gate::SpeechGate,
     },
     pipeline::{
         FramesBuffer,
@@ -51,6 +55,7 @@ use crossbeam_channel::{
 use opencv::{
     prelude::*,
     core::{
+        Point,
         Size,
         AlgorithmHint,
         Mat,
@@ -103,6 +108,15 @@ pub struct VsrmPredictorConfig {
 
     #[config(default = "CtcDecodeType::GreedySearch")]
     pub search_type: CtcDecodeType, // decoding search type strategy (Greedy vs. Prefix Beam)
+
+    #[config(default = true)]
+    pub speech_gate_enabled: bool,
+
+    #[config(default = 4)]
+    pub speech_gate_on_frames: usize, // consecutive frames with both tracker lock and lip motion before the gate becomes speech-active
+
+    #[config(default = 12)]
+    pub speech_gate_off_frames: usize, // consecutive failing frames that condition before the gate closes (typically larger than `on` to reduce flip-flop)
 }
 
 
@@ -253,9 +267,8 @@ impl SlidingWindow {
     /// ### Params:
     /// - `crop`: The mouth crop `Mat` from the tracker.
     pub fn push(&mut self, crop: &Mat) {
-        if let Ok(bytes) = crop.data_bytes() {
-            self.frames.push_back(bytes.to_vec());
-        }
+        if let Ok(bytes) = crop.data_bytes()
+        { self.frames.push_back(bytes.to_vec()); }
     }
 
     /// Returns `true` when the window has accumulated enough frames for prediction.
@@ -281,10 +294,13 @@ impl SlidingWindow {
     /// ### Params:
     /// - `n`: Number of frames to drop from the front.
     pub fn shift(&mut self, n: usize) {
-        for _ in 0..n.min(self.frames.len()) {
-            self.frames.pop_front();
-        }
+        for _ in 0..n.min(self.frames.len())
+        { self.frames.pop_front(); }
     }
+
+    /// Drops all accumulated frames in the temporal window (such as when [`SpeechGate`] closes).
+    pub fn clear(&mut self)
+    { self.frames.clear(); }
 }
 
 
@@ -420,6 +436,11 @@ where
     let annotator = FrameAnnotator;
     let live_window = LiveWindow::new("LRM Live Inference")?;
 
+    let mut speech_gate = SpeechGate::new(
+        predictor_config.speech_gate_on_frames,
+        predictor_config.speech_gate_off_frames,
+    );
+
     // create sliding window using session's resolved receptive field
     let (h, w) = predictor_config.frame_dims;
     let t = if predictor_config.temporal_window == 0
@@ -428,7 +449,7 @@ where
     let mut window = SlidingWindow::new(t, h, w);
 
     // req: main (UI) --> worker (infer) (bounded 1 to prevent latency if model falls behind)
-    // res: worker (infer) --> main (UI) (bounded 1 as we only care about most recent prediction)
+    // res: main (UI) <-- worker (infer) (bounded 1 as we only care about most recent prediction)
     let (req_tx, req_rx) = bounded::<InferenceRequest>(1);
     let (res_tx, res_rx) = bounded::<InferenceResponse>(1);
 
@@ -455,26 +476,58 @@ where
 
         // detect face/mouth, overlay on display only frame clone
         let mut display = frame.clone();
-        let result = tracker.process_frame(&frame)?;
-        annotator.draw_tracker_info(&mut display, &result.metadata);
+        let tracked_result = tracker.process_frame(&frame)?;
+        annotator.draw_tracker_info(&mut display, &tracked_result.metadata);
+    
+        let has_lock = tracked_result.has_lock;
+        let has_lip_motion = tracked_result.has_lip_motion;
+        let (speech_active, just_became_idle) = if predictor_config.speech_gate_enabled
+        { speech_gate.update(has_lock, has_lip_motion) } else { (true, false) };
 
-        // push current crop into sliding window buffer
-        window.push(&result.crop);
-        if window.is_full() {
-            // if buffer ready, try to hand off to worker (infer) thread
-            // if worker busy, send fails and window buffer dropped
-            let buffer = window.to_buffer();
-            let _ = req_tx.try_send(buffer);
-            window.shift(predictor_config.temporal_stride);
+        // when speech gate just closed (was speech-active, now idle),
+        // clear window / last prediction
+        // and drain stale worker responses
+        if just_became_idle {
+            window.clear();
+            last_prediction.clear();
+            while res_rx.try_recv().is_ok() {}
         }
 
-        // check if worker (infer) thread has finished a prediction
+        // when speech gate is speech-active,
+        // accumulate crops for the sliding window
+        if speech_active {
+            // push current crop into sliding window buffer
+            window.push(&tracked_result.crop);
+            if window.is_full() {
+                // if buffer ready, try to hand off to worker (infer) thread
+                // if worker busy, send fails and window buffer dropped
+                let buffer = window.to_buffer();
+                let _ = req_tx.try_send(buffer);
+                window.shift(predictor_config.temporal_stride);
+            }
+        }
+
+        // check if worker (infer) thread has finished a prediction (always drain main receiver thread)
+        // only make predictions when gate is still speech-active
         if let Ok(pred) = res_rx.try_recv() {
-            last_prediction = pred.clone();
-            if !last_prediction.is_empty() { println!(">> {}", last_prediction); }
+            if speech_active {
+                last_prediction = pred.clone();
+                if !last_prediction.is_empty() { println!(">> {}", last_prediction); }
+            }
         }
 
-        annotator.draw_prediction(&mut display, &last_prediction);
+        // annotation text overlays
+        let prediction_text = if speech_active { last_prediction.as_str() } else { "" };
+        let tracker_status_text = if has_lock { "Tracker: Locked" } else { "Tracker: Searching" };
+        let speech_activity_text = if !has_lock { "Is Talking: --" }
+        else if speech_active { "Is Talking: Yes" }
+        else { "Is Talking: No" };
+
+        // draw text overlays
+        annotator.draw_text(&mut display, prediction_text, Point::new(30, frame.rows() - 90));
+        annotator.draw_text(&mut display, tracker_status_text, Point::new(30, frame.rows() - 60));
+        annotator.draw_text(&mut display, speech_activity_text, Point::new(30, frame.rows() - 30));
+
         if !live_window.show(&display)? { break Ok(()); }
     };
 
@@ -543,7 +596,7 @@ pub fn annotate_video(
         let result = tracker.process_frame(&frame)?;
         let mut display = frame.clone();
         annotator.draw_tracker_info(&mut display, &result.metadata);
-        // annotator.draw_prediction(&mut display, prediction);
+        // annotator.draw_text(&mut display, prediction, Point::new(10, frame.rows() - 20));
 
         // if writer none (meaning first frame):
         // - obtain native frame dims

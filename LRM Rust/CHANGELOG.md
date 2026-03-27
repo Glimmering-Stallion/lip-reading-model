@@ -246,7 +246,8 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 
 **VsrmPredictorConfig**
 
-- `frame_dims`, `rf_window_stride`, `search_type: CtcDecodeType`.
+- `model_id`, `frame_dims`, `temporal_window` (0 = derive from model receptive field), `temporal_stride`, `search_type: CtcDecodeType`.
+- **Speech gate (live inference):** `speech_gate_enabled` (default `true`), `speech_gate_on_frames` (default `4`), `speech_gate_off_frames` (default `12`). See **§33**.
 
 ## 18. Batcher and Misc
 
@@ -261,6 +262,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - Main loop for UI captures frames, runs mouth tracking + overlay rendering, and buffers sliding-window crops.
 - A dedicated worker thread owns the inference session and runs the expensive forward pass (`session.predict_frames`).
 - Bounded request/response channels (capacity 1) implement “most-recent-only” behavior to avoid latency creep when inference is slower than capture.
+- **§33:** Optional **speech-activity gating** on the main thread clears the sliding window and drains stale worker results when the visual gate closes; see [`SpeechGate`](src/inference/speech_gate.rs).
 
 ## 20. Pass-By-Reference vs. Pass-By-Value Signature Consistency
 
@@ -329,8 +331,6 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **CPU top-k per frame:** Reuse a length-`V` buffer of `(token_id, log_prob)` pairs, fill from the current row, then `select_nth_unstable_by(k - 1, …)` and read `top_k_pairs[..k]`; blank log-prob read directly from the row slice.
 - **Batch decode:** `log_probs.dims()` without cloning the tensor solely for shape.
 
-# Change Logs Since Last Git Commit
-
 ## 30. `GridDataset` mouth-crop cache API rename
 
 - `GridDataset::preprocess_all` was renamed to **`pre_extract_all`** to reflect that it only writes mouth-crop `.bin` files (the CLI **`preprocess`** subcommand is unchanged and still runs the full GRID pipeline).
@@ -349,6 +349,41 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **Fallback:** If ffmpeg is missing or muxing fails, the temp file is **renamed** to `{stem}.mp4` after best-effort removal of any partial output—inference still completes (**video-only**). User-facing message: video-only output, not “silent” in the sense of black frames.
 - **Docs:** `annotate_video` documents video-only output; `mux_audio` documents ffmpeg-only muxing (no tracking or overlays).
 
+# Change Logs Since Last Git Commit
+
+## 33. Live speech-activity gating (visual lip motion + tracker lock)
+
+**Goal:** In **live** webcam inference, avoid feeding the VSRM sliding window and avoid showing stale on-screen predictions when crops are idle or unreliable. This is **not** audio VAD: it uses only the tracker’s per-frame flags.
+
+**`TrackerResult`** ([`src/pipeline/tracker/tracker.rs`](src/pipeline/tracker/tracker.rs)):
+
+- **`has_lock`**: Backend-specific “reliable face + mouth ROI” for this frame (Haar: both `face_rect` and `mouth_rect` present in [`VizMetadata`](src/pipeline/tracker/tracker.rs)).
+- **`has_lip_motion`**: Per-frame **visual** lip-motion proxy (not linguistic ground-truth speech). Haar computes **mean absolute difference (MAD)** between the current rescaled mouth crop and the previous frame’s crop; motion is `MAD > HaarTrackerConfig::energy_threshold` (Burn default **3.5**). The previous-crop baseline is cleared when lock is lost so motion does not carry across tracking gaps.
+
+**`SpeechGate`** ([`src/inference/speech_gate.rs`](src/inference/speech_gate.rs)):
+
+- A **good** frame is `has_lock && has_lip_motion`. The gate maintains good/bad streak counters with asymmetric hysteresis.
+- **Open:** after **`speech_gate_on_frames`** consecutive good frames (default **4**).
+- **Close:** after **`speech_gate_off_frames`** consecutive non-good frames (default **12**, usually larger than `on` to reduce flip-flop).
+- **`update(has_lock, has_lip_motion) -> (speech_active, just_became_idle)`**: `just_became_idle` is true on the frame the gate transitions active → inactive (caller clears buffers and drains stale async results).
+
+**`VsrmPredictorConfig`** ([`src/inference/predictor.rs`](src/inference/predictor.rs)):
+
+- Adds `speech_gate_enabled`, `speech_gate_on_frames`, `speech_gate_off_frames` (Burn `Config` defaults as above). **`run_infer_vsrm`** / CLI inference builds config with the builder pattern; gate fields use those defaults unless extended later.
+
+**`infer_live`** ([`src/inference/predictor.rs`](src/inference/predictor.rs)):
+
+- Each frame: `tracker.process_frame` → read `has_lock` / `has_lip_motion` → `SpeechGate::update` when enabled.
+- While **`speech_active`**: push crop into [`SlidingWindow`](src/inference/predictor.rs), stride and send `FramesBuffer` to the worker as before.
+- On **`just_became_idle`**: [`SlidingWindow::clear`](src/inference/predictor.rs), clear last prediction string, drain the bounded result channel so old decode strings are dropped.
+- Worker completions are applied to the UI only if still **`speech_active`** on that frame (avoids flashing text after the gate closed).
+- Overlays: “Tracker: Locked / Searching”; “Is Talking: Yes / No / --” where **Yes** means the gate is speech-active (lock + hysteresis on lip motion), **--** when not locked.
+- If **`speech_gate_enabled`** is `false`, the loop treats the gate as always active (no idle transitions, no buffer clears from the gate).
+
+**Static file inference:** Unchanged; gating applies only to the live path.
+
+**Tuning notes:** If “Is Talking: Yes” appears with still lips, **increase** `energy_threshold`: a **higher** value requires more MAD between consecutive crops before `has_lip_motion` is true (the default is fairly sensitive on noisy webcams). Adjust on/off frame counts for responsiveness vs stability.
+
 ## Files Modified (Summary)
 
 | File                      | Changes                                                                                                        |
@@ -365,7 +400,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `learner.rs`              | Composed LR scheduler, train/resume logic; VsrmLearnerConfig: rf, dataset_src, builder; train() returns Result |
 | `summary.rs`              | New SummaryVisitor module                                                                                      |
 | `main.rs`                 | CLI subcommands; infer wired; TrainBackend/InferBackend; Preprocess DatasetSource                              |
-| `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow; **§32** `mux_audio`, `infer_file` temp + ffmpeg mux |
+| `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow; **§32** `mux_audio`, `infer_file` temp + ffmpeg mux; **§33** `VsrmPredictorConfig` speech gate fields, `infer_live` gating, `SlidingWindow::clear` on gate close, channel drain |
 | `inference/loader.rs`     | New: load_video, load_frame, open_camera                                                                       |
 | `inference/overlay.rs`    | New: FrameAnnotator (draw), LiveWindow (HighGUI)                                                                |
 | `pipeline/video.rs`       | Deleted; logic in inference/loader.rs                                                                          |
@@ -378,3 +413,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `Cargo.toml`              | `crossbeam-channel`, macOS `embed_plist`, `rustc-hash` (decoder `FxHashMap`)                                                                   |
 | `ctc_loss.rs`             | Pre-gather target log-probs; precomputed `[N,T]` time mask; DP loop slices                                                                     |
 | `ctc_decode.rs`           | CPU slab beam acoustics; `FxHashMap`; `select_nth_unstable_by` pruning; `BeamPrefix::new`; reused `(id, log_prob)` buffer                     |
+| `inference/speech_gate.rs` | **§33:** `SpeechGate` hysteresis state machine (`has_lock` + `has_lip_motion`)                               |
+| `inference/mod.rs`        | **§33:** `pub mod speech_gate`                                                                                |
+| `pipeline/tracker/tracker.rs` | **§33:** `TrackerResult` flags (`has_lock`, `has_lip_motion`); `LipTrackerBackend` contract                  |
+| `pipeline/tracker/haar.rs` | **§33:** `process_frame` sets `has_lock` / `has_lip_motion`; MAD vs `energy_threshold`                       |
