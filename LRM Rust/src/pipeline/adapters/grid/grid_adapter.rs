@@ -103,24 +103,35 @@ fn discover_grid_files_at_any_depth(grid_root: &PathBuf) -> GridDiscovery {
         };
 
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk_dir(grid_root, &path, video_paths_by_speaker, align_paths_by_speaker);
+            let entry_path = entry.path();
+            let entry_id = entry
+                .file_name()
+                .to_string_lossy()
+                .to_string();
+
+            // skip hidden files and macOS metadata folders
+            if entry_id.is_empty()
+            || entry_id == "__MACOSX"
+            || entry_id.starts_with('.')
+            { continue; }
+
+            if entry_path.is_dir() {
+                walk_dir(grid_root, &entry_path, video_paths_by_speaker, align_paths_by_speaker);
                 continue;
             }
 
-            let ext = match path.extension().and_then(|e| e.to_str()) {
+            let ext = match entry_path.extension().and_then(|e| e.to_str()) {
                 Some(e) => e,
                 None => continue,
             };
             if ext != "mpg" && ext != "align" { continue; }
 
-            let utterance_id = match path.file_stem().and_then(|s| s.to_str()) {
+            let utterance_id = match entry_path.file_stem().and_then(|s| s.to_str()) {
                 Some(s) => s.to_string(),
                 None => continue,
             };
 
-            let speaker = match path
+            let speaker = match entry_path
                 .parent()
                 .and_then(|p| p.file_name())
                 .and_then(|n| n.to_str())
@@ -135,7 +146,7 @@ fn discover_grid_files_at_any_depth(grid_root: &PathBuf) -> GridDiscovery {
                     grid_root,
                     &speaker,
                     &utterance_id,
-                    path,
+                    entry_path,
                 );
             } else {
                 insert_indexed_path(
@@ -143,7 +154,7 @@ fn discover_grid_files_at_any_depth(grid_root: &PathBuf) -> GridDiscovery {
                     grid_root,
                     &speaker,
                     &utterance_id,
-                    path,
+                    entry_path,
                 );
             }
         }
@@ -242,17 +253,22 @@ fn list_bundled_dirs(grid_root: &Path) -> Result<Vec<(PathBuf, String, String)>,
             .map_err(|e| { io_err(format!("failed to read speaker dir {:?}: {}", speaker_path, e), ErrorKind::Other) })?;
 
         for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() { continue; }
-
+            let entry_path = entry.path();
             let entry_id = entry
                 .file_name()
-                .to_str()
-                .unwrap_or("")
+                .to_string_lossy()
                 .to_string();
-            if entry_id.is_empty() { continue; }
 
-            bundles_list.push((path, speaker.clone(), entry_id));
+            // skip non-directories,
+            // hidden files,
+            // and macOS metadata folders
+            if !entry_path.is_dir()
+            || entry_id.is_empty()
+            || entry_id == "__MACOSX"
+            || entry_id.starts_with('.')
+            { continue; }
+
+            bundles_list.push((entry_path, speaker.clone(), entry_id));
         }
     }
 

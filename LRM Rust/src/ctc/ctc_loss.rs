@@ -63,10 +63,10 @@ impl CtcLoss {
     /// requires separate input/target lengths for true lengths.
     ///
     /// ### Params:
-    /// - `inputs`: [N, T_max, Vocab] (time-padded logits from model)
-    /// - `targets`: [N, L_max] (length-padded target sequences)
-    /// - `input_lengths`: [N] (non-padded lengths of inputs)
-    /// - `target_lengths`: [N] (non-padded lengths of targets)
+    /// - `inputs`: [N, T_max, Vocab] (time-padded logits from model).
+    /// - `targets`: [N, L_max] (length-padded target sequences).
+    /// - `input_lengths`: [N] (non-padded lengths of inputs).
+    /// - `target_lengths`: [N] (non-padded lengths of targets).
     ///
     /// ### Returns:
     /// Scalar loss (if reduction is mean or sum).
@@ -95,10 +95,10 @@ impl CtcLoss {
     /// time-sequence grid that align with the modified target sequence
     ///
     /// ### Params:
-    /// - `inputs`: [N, T_max, Vocab] (time-padded logits from model)
-    /// - `targets`: [N, L_max] (length-padded target sequences)
-    /// - `input_lengths`: [N] (non-padded lengths of inputs)
-    /// - `target_lengths`: [N] (non-padded lengths of targets)
+    /// - `inputs`: [N, T_max, Vocab] (time-padded logits from model).
+    /// - `targets`: [N, L_max] (length-padded target sequences).
+    /// - `input_lengths`: [N] (non-padded lengths of inputs).
+    /// - `target_lengths`: [N] (non-padded lengths of targets).
     ///
     /// ### Returns:
     /// [N] (loss per sample in batch)
@@ -224,7 +224,7 @@ impl CtcLoss {
     /// Interleaves blank IDs into target sequences in batch for CTC loss computation.
     ///
     /// ### Params:
-    /// - `targets`: [N, L_max] (length-padded target sequences)
+    /// - `targets`: [N, L_max] (length-padded target sequences).
     /// - `device`: Backend device to create tensors on.
     ///
     /// ### Returns:
@@ -263,7 +263,7 @@ impl CtcLoss {
     /// Computes batch-wise skip validity masks for 1-pos and 2-pos jumps in time-sequence DP grid.
     ///
     /// ### Params:
-    /// - `interleaved_targets`: [N, 2L + 1] (length-padded target sequences with blanks interleaved)
+    /// - `interleaved_targets`: [N, 2L + 1] (length-padded target sequences with blanks interleaved).
     /// - `device`: Backend device to create tensors on.
     ///
     /// ### Returns:

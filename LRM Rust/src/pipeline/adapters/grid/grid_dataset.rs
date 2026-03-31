@@ -87,7 +87,7 @@ impl GridDataset {
     /// When `active_subset` is `Some((pct, seed))`, uses only fraction `pct` of entries (sampled with `seed`).
     ///
     /// ### Params:
-    /// - `context`: Filesystem context (that should contain `data/grid-lr-corpus/<speaker>/<utterance_id>/`
+    /// - `context`: Filesystem context (that should contain `data/grid-lr-corpus/<speaker>/<utterance_id>/`.
     /// - `token_map`: Bidirectional mapping of tokens to IDs for transcript encoding.
     /// - `tracker_config`: Optional lip tracker config for on-the-fly cropping when pre-extracted `.bin` crops are missing.
     /// - `active_subset`: Optional `(fraction, seed)` for subsetting (e.g. `Some((0.1, 69))` = 10% with seed 69). `None` = full dataset.

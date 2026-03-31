@@ -38,7 +38,7 @@ impl SpeechGate {
     /// Updates the `SpeechGate` activity state.
     /// 
     /// ### Params:
-    /// - `has_lock`: Per-frame output of `LipTrackerBackend::has_lock`,
+    /// - `has_lock`: Per-frame output of `LipTrackerBackend::has_lock`.
     /// - `has_lip_motion`: Per-frame output of `LipTrackerBackend::has_lip_motion` (visual proxy; both must be true for a “good” frame).
     /// 
     /// ### Returns:

@@ -6,7 +6,7 @@ This document records all modifications to the project for future reference and 
 
 **Hierarchical detection pipeline:**
 
-- Face detection → crop to lower half of face ROI → mouth detection → crop mouth ROI to target dims
+- Face detection → crop to lower third of face ROI → mouth detection → crop mouth ROI to target dims
 - Replaces flat detection with a staged, more reliable pipeline
 
 **ROI center smoothing:**
@@ -349,8 +349,6 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **Fallback:** If ffmpeg is missing or muxing fails, the temp file is **renamed** to `{stem}.mp4` after best-effort removal of any partial output—inference still completes (**video-only**). User-facing message: video-only output, not “silent” in the sense of black frames.
 - **Docs:** `annotate_video` documents video-only output; `mux_audio` documents ffmpeg-only muxing (no tracking or overlays).
 
-# Change Logs Since Last Git Commit
-
 ## 33. Live speech-activity gating (visual lip motion + tracker lock)
 
 **Goal:** In **live** webcam inference, avoid feeding the VSRM sliding window and avoid showing stale on-screen predictions when crops are idle or unreliable. This is **not** audio VAD: it uses only the tracker’s per-frame flags.
@@ -358,7 +356,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 **`TrackerResult`** ([`src/pipeline/tracker/tracker.rs`](src/pipeline/tracker/tracker.rs)):
 
 - **`has_lock`**: Backend-specific “reliable face + mouth ROI” for this frame (Haar: both `face_rect` and `mouth_rect` present in [`VizMetadata`](src/pipeline/tracker/tracker.rs)).
-- **`has_lip_motion`**: Per-frame **visual** lip-motion proxy (not linguistic ground-truth speech). Haar computes **mean absolute difference (MAD)** between the current rescaled mouth crop and the previous frame’s crop; motion is `MAD > HaarTrackerConfig::energy_threshold` (Burn default **3.5**). The previous-crop baseline is cleared when lock is lost so motion does not carry across tracking gaps.
+- **`has_lip_motion`**: Per-frame **visual** lip-motion proxy (not linguistic ground-truth speech). Haar: **absolute difference** between consecutive **Sobel gradient magnitude** maps; **inner** zone (see `mouth_activity_zone_scale`) vs **periphery** complement means on that diff (**§35**). Previous magnitude baseline cleared when lock is lost.
 
 **`SpeechGate`** ([`src/inference/speech_gate.rs`](src/inference/speech_gate.rs)):
 
@@ -380,9 +378,35 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - Overlays: “Tracker: Locked / Searching”; “Is Talking: Yes / No / --” where **Yes** means the gate is speech-active (lock + hysteresis on lip motion), **--** when not locked.
 - If **`speech_gate_enabled`** is `false`, the loop treats the gate as always active (no idle transitions, no buffer clears from the gate).
 
-**Static file inference:** Unchanged; gating applies only to the live path.
+**Static file VSRM decode:** `predict_frames` / final prediction string for a bundle is unchanged (one decode over the loaded clip).
 
-**Tuning notes:** If “Is Talking: Yes” appears with still lips, **increase** `energy_threshold`: a **higher** value requires more MAD between consecutive crops before `has_lip_motion` is true (the default is fairly sensitive on noisy webcams). Adjust on/off frame counts for responsiveness vs stability.
+**Annotated MP4 overlay:** When `speech_gate_enabled`, [`annotate_video`](LRM Rust/src/inference/predictor.rs) runs [`SpeechGate::update`](LRM Rust/src/inference/speech_gate.rs) every frame (same hysteresis as live). The burned-in prediction caption and “Is Talking” line follow `speech_active`; see **§34**.
+
+**Tuning notes:** Raise `energy_threshold` or `mouth_isolation_ratio` if “Is Talking: Yes” appears with still lips or whole-head motion; lower them if real speech rarely opens the gate. `energy_threshold` applies to the **inner zone** mean of the temporal absolute-difference map on gradient magnitudes (see **§35**), not raw grayscale. Adjust speech gate on/off frame counts for responsiveness vs stability.
+
+# Change Logs Since Last Git Commit
+
+## 34. Annotated video overlay uses speech gate (parity with live)
+
+- [`annotate_video`](LRM Rust/src/inference/predictor.rs) constructs a per-pass [`SpeechGate`](LRM Rust/src/inference/speech_gate.rs) and calls `update(has_lock, has_lip_motion)` when `VsrmPredictorConfig::speech_gate_enabled` is true.
+- Overlay strings match live: `prediction_text` is empty unless `speech_active`; “Is Talking: Yes / No / --” uses the same lock + gate semantics as [`infer_live`](LRM Rust/src/inference/predictor.rs).
+- [`infer_file`](LRM Rust/src/inference/predictor.rs) passes `predictor_config` into `annotate_video`, so file-mode annotated MP4s respect the gate without re-running the VSRM per frame.
+
+## 35. Haar lip motion: edge-based temporal change (replaces intensity-only cue)
+
+- [`has_lip_motion`](LRM Rust/src/pipeline/tracker/haar.rs) compares consecutive frames using **`cv_core::absdiff`** on **Sobel gradient magnitude** maps from [`calc_gradient_magnitudes`](LRM Rust/src/pipeline/tracker/haar.rs) (not raw pixel intensity deltas).
+- A centered **inner** rectangle (`mouth_activity_zone_scale`) vs **periphery** complement: means on the diff map; motion requires inner mean above `energy_threshold` and inner/periphery ratio ≥ `mouth_isolation_ratio` (periphery mean floored by `min_periphery_motion`).
+- `prev_magnitude` holds the previous frame’s magnitude map; cleared when tracker lock is lost (**§33**). Blur sigma for motion may differ from the PIP visualization path.
+
+## 36. Mouth crop debug inset (live + annotated MP4)
+
+- [`FrameAnnotator::draw_mouth_crop_inset`](LRM Rust/src/inference/overlay.rs): bottom-right PIP on the grayscale frame via [`LipTrackerBackend::mouth_crop_inset`](LRM Rust/src/pipeline/tracker/tracker.rs). Haar: normalized Sobel gradient magnitudes for the inset; default `None` for backends that omit it.
+- Invoked from [`infer_live`](LRM Rust/src/inference/predictor.rs) and [`annotate_video`](LRM Rust/src/inference/predictor.rs). PIP scale uses `OverlayLayout::pip_max_dim` (cap on the longest displayed side) with uniform scale and margin-aware fit in the corner ([`overlay.rs`](LRM Rust/src/inference/overlay.rs)).
+
+## 37. GRID adapter: skip non-corpus paths when discovering and listing bundles
+
+- [`discover_grid_files_at_any_depth`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs) recursive walk: skip entries named `__MACOSX`, empty names, or with `.`‑prefixed names (macOS zip / AppleDouble noise); still only indexes `.mpg` and `.align` under parents that pass [`is_grid_speaker_dir`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs).
+- [`list_bundled_dirs`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs): same skips for utterance subdirectories so `normalize_to_standard_formats` / `clean_corpus` do not treat metadata folders as samples.
 
 ## Files Modified (Summary)
 
@@ -400,15 +424,15 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `learner.rs`              | Composed LR scheduler, train/resume logic; VsrmLearnerConfig: rf, dataset_src, builder; train() returns Result |
 | `summary.rs`              | New SummaryVisitor module                                                                                      |
 | `main.rs`                 | CLI subcommands; infer wired; TrainBackend/InferBackend; Preprocess DatasetSource                              |
-| `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow; **§32** `mux_audio`, `infer_file` temp + ffmpeg mux; **§33** `VsrmPredictorConfig` speech gate fields, `infer_live` gating, `SlidingWindow::clear` on gate close, channel drain |
+| `inference/predictor.rs`  | InferenceSession, infer(), predict_file, predict_frames, SlidingWindow; **§32** `mux_audio`; **§33–§34** speech gate in `infer_live` and `annotate_video`, `SlidingWindow::clear`, channel drain |
 | `inference/loader.rs`     | New: load_video, load_frame, open_camera                                                                       |
-| `inference/overlay.rs`    | New: FrameAnnotator (draw), LiveWindow (HighGUI)                                                                |
+| `inference/overlay.rs`    | FrameAnnotator, LiveWindow; **§36** `OverlayLayout`, mouth PIP, status block, resolution-relative HUD        |
 | `pipeline/video.rs`       | Deleted; logic in inference/loader.rs                                                                          |
 | `cli.rs`                  | Checkpoint/CLI resolution helpers; pure resolvers                                                              |
 | `utils.rs`                | levenshtein, io_err; fused `log_sum_exp_3_tensor`; fewer `max` clones in `log_sum_exp_2_tensor`                 |
 | `lib.rs`                  | Tracker re-exports updated                                                                                     |
 | `pipeline/mod.rs`         | Tracker re-exports updated                                                                                     |
-| `README.md`               | Project tree, CLI examples; CTC module paths and decode/loss optimization notes                                                                 |
+| `README.md` (repo root)   | Project tree (`.txt`, `speech_gate.rs`), inference overlay + GRID hygiene notes; CLI / CTC references                                           |
 | `Info.plist`              | macOS camera key: `NSCameraUseContinuityCameraDeviceType=true`                                                  |
 | `Cargo.toml`              | `crossbeam-channel`, macOS `embed_plist`, `rustc-hash` (decoder `FxHashMap`)                                                                   |
 | `ctc_loss.rs`             | Pre-gather target log-probs; precomputed `[N,T]` time mask; DP loop slices                                                                     |
@@ -416,4 +440,5 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `inference/speech_gate.rs` | **§33:** `SpeechGate` hysteresis state machine (`has_lock` + `has_lip_motion`)                               |
 | `inference/mod.rs`        | **§33:** `pub mod speech_gate`                                                                                |
 | `pipeline/tracker/tracker.rs` | **§33:** `TrackerResult` flags (`has_lock`, `has_lip_motion`); `LipTrackerBackend` contract                  |
-| `pipeline/tracker/haar.rs` | **§33:** `process_frame` sets `has_lock` / `has_lip_motion`; MAD vs `energy_threshold`                       |
+| `pipeline/tracker/haar.rs` | **§33–§35:** `has_lip_motion`: temporal absdiff on gradient magnitudes + inner vs periphery; gating / smoothing tweaks |
+| `pipeline/adapters/grid/grid_adapter.rs` | **§37:** Skip `__MACOSX` / dot-prefixed names in discovery and `list_bundled_dirs` |

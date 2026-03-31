@@ -3,13 +3,19 @@ name = "lrm_rust"
 version = "0.1.0"
 edition = "2024"
 
+# [patch.crates-io]
+# # redirect burn to a merged fix (specific issue: cosine scheduler record serialized to linear)
+# burn = { git = "https://github.com/tracel-ai/burn", rev = "5f9bcb7c512972bb3616c7031e86886db5a416fb" }
+
 [dependencies]
+# burn = { version = "0.21.0-pre.2", features = [
 burn = { version = "0.20.1", features = [
     "train",
     "wgpu",
     "ndarray",
     "autodiff",
 ] }
+
 log = "0.4"
 image = "0.25.8" # for image processing
 ndarray = "0.17.2"

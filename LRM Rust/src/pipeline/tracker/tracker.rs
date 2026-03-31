@@ -76,6 +76,11 @@ pub trait LipTrackerBackend: Send {
     /// - Haar backends implement this using Temporal Energy (MAD) on the `crop`.
     /// - Landmark backends implement this using Mouth Aspect Ratio (MAR) on the `metadata`.
     fn has_lip_motion(&mut self, curr_crop: &Mat) -> bool;
+
+    /// Optional single-channel `CV_8UC1` image for bottom-right debug insets in live / annotated video.
+    /// Each backend chooses its own visualization (e.g. Haar: normalized gradient magnitude).
+    /// Default: no inset.
+    fn mouth_crop_inset(&self, _crop: &Mat, _metadata: &VizMetadata) -> Option<Mat> { None }
 }
 
 

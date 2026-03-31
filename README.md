@@ -9,6 +9,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 - For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") data organized into sample bundles under `data/grid-lr-corpus/<speaker>/<sample_id>/`). Each sample folder holds video (`<sample_id>.mp4` preferred after preprocess, else `.mpg`) and transcript (`<sample_id>.txt` preferred after preprocess, else `.align`).
 - For GRID, `cargo preprocess --dataset grid` also writes mouth-crop frame tensors as `.bin` files under `data/grid-lr-corpus/cropped_frames/` (`GridDataset::pre_extract_all`), so training can load crops from disk instead of re-decoding video every epoch.
+- GRID corpus discovery and bundled-dir listing skip `__MACOSX`, hidden (`.`‑prefixed) entries, and non-`.mpg`/`.align` files so macOS zip metadata does not break normalize/preprocess (`LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs`).
 - In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
 - Built dataset utilities that:
   - Infer file name stems automatically.
@@ -153,7 +154,8 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - **Verification:** Unit tests for CTC loss/decoding, tracker ROI behavior, and sanity checks for model input/output dataflow; training convergence validated via overfit tests.
 - **Mouth tracking:** Haar-cascade face/mouth detection with stabilized mouth ROI per frame.
 - **CLI:** `build-lm`, `preprocess`, `train` (new/resume), and `infer` (static file / live cam input types) subcommands are available.
-- **Inference Viz Overlay:** Inference pipeline's visualization overlay for both static file and live camera inference modes is implemented.
+- **Inference viz overlay:** `FrameAnnotator` in `LRM Rust/src/inference/overlay.rs` draws tracker ROIs, stabilized center, a bottom-left status block, and a bottom-right mouth-crop PIP (`draw_mouth_crop_inset`). `OverlayLayout::from_frame` scales margins, text, ROI strokes, and PIP size from the frame’s shorter side (live and annotated export).
+- **Live inference speech gating:** When speech gating is enabled, `annotate_video` and `infer_live` both apply `SpeechGate` per frame so the prediction caption matches hysteresis (`LRM Rust/src/inference/speech_gate.rs`).
 
 ## Pending / Future Work
 
@@ -253,11 +255,11 @@ Lip Reading Model
 │  │  │  ├─ s1
 │  │  │  │  └─ <stem_id>
 │  │  │  │  ⋮  ├─ <stem_id>.mp4
-│  │  │  │  ⋮  └─ <stem_id>.text
+│  │  │  │  ⋮  └─ <stem_id>.txt
 │  │  │  └─ s34
 │  │  │     └─ <stem_id>
 │  │  │        ├─ <stem_id>.mp4
-│  │  │        └─ <stem_id>.text
+│  │  │        └─ <stem_id>.txt
 │  │  └─ librispeech-lm-norm
 │  │     └─ librispeech-lm-norm.txt
 │  ├─ models
@@ -276,7 +278,8 @@ Lip Reading Model
 │  │  │  ├─ loader.rs
 │  │  │  ├─ mod.rs
 │  │  │  ├─ overlay.rs
-│  │  │  └─ predictor.rs
+│  │  │  ├─ predictor.rs
+│  │  │  └─ speech_gate.rs
 │  │  ├─ lib.rs
 │  │  ├─ main.rs
 │  │  ├─ pipeline

@@ -24,7 +24,7 @@ use crate::{
             load_transcript,
             open_camera
         },
-        overlay::{FrameAnnotator, LiveWindow},
+        overlay::{FrameAnnotator, LiveWindow, OverlayLayout},
         speech_gate::SpeechGate,
     },
     pipeline::{
@@ -115,7 +115,7 @@ pub struct VsrmPredictorConfig {
     #[config(default = 4)]
     pub speech_gate_on_frames: usize, // consecutive frames with both tracker lock and lip motion before the gate becomes speech-active
 
-    #[config(default = 12)]
+    #[config(default = 6)]
     pub speech_gate_off_frames: usize, // consecutive failing frames that condition before the gate closes (typically larger than `on` to reduce flip-flop)
 }
 
@@ -334,7 +334,7 @@ pub fn infer<B: Backend>(
 
     if let Some(bundle_path) = input {
         // ----------------- mode (A): static video inference ----------------
-        infer_file(bundle_path, session, context, &tracker_config)?;
+        infer_file(bundle_path, session, context, &tracker_config, predictor_config)?;
     } else {
         // ------------------ mode (B): live camera inference ----------------
         infer_live(camera, session, &tracker_config, predictor_config)?;
@@ -353,7 +353,8 @@ pub fn infer<B: Backend>(
 /// - `session`: Initialized session engine holding inference-related components.
 /// - `context`: Filesystem context.
 /// - `tracker_config`: Configuration for the tracker backend to use.
-/// 
+/// - `predictor_config`: Speech gate and overlay alignment for [`annotate_video`].
+///
 /// ### Returns:
 /// `Ok(())` on clean exit, or [`ESS`] if file IO or tracking fails.
 fn infer_file<B: Backend>(
@@ -361,6 +362,7 @@ fn infer_file<B: Backend>(
     session: InferenceSession<B>,
     context: &Context,
     tracker_config: &TrackerConfig,
+    predictor_config: &VsrmPredictorConfig,
 ) -> Result<(), ESS> {
     let mut tracker = tracker_config.init();
     let (video_path, transcript_path) = resolve_inference_input(input_path)?;
@@ -383,7 +385,7 @@ fn infer_file<B: Backend>(
     let txt_contents = format!("{}\n{}", prediction, transcript);
     fs::write(&output_txt_path, txt_contents.as_bytes())?;
 
-    annotate_video(&video_path, &temp_viz_path, &prediction, tracker_config)?;
+    annotate_video(&video_path, &temp_viz_path, &prediction, tracker_config, predictor_config)?;
     match mux_audio(&temp_viz_path, &video_path, &output_viz_path) {
         Ok(_) => {
             // clean up temporary silent video on success
@@ -474,11 +476,8 @@ where
             None => break Ok(()),
         };
 
-        // detect face/mouth, overlay on display only frame clone
-        let mut display = frame.clone();
+        // detect face/mouth and derive tracker lock and speech activity status flags
         let tracked_result = tracker.process_frame(&frame)?;
-        annotator.draw_tracker_info(&mut display, &tracked_result.metadata);
-    
         let has_lock = tracked_result.has_lock;
         let has_lip_motion = tracked_result.has_lip_motion;
         let (speech_active, just_became_idle) = if predictor_config.speech_gate_enabled
@@ -516,17 +515,20 @@ where
             }
         }
 
-        // annotation text overlays
+        // annotation texts
         let prediction_text = if speech_active { last_prediction.as_str() } else { "" };
-        let tracker_status_text = if has_lock { "Tracker: Locked" } else { "Tracker: Searching" };
+        let tracker_status_text = if has_lock { "Tracker Lock: Yes" } else { "Tracker Lock: No" };
         let speech_activity_text = if !has_lock { "Is Talking: --" }
         else if speech_active { "Is Talking: Yes" }
         else { "Is Talking: No" };
+        let text_lines = [prediction_text, tracker_status_text, speech_activity_text];
 
-        // draw text overlays
-        annotator.draw_text(&mut display, prediction_text, Point::new(30, frame.rows() - 90));
-        annotator.draw_text(&mut display, tracker_status_text, Point::new(30, frame.rows() - 60));
-        annotator.draw_text(&mut display, speech_activity_text, Point::new(30, frame.rows() - 30));
+        // draw text status, tracker ROI, and mouth crop debug inset overlays
+        let mut display = frame.clone();
+        let layout = OverlayLayout::from_frame(&display);
+        annotator.draw_tracker_info(&mut display, &tracked_result.metadata, &layout);
+        annotator.draw_status_block(&mut display, &text_lines, &layout);
+        annotator.draw_mouth_crop_inset(&mut display, tracker.as_ref(), &tracked_result, &layout);
 
         if !live_window.show(&display)? { break Ok(()); }
     };
@@ -552,7 +554,11 @@ where
 /// [`VizMetadata`] (face/mouth boxes, etc.) and prediction string with [`FrameAnnotator`],
 /// converts grayscale frames to BGR, and writes to `output_path` using `VideoWriter` (H.264/MPEG-4
 /// fourcc `mp4v`, FPS from the container or 25.0 when missing).
-/// 
+///
+/// Text overlays match [`infer_live`]: tracker lock, speech gate / “Is Talking”, and prediction
+/// text only while the gate is speech-active (when gating is enabled). A bottom-right mouth debug
+/// inset matches live ([`FrameAnnotator::draw_mouth_crop_inset`](crate::inference::overlay::FrameAnnotator::draw_mouth_crop_inset)).
+///
 /// **Video only** – OpenCV does not write an audio track;
 /// file-mode [`infer_file`] can mux source audio afterward via [`mux_audio`].
 ///
@@ -561,8 +567,9 @@ where
 /// ### Params:
 /// - `video_path`: Path to the input video file (e.g. bundle-resolved `<stem>.mp4`).
 /// - `output_path`: Destination path for the annotated video (e.g. `…/<stem>.mp4` under `outputs/`).
-/// - `prediction`: Final decoded text string to draw on every frame.
+/// - `prediction`: Final decoded text string (shown only while speech-active when gating is on).
 /// - `tracker_config`: Configuration for the tracker backend to use.
+/// - `predictor_config`: Speech gate parameters and enable flag (same semantics as live inference).
 ///
 /// ### Returns:
 /// `Ok(())` when at least one frame was written; [`ESS`] if capture fails, no frames are decoded, or writing fails.
@@ -571,6 +578,7 @@ pub fn annotate_video(
     output_path: &Path,
     prediction: &str,
     tracker_config: &TrackerConfig,
+    predictor_config: &VsrmPredictorConfig,
 ) -> Result<(), ESS> {
     // initialize file capture
     let path_str = video_path
@@ -589,14 +597,37 @@ pub fn annotate_video(
     let mut tracker = tracker_config.init();
     tracker.reset_state();
 
+    let mut speech_gate = SpeechGate::new(
+        predictor_config.speech_gate_on_frames,
+        predictor_config.speech_gate_off_frames,
+    );
+
     let mut writer: Option<VideoWriter> = None;
     let mut bgr = Mat::default();
 
     while let Some(frame) = load_frame(&mut cap)? {
-        let result = tracker.process_frame(&frame)?;
+        // detect face/mouth and derive tracker lock and speech activity status flags
+        let tracked_result = tracker.process_frame(&frame)?;
+        let has_lock = tracked_result.has_lock;
+        let has_lip_motion = tracked_result.has_lip_motion;
+        let (speech_active, _) = if predictor_config.speech_gate_enabled {
+            speech_gate.update(has_lock, has_lip_motion)
+        } else { (true, false) };
+
+        // annotation texts
+        let prediction_text = if speech_active { prediction } else { "" };
+        let tracker_status_text = if has_lock { "Tracker Lock: Yes" } else { "Tracker Lock: No" };
+        let speech_activity_text = if !has_lock { "Is Talking: --" }
+        else if speech_active { "Is Talking: Yes" }
+        else { "Is Talking: No" };
+        let text_lines = [prediction_text, tracker_status_text, speech_activity_text];
+
+        // draw text status, tracker ROI, and mouth crop debug inset overlays
         let mut display = frame.clone();
-        annotator.draw_tracker_info(&mut display, &result.metadata);
-        // annotator.draw_text(&mut display, prediction, Point::new(10, frame.rows() - 20));
+        let layout = OverlayLayout::from_frame(&display);
+        annotator.draw_tracker_info(&mut display, &tracked_result.metadata, &layout);
+        annotator.draw_status_block(&mut display, &text_lines, &layout);
+        annotator.draw_mouth_crop_inset(&mut display, tracker.as_ref(), &tracked_result, &layout);
 
         // if writer none (meaning first frame):
         // - obtain native frame dims
