@@ -22,9 +22,9 @@
 
 // for this project:
 
-// build N-gram LM (train if missing, else load and eval):                                                                   cargo run -- build-lm --model [lm.bin] --corpus [path/to/corpus] --n [N-gram order]
+// build N-gram LM (train if missing, else load and eval):                                                                   cargo run -- build-lm --model [lm.bin] --corpus [path/to/corpus] --n [n_gram_order]
 // preprocess a specific dataset for the VSRM::                                                                              cargo run -- preprocess --dataset [dataset_src]
-// train new VSRM with default model ID `vsrm_{dataset_src}` on specified dataset (error if ID alr exists):                  cargo run -- train --dataset [dataset_src]
+// train new VSRM with default model ID `vsrm_<dataset_src>` on specified dataset (error if ID alr exists):                 cargo run -- train --dataset [dataset_src]
 // train new VSRM with custom model ID on specified dataset (error if ID exists):                                            cargo run -- train --model [model_id] --dataset [dataset_src]
 // resume training from latest checkpoint (uses last completed epoch):                                                       cargo run -- train [...] --resume
 // resume training from specified checkpoint:                                                                                cargo run -- train [...] --resume [epoch]
@@ -33,6 +33,8 @@
 // run inference on a video file or bundled video-transcript dir (requires --model):                                         cargo run -- infer --model [model_id] --input [path/to/video.mpg|.../bundled_dir]
 // run real-time live inference from default webcam:                                                                         cargo run -- infer --model [model_id] --live
 // run real-time live inference from a specific camera index (OpenCV device id):                                             cargo run -- infer --model [model_id] --live [device_id]
+// export model ONNX and TeX bundle to default output path (exports/<model_id>_export/{onnx,tex}/):                          cargo run -- export --model [model_id]
+// export model ONNX and TeX bundle to specified output path:                                                                cargo run -- export --model [model_id] --output [path/to/output]
 
 // embed Info.plist on macOS so AVFoundation uses AVCaptureDeviceTypeContinuityCamera
 // and does not emit the AVCaptureDeviceTypeExternal deprecation warning
@@ -42,29 +44,35 @@ embed_plist::embed_info_plist!("../Info.plist");
 
 // imports
 use burn::{
-    backend::{wgpu::WgpuDevice::DefaultDevice, Autodiff, Wgpu},
+    backend::{
+        Autodiff,
+        Wgpu,
+        wgpu::WgpuDevice::DefaultDevice,
+    },
     config::Config,
     grad_clipping::GradientClippingConfig,
-    optim::{decay::WeightDecayConfig, AdamConfig},
+    optim::{AdamConfig, decay::WeightDecayConfig},
 };
 use clap::{Parser, Subcommand};
 use lrm_rust::{
+    cli::eprint_python_export_failure,
     ctc::lm::LanguageModel,
     pipeline::{
-        tracker::{HaarTrackerConfig, TrackerConfig},
-        adapters::grid,
         DatasetSource,
+        adapters::grid,
+        tracker::{HaarTrackerConfig, TrackerConfig},
     },
     prelude::*,
     vocab::SPACE_ID,
 };
 use std::{
+    fs,
+    env,
     io::ErrorKind,
     path::{Path, PathBuf},
+    process,
     sync::Arc,
 };
-
-
 
 type TrainBackend = Autodiff<Wgpu>;
 type InferBackend = Wgpu;
@@ -127,6 +135,21 @@ enum Command {
         /// Live webcam inference. Optional device index (default 0). Mutually exclusive with `--input`.
         #[arg(long, conflicts_with = "input", num_args = 0..=1, value_name = "DEVICE_INDEX")]
         live: Option<Option<usize>>,
+    },
+    /// Export a model ONNX and TeX bundle for vizualization purposes: `onnx/vsrm_export.onnx` + PlotNeuralNet `tex/` (`vsrm_export.tex` + `layers/`).
+    Export {
+        #[arg(long)]
+        model: String,
+
+        /// Bundle root path (default: `exports/<model_id>_export/`). ONNX → `<bundle>/onnx/`, TeX → `<bundle>/tex/`.
+        #[arg(long, value_name = "DIR")]
+        output: Option<PathBuf>,
+
+        #[arg(long, default_value_t = 17)]
+        opset: u32,
+
+        #[arg(long, default_value_t = 96)]
+        time_steps: u32,
     },
 }
 
@@ -199,6 +222,20 @@ fn main() -> Result<(), ESS> {
                 &token_map,
             )?;
         }
+        Command::Export {
+            model,
+            output,
+            opset,
+            time_steps,
+        } => {
+            run_export_vsrm(
+                &context,
+                model,
+                output.as_deref(),
+                *opset,
+                *time_steps,
+            )?;
+        }
     }
 
     Ok(())
@@ -216,7 +253,7 @@ fn main() -> Result<(), ESS> {
 /// - `token_map`: Bidirectional char-to-ID mapping for encoding sequences.
 ///
 /// ### Returns:
-/// `Ok(())` on success, or an error on I/O or LM build failure.
+/// `Ok(())` on success, or [`ESS`] on I/O or LM build failure.
 fn run_build_lm(
     context: &Context,
     corpus: Option<&str>,
@@ -233,7 +270,8 @@ fn run_build_lm(
             .join("librispeech-lm-norm.txt")
     });
 
-    if !corpus_path.exists() { return Err(format!("Corpus path {:?} does not exist", corpus_path).into()); }
+    if !corpus_path.exists()
+    { return Err(format!("corpus path {:?} does not exist", corpus_path).into()); }
 
     let lm_output_path = context.models_path.join(model);
     let corpus_str = corpus_path.to_string_lossy().to_string();
@@ -289,7 +327,7 @@ fn run_build_lm(
 /// - `token_map`: Bidirectional char-to-ID mapping.
 ///
 /// ### Returns:
-/// `Ok(())` on success, or an error on training failure.
+/// `Ok(())` on success, or [`ESS`] on training failure.
 fn run_train_vsrm(
     context: &Context,
     model_id: Option<&str>,
@@ -383,7 +421,7 @@ fn run_train_vsrm(
 /// - `token_map`: Bidirectional char-to-ID mapping.
 ///
 /// ### Returns:
-/// `Ok(())` on success, or an error on inference failure.
+/// `Ok(())` on success, or [`ESS`] on inference failure.
 fn run_infer_vsrm(
     context: &Context,
     model_id: &str,
@@ -419,14 +457,12 @@ fn run_infer_vsrm(
     let model_id = model_id.to_string();
     let frame_dims = learner_config.frame_dims;
     let rf = learner_config.rf;
-    let stride = 10;
     let search_type = CtcDecodeType::GreedySearch;
     let device = DefaultDevice;
 
     let predictor_config = VsrmPredictorConfig::new(model_id.to_string())
         .with_frame_dims(frame_dims)
         .with_temporal_window(rf)
-        .with_temporal_stride(stride)
         .with_search_type(search_type);
 
     let session = InferenceSession::<InferBackend>::new(
@@ -451,6 +487,156 @@ fn run_infer_vsrm(
 
 
 
+/// Runs all exporters (`export_onnx.py`, `export_tex.py`) into a single bundle directory.
+///
+/// - ONNX export requires Python with torch and onnx installed (`pip install -r tools/requirements.txt`, or set `PYTHON` to that interpreter).
+/// - TeX export requires a vendored [PlotNeuralNet](https://github.com/HarisIqbal88/PlotNeuralNet) clone at `tools/plotneuralnet/`.
+///
+/// Layout: `<bundle>/onnx/vsrm_export.onnx` and `<bundle>/tex/` (`vsrm_export.tex` + synced PlotNeuralNet `layers/`).
+/// Default bundle: `exports/<model_id>_export/`. Optional `--output` sets the bundle root instead.
+///
+/// ### Params:
+/// - `context`: Filesystem context for paths.
+/// - `model_id`: Model directory name (required).
+/// - `output`: Optional bundle root destination path; if `None`, defaults to `exports/<model_id>_export/`.
+/// - `opset`: ONNX opset version (default 17).
+/// - `time_steps`: Trace sequence length `T` for ONNX (default 96).
+/// 
+/// ### Returns:
+/// `Ok(())` on success, or [`ESS`] if export fails or prerequisites are not met.
+fn run_export_vsrm(
+    context: &Context,
+    model_id: &str,
+    output: Option<&Path>,
+    opset: u32,
+    time_steps: u32,
+) -> Result<(), ESS> {
+    let model_path = context.models_path.join(model_id);
+    if !model_path.is_dir() { return Err(io_err(format!("model directory not found: {:?}", model_path), ErrorKind::NotFound)); }
+
+    let model_config_path = model_path.join("model_config.json");
+    if !model_config_path.is_file() { return Err(io_err(format!("missing model_config.json in {:?}", model_path), ErrorKind::NotFound)); }
+
+    let bundle_dir = if let Some(out) = output {
+        let p = if out.is_absolute() { out.to_path_buf() }
+        else {
+            env::current_dir()
+                .map_err(|e| io_err(format!("current_dir: {}", e), ErrorKind::Other))?
+                .join(out)
+        };
+        if p.extension().and_then(|e| e.to_str()).is_some_and(|ext| ext.eq_ignore_ascii_case("onnx")) {
+            return Err(io_err(
+                "export --output must name a bundle directory, not a .onnx file; onnx is written to bundle/onnx/vsrm_export.onnx",
+                ErrorKind::InvalidInput,
+            ));
+        }
+        p
+    } else { context.exports_path.join(format!("{model_id}_export")) };
+
+    fs::create_dir_all(&bundle_dir)
+        .map_err(|e| { io_err(format!("failed to create export bundle directory {:?}: {}", bundle_dir, e), ErrorKind::Other) })?;
+
+    let onnx_dir = bundle_dir.join("onnx");
+    fs::create_dir_all(&onnx_dir)
+        .map_err(|e| io_err(format!("failed to create onnx export directory {:?}: {}", onnx_dir, e), ErrorKind::Other))?;
+    let onnx_path = onnx_dir.join("vsrm_export.onnx");
+
+    let tex_dir = bundle_dir.join("tex");
+
+    let py = env::var("PYTHON").unwrap_or_else(|_| {
+        if cfg!(windows) { "python".to_string() }
+        else { "python3".to_string() }
+    });
+
+    let model_dir = model_path.canonicalize()
+        .map_err(|e| { io_err(format!("model path canonicalize: {}", e), ErrorKind::InvalidInput) })?;
+
+    let mut failures: Vec<String> = Vec::new();
+
+    let onnx_tools = context.rust_root.join("tools/onnx_export");
+    let onnx_script = onnx_tools.join("export_onnx.py");
+    if !onnx_script.is_file() {
+        let msg = format!("export_onnx.py not found: {:?}", onnx_script);
+        eprintln!("[export] ONNX: {msg}");
+        failures.push(format!("ONNX: {msg}"));
+    } else {
+        let mut cmd = process::Command::new(&py);
+        cmd.current_dir(&onnx_tools);
+        cmd.stdout(process::Stdio::piped());
+        cmd.stderr(process::Stdio::piped());
+        cmd.arg("export_onnx.py");
+        cmd.arg("--model-dir");
+        cmd.arg(model_dir.as_os_str());
+        cmd.arg("--opset");
+        cmd.arg(opset.to_string());
+        cmd.arg("--time-steps");
+        cmd.arg(time_steps.to_string());
+        cmd.arg("--output");
+        cmd.arg(onnx_path.as_os_str());
+
+        match cmd.output() {
+            Ok(out) if out.status.success() => println!("[export] ONNX: ok → {}", onnx_path.display()),
+            Ok(out) => {
+                eprint_python_export_failure("ONNX", &out);
+                let msg = format!("export_onnx.py exited with {}", out.status);
+                failures.push(format!("ONNX: {msg}"));
+            }
+            Err(e) => {
+                let msg = format!("failed to spawn {py}: {e}");
+                eprintln!("[export] ONNX: {msg}");
+                failures.push(format!("ONNX: {msg}"));
+            }
+        }
+    }
+
+    let tex_tools = context.rust_root.join("tools/tex_export");
+    let tex_script = tex_tools.join("export_tex.py");
+    if !tex_script.is_file() {
+        let msg = format!("export_tex.py not found: {:?}", tex_script);
+        eprintln!("[export] TeX: {msg}");
+        failures.push(format!("TeX: {msg}"));
+    } else {
+        let mut cmd = process::Command::new(&py);
+        cmd.current_dir(&tex_tools);
+        cmd.stdout(process::Stdio::piped());
+        cmd.stderr(process::Stdio::piped());
+        cmd.arg("export_tex.py");
+        cmd.arg("--model-dir");
+        cmd.arg(model_dir.as_os_str());
+        cmd.arg("--output-dir");
+        cmd.arg(tex_dir.as_os_str());
+
+        match cmd.output() {
+            Ok(out) if out.status.success() => {
+                print!("{}", String::from_utf8_lossy(&out.stdout));
+                println!(
+                    "[export] TeX: ok → {} (vsrm_export.tex + layers/)",
+                    tex_dir.display()
+                );
+            }
+            Ok(out) => {
+                eprint_python_export_failure("TeX", &out);
+                let msg = format!("export_tex.py exited with {}", out.status);
+                failures.push(format!("TeX: {msg}"));
+            }
+            Err(e) => {
+                let msg = format!("failed to spawn {py}: {e}");
+                eprintln!("[export] TeX: {msg}");
+                failures.push(format!("TeX: {msg}"));
+            }
+        }
+    }
+
+    println!("Export bundle: {}", bundle_dir.display());
+    println!("ONNX: {}", onnx_path.display());
+    println!("TeX: {}", tex_dir.display());
+
+    if failures.is_empty() { Ok(()) }
+    else { Err(io_err(format!("export finished with {} error(s): {}", failures.len(), failures.join("; ") ), ErrorKind::Other)) }
+}
+
+
+
 /// Pre-extracts mouth crops to disk for faster training.
 ///
 /// ### Params:
@@ -459,7 +645,7 @@ fn run_infer_vsrm(
 /// - `token_map`: Bidirectional char-to-ID mapping.
 ///
 /// ### Returns:
-/// `Ok(())` on success, or an error if dataset is unsupported.
+/// `Ok(())` on success, or [`ESS`] if dataset is unsupported.
 fn run_preprocess(
     context: &Context,
     dataset_src: DatasetSource,

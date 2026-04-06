@@ -5,16 +5,12 @@
 //! sequence comparison, and the `io_err` builder for constructing app-level
 //! errors from messages and `io::ErrorKind`.
 
-
-
 // imports
 use crate::prelude::ESS;
-use burn::tensor::{backend::Backend, Tensor};
-use std::io::{Error, ErrorKind};
+use burn::tensor::{Tensor, backend::Backend};
 use num_traits::Float;
 use std::cmp::min;
-
-
+use std::io::{Error, ErrorKind};
 
 // #[inline]
 // pub fn mean(data: &Vec<f32>) -> f32 {
@@ -92,13 +88,17 @@ pub fn log_sum_exp_3_tensor<B: Backend, const D: usize>(
     c: Tensor<B, D>,
 ) -> Tensor<B, D> {
     let max = a.clone().max_pair(b.clone()).max_pair(c.clone());
-    let sum = (a.sub(max.clone())).exp().add((b.sub(max.clone())).exp()).add((c.sub(max.clone())).exp());
+    let sum =
+            ((a.sub(max.clone())).exp())
+        .add((b.sub(max.clone())).exp())
+        .add((c.sub(max.clone())).exp());
     let lse = max.add(sum.log());
 
     // handle pairwise (-inf, -inf) cases (to avoid NaNs from -inf - -inf)
     let nan_mask = lse.clone().is_nan();
     lse.mask_fill(nan_mask, f32::NEG_INFINITY)
 }
+
 
 
 /// Computes Levenshtein (edit) distance between two sequences.
@@ -138,10 +138,10 @@ pub fn levenshtein<T: PartialEq>(seq1: &[T], seq2: &[T]) -> usize {
 /// Builds an `ESS` from a message and `io::ErrorKind`.
 ///
 /// Wraps the message as an `io::Error`, then converts to the shared app error type.
-/// 
+///
 /// `ESS` (`Box<dyn Error + Send + Sync>`) is used project-wide so errors can propagate
 /// across threads (e.g. parallel data loading, training workers).
-/// 
+///
 /// Use any `io::ErrorKind` (e.g. `InvalidInput` for CLI validation, `Other` for I/O).
 ///
 /// ### Params:

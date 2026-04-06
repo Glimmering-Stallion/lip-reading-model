@@ -13,8 +13,11 @@ LRM Python/models/checkpoint*
 # ignore Rust target builds
 **/target/
 
-# ignore papers dir
-/papers/
+# JetBrains / PyCharm
+.idea/
+
+# Exported ONNX bundle (regenerate with `export`)
+LRM Rust/exports/**/onnx/
 
 # ignore OS system junk files
 .DS_Store

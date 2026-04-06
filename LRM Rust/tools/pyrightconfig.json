@@ -1,0 +1,8 @@
+{
+  "executionEnvironments": [
+    {
+      "root": "tex_export",
+      "extraPaths": ["../plotneuralnet"]
+    }
+  ]
+}

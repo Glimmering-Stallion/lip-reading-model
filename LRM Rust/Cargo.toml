@@ -2,6 +2,7 @@
 name = "lrm_rust"
 version = "0.1.0"
 edition = "2024"
+exclude = ["tools/**"]
 
 # [patch.crates-io]
 # # redirect burn to a merged fix (specific issue: cosine scheduler record serialized to linear)

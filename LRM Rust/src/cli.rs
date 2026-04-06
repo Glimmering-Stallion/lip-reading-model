@@ -1,4 +1,4 @@
-//! Training CLI resolution helpers.
+//! CLI resolution helpers.
 //!
 //! Resolves user intent from CLI flags (resume, keep-all-checkpoints) and persisted config.
 
@@ -14,6 +14,7 @@ use crate::{
 };
 use std::{
     fs,
+    process,
     io::ErrorKind,
     path::{Path, PathBuf},
 };
@@ -349,4 +350,20 @@ fn parse_cli_bool(val: &str) -> Result<bool, ESS> {
             Expected on/off, true/false, or 1/0.", val
         ), ErrorKind::InvalidInput)),
     }
+}
+
+
+
+/// Prints Python subprocess stderr (and non-empty stdout) when a script fails, so errors like
+/// `ModuleNotFoundError: No module named 'torch'` are visible instead of only "exited with status 1".
+/// 
+/// ### Params:
+/// - `label`: Context label for the error.
+/// - `out`: `Output` from the failed subprocess, containing exit status, stdout, and stderr.
+pub fn eprint_python_export_failure(label: &str, out: &process::Output) {
+    eprintln!("[export] {label}: process exited with {}", out.status);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.trim().is_empty() { eprintln!("[export] {label} (Python stderr):\n{stderr}"); }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    if !stdout.trim().is_empty() { eprintln!("[export] {label} (Python stdout):\n{stdout}"); }
 }

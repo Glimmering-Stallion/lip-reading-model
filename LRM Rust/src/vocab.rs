@@ -1,15 +1,12 @@
 //! Vocabulary definitions and character-to-index mappings.
-//! 
+//!
 //! This module handles the bidirectional mapping between natural language characters
 //! and numerical IDs used by the model. It includes the character set for the
-//! Visual Speech Recognition (VSR) task and a `TokenMap` utility for 
+//! Visual Speech Recognition (VSR) task and a `TokenMap` utility for
 //! sequence conversion.
 
-
 // imports
-use std::{
-    collections::HashMap,
-};
+use std::collections::HashMap;
 
 
 
@@ -18,8 +15,6 @@ pub const VOCAB: &str = "abcdefghijklmnopqrstuvwxyz _"; // simple char set
 pub const VOCAB_SIZE: usize = VOCAB.len();
 pub const BLANK_ID: usize = VOCAB_SIZE - 1;
 pub const SPACE_ID: usize = VOCAB_SIZE - 2;
-
-
 
 #[derive(Clone)]
 pub struct TokenMap {

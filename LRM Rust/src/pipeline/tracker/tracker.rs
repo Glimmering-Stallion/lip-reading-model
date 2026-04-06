@@ -73,8 +73,8 @@ pub trait LipTrackerBackend: Send {
     fn has_lock(&self, metadata: &VizMetadata) -> bool;
 
     /// Returns `true` if physical mouth activity is detected in the current frame.
-    /// - Haar backends implement this using Temporal Energy (MAD) on the `crop`.
-    /// - Landmark backends implement this using Mouth Aspect Ratio (MAR) on the `metadata`.
+    /// - Haar backends implement this using mean absdiff between consecutive crop Sobel gradient magnitudes.
+    /// - Landmark backends will probably implement this using Mouth Aspect Ratio (MAR) on the `metadata`.
     fn has_lip_motion(&mut self, curr_crop: &Mat) -> bool;
 
     /// Optional single-channel `CV_8UC1` image for bottom-right debug insets in live / annotated video.

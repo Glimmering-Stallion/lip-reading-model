@@ -1,0 +1,6 @@
+# Python deps for LRM Rust/tools/* scripts.
+# - onnx_export/export_onnx.py: torch, onnx
+# - tex_export/export_tex.py: stdlib only (no pip). Compile .tex with LaTeX (e.g. Overleaf); no Python TikZ package.
+
+torch>=2.1,<3
+onnx>=1.16,<2

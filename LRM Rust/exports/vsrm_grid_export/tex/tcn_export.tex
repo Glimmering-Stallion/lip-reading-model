@@ -1,0 +1,628 @@
+
+\documentclass[border=8pt, multi, tikz]{standalone} 
+\usepackage{import}
+\subimport{./layers/}{init}
+\usetikzlibrary{positioning}
+\usetikzlibrary{calc}
+\usetikzlibrary{3d} %for including external image 
+
+\def\ConvColor{rgb:yellow,5;red,2.5;white,5}
+\def\ConvReluColor{rgb:yellow,5;red,5;white,5}
+\def\PoolColor{rgb:red,1;black,0.3}
+\def\UnpoolColor{rgb:blue,2;green,1;black,0.3}
+\def\FcColor{rgb:blue,5;red,2.5;white,5}
+\def\FcReluColor{rgb:blue,5;red,5;white,4}
+\def\SoftmaxColor{rgb:magenta,5;black,7}   
+\def\SumColor{rgb:blue,5;green,15}
+\def\TensorIoColor{rgb:black,3.5;white,14}
+
+\newcommand{\copymidarrow}{\tikz \draw[-Stealth,line width=0.8mm,draw={rgb:blue,4;red,1;green,1;black,3}] (-0.3,0) -- ++(0.3,0);}
+
+\begin{document}
+\begin{tikzpicture}
+\tikzstyle{connection}=[ultra thick,every node/.style={sloped,allow upside down},draw=\edgecolor,opacity=0.7]
+\tikzstyle{copyconnection}=[ultra thick,every node/.style={sloped,allow upside down},draw={rgb:blue,4;red,1;green,1;black,3},opacity=0.7]
+\tikzset{connection path xz mid/.style={
+  ultra thick,
+  draw=\edgecolor,
+  opacity=0.7,
+  decoration={
+    markings,
+    mark=at position 0.5 with {\arrow[scale=1.12]{Stealth[length=4.5mm,width=3.4mm,line width=0.8mm,fill={\edgecolor}]}}
+  },
+  postaction={decorate}
+}}
+\tikzset{connection path xy mid/.style={
+  ultra thick,
+  draw=\edgecolor,
+  opacity=0.7,
+  decoration={
+    markings,
+    mark=at position 0.5 with {\arrow[scale=1.12]{Stealth[length=4.5mm,width=3.4mm,line width=0.8mm,fill={\edgecolor}]}}
+  },
+  postaction={decorate}
+}}
+\tikzset{connection path plain/.style={
+  ultra thick,
+  draw=\edgecolor,
+  opacity=0.7
+}}
+
+\pic[shift={ (0,0,0) }] at (0,0,0) 
+    {RightBandedBox={
+        name=tcn_b1_c1,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv1D+}\\\mbox{LN+}\\\mbox{ReLU}\\\mbox{$C\to C$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        fill=\ConvColor,
+        bandfill=\ConvReluColor,
+        height=1.5,
+        width={ 10 },
+        depth=48
+        }
+    };
+
+\pic[shift={ (-4.07,0,0) }] at (tcn_b1_c1-west)
+    {Box={
+        name=tcn_in,
+        caption={\parbox{2.2cm}{\raggedright \mbox{Input}\\\mbox{Tensor}\\\mbox{$C\times T$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        zlabel={$\leftarrow T$},
+        zlabel pos=1,
+        fill=\TensorIoColor,
+        opacity=0.58,
+        height=1.5,
+        width=6.6000000000000005,
+        depth=48
+        }
+    };
+
+\draw [connection]  (tcn_in-east)    -- node {\midarrow} (tcn_b1_c1-west);
+
+\pic[shift={ (1.5,0,0) }] at (tcn_b1_c1-east) 
+    {RightBandedBox={
+        name=tcn_b1_c2,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv1D+}\\\mbox{LN+}\\\mbox{ReLU}\\\mbox{$C\to C$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        zlabel={$\leftarrow T$},
+        zlabel pos=1,
+        fill=\ConvColor,
+        bandfill=\ConvReluColor,
+        height=1.5,
+        width={ 10 },
+        depth=48
+        }
+    };
+
+\pic[shift={ (3.0,0,0) }] at (tcn_b1_c2-east) 
+    {RightBandedBox={
+        name=tcn_b2_c1,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv1D+}\\\mbox{LN+}\\\mbox{ReLU}\\\mbox{$C\to C$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        fill=\ConvColor,
+        bandfill=\ConvReluColor,
+        height=1.5,
+        width={ 10 },
+        depth=48
+        }
+    };
+
+\pic[shift={ (1.5,0,0) }] at (tcn_b2_c1-east) 
+    {RightBandedBox={
+        name=tcn_b2_c2,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv1D+}\\\mbox{LN+}\\\mbox{ReLU}\\\mbox{$C\to C$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        zlabel={$\leftarrow T$},
+        zlabel pos=1,
+        fill=\ConvColor,
+        bandfill=\ConvReluColor,
+        height=1.5,
+        width={ 10 },
+        depth=48
+        }
+    };
+
+\pic[shift={ (3.0,0,0) }] at (tcn_b2_c2-east) 
+    {RightBandedBox={
+        name=tcn_b3_c1,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv1D+}\\\mbox{LN+}\\\mbox{ReLU}\\\mbox{$C\to C$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        fill=\ConvColor,
+        bandfill=\ConvReluColor,
+        height=1.5,
+        width={ 10 },
+        depth=48
+        }
+    };
+
+\pic[shift={ (1.5,0,0) }] at (tcn_b3_c1-east) 
+    {RightBandedBox={
+        name=tcn_b3_c2,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv1D+}\\\mbox{LN+}\\\mbox{ReLU}\\\mbox{$C\to C$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        zlabel={$\leftarrow T$},
+        zlabel pos=1,
+        fill=\ConvColor,
+        bandfill=\ConvReluColor,
+        height=1.5,
+        width={ 10 },
+        depth=48
+        }
+    };
+
+\pic[shift={ (2.75,0,0) }] at (tcn_b3_c2-east)
+    {Box={
+        name=tcn_out,
+        caption={\parbox{2.2cm}{\raggedright \mbox{Output}\\\mbox{Tensor}\\\mbox{$C\times T$}}},
+        caption yshift=62,
+        caption xshift=-14,
+        xlabel={{"$C$", }},
+        zlabel={$\leftarrow T$},
+        zlabel pos=1,
+        fill=\TensorIoColor,
+        opacity=0.58,
+        height=1.5,
+        width=6.6000000000000005,
+        depth=48
+        }
+    };
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.033333333333!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.033333333333!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.033333333333!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.1!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.033333333333!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.1!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.1!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.166666666667!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.1!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.166666666667!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.166666666667!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.233333333333!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.166666666667!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.233333333333!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.233333333333!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.3!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.233333333333!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.3!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.3!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.366666666667!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.3!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.366666666667!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.366666666667!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.433333333333!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.366666666667!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.433333333333!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.433333333333!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.5!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.433333333333!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.5!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.5!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.566666666667!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.5!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.566666666667!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.566666666667!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.633333333333!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.566666666667!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.633333333333!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.633333333333!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.7!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.633333333333!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.7!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.7!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.766666666667!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.7!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.766666666667!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.766666666667!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.833333333333!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.766666666667!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.833333333333!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.833333333333!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.9!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.833333333333!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.9!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.9!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!0.966666666667!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.9!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!0.966666666667!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-farwest)!0.966666666667!(tcn_in-nearwest) $) -- ($ (tcn_in-farwest)!1!(tcn_in-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_in-fareast)!0.966666666667!(tcn_in-neareast) $) -- ($ (tcn_in-fareast)!1!(tcn_in-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.033333333333!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.033333333333!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.033333333333!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.1!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.033333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.1!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.1!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.166666666667!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.1!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.166666666667!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.166666666667!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.233333333333!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.166666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.233333333333!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.233333333333!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.3!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.233333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.3!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.3!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.366666666667!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.3!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.366666666667!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.366666666667!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.433333333333!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.366666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.433333333333!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.433333333333!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.5!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.433333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.5!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.5!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.566666666667!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.5!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.566666666667!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.566666666667!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.633333333333!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.566666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.633333333333!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.633333333333!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.7!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.633333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.7!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.7!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.766666666667!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.7!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.766666666667!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.766666666667!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.833333333333!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.766666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.833333333333!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.833333333333!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.9!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.833333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.9!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.9!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!0.966666666667!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.9!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!0.966666666667!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-farwest)!0.966666666667!(tcn_b1_c1-nearwest) $) -- ($ (tcn_b1_c1-farwest)!1!(tcn_b1_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c1-fareast)!0.966666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c1-fareast)!1!(tcn_b1_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.033333333333!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.033333333333!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.033333333333!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.1!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.033333333333!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.1!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.1!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.166666666667!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.1!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.166666666667!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.166666666667!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.233333333333!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.166666666667!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.233333333333!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.233333333333!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.3!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.233333333333!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.3!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.3!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.366666666667!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.3!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.366666666667!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.366666666667!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.433333333333!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.366666666667!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.433333333333!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.433333333333!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.5!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.433333333333!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.5!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.5!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.566666666667!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.5!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.566666666667!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.566666666667!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.633333333333!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.566666666667!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.633333333333!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.633333333333!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.7!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.633333333333!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.7!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.7!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.766666666667!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.7!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.766666666667!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.766666666667!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.833333333333!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.766666666667!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.833333333333!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.833333333333!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.9!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.833333333333!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.9!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.9!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!0.966666666667!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.9!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!0.966666666667!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-farwest)!0.966666666667!(tcn_b1_c2-nearwest) $) -- ($ (tcn_b1_c2-farwest)!1!(tcn_b1_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b1_c2-fareast)!0.966666666667!(tcn_b1_c2-neareast) $) -- ($ (tcn_b1_c2-fareast)!1!(tcn_b1_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.033333333333!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.033333333333!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.033333333333!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.1!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.033333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.1!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.1!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.166666666667!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.1!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.166666666667!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.166666666667!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.233333333333!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.166666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.233333333333!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.233333333333!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.3!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.233333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.3!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.3!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.366666666667!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.3!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.366666666667!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.366666666667!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.433333333333!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.366666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.433333333333!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.433333333333!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.5!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.433333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.5!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.5!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.566666666667!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.5!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.566666666667!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.566666666667!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.633333333333!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.566666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.633333333333!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.633333333333!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.7!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.633333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.7!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.7!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.766666666667!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.7!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.766666666667!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.766666666667!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.833333333333!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.766666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.833333333333!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.833333333333!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.9!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.833333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.9!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.9!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!0.966666666667!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.9!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!0.966666666667!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-farwest)!0.966666666667!(tcn_b2_c1-nearwest) $) -- ($ (tcn_b2_c1-farwest)!1!(tcn_b2_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c1-fareast)!0.966666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c1-fareast)!1!(tcn_b2_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.033333333333!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.033333333333!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.033333333333!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.1!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.033333333333!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.1!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.1!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.166666666667!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.1!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.166666666667!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.166666666667!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.233333333333!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.166666666667!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.233333333333!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.233333333333!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.3!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.233333333333!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.3!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.3!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.366666666667!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.3!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.366666666667!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.366666666667!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.433333333333!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.366666666667!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.433333333333!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.433333333333!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.5!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.433333333333!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.5!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.5!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.566666666667!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.5!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.566666666667!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.566666666667!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.633333333333!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.566666666667!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.633333333333!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.633333333333!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.7!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.633333333333!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.7!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.7!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.766666666667!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.7!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.766666666667!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.766666666667!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.833333333333!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.766666666667!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.833333333333!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.833333333333!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.9!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.833333333333!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.9!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.9!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!0.966666666667!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.9!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!0.966666666667!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-farwest)!0.966666666667!(tcn_b2_c2-nearwest) $) -- ($ (tcn_b2_c2-farwest)!1!(tcn_b2_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b2_c2-fareast)!0.966666666667!(tcn_b2_c2-neareast) $) -- ($ (tcn_b2_c2-fareast)!1!(tcn_b2_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.033333333333!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.033333333333!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.033333333333!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.1!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.033333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.1!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.1!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.166666666667!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.1!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.166666666667!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.166666666667!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.233333333333!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.166666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.233333333333!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.233333333333!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.3!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.233333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.3!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.3!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.366666666667!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.3!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.366666666667!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.366666666667!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.433333333333!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.366666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.433333333333!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.433333333333!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.5!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.433333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.5!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.5!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.566666666667!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.5!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.566666666667!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.566666666667!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.633333333333!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.566666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.633333333333!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.633333333333!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.7!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.633333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.7!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.7!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.766666666667!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.7!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.766666666667!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.766666666667!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.833333333333!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.766666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.833333333333!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.833333333333!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.9!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.833333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.9!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.9!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!0.966666666667!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.9!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!0.966666666667!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-farwest)!0.966666666667!(tcn_b3_c1-nearwest) $) -- ($ (tcn_b3_c1-farwest)!1!(tcn_b3_c1-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c1-fareast)!0.966666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c1-fareast)!1!(tcn_b3_c1-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.033333333333!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.033333333333!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.033333333333!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.1!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.033333333333!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.1!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.1!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.166666666667!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.1!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.166666666667!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.166666666667!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.233333333333!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.166666666667!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.233333333333!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.233333333333!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.3!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.233333333333!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.3!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.3!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.366666666667!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.3!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.366666666667!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.366666666667!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.433333333333!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.366666666667!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.433333333333!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.433333333333!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.5!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.433333333333!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.5!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.5!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.566666666667!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.5!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.566666666667!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.566666666667!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.633333333333!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.566666666667!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.633333333333!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.633333333333!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.7!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.633333333333!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.7!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.7!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.766666666667!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.7!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.766666666667!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.766666666667!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.833333333333!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.766666666667!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.833333333333!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.833333333333!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.9!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.833333333333!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.9!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.9!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!0.966666666667!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.9!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!0.966666666667!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-farwest)!0.966666666667!(tcn_b3_c2-nearwest) $) -- ($ (tcn_b3_c2-farwest)!1!(tcn_b3_c2-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_b3_c2-fareast)!0.966666666667!(tcn_b3_c2-neareast) $) -- ($ (tcn_b3_c2-fareast)!1!(tcn_b3_c2-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.033333333333!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.033333333333!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.033333333333!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.1!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.033333333333!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.1!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.1!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.166666666667!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.1!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.166666666667!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.166666666667!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.233333333333!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.166666666667!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.233333333333!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.233333333333!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.3!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.233333333333!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.3!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.3!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.366666666667!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.3!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.366666666667!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.366666666667!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.433333333333!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.366666666667!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.433333333333!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.433333333333!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.5!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.433333333333!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.5!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.5!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.566666666667!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.5!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.566666666667!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.566666666667!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.633333333333!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.566666666667!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.633333333333!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.633333333333!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.7!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.633333333333!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.7!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.7!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.766666666667!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.7!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.766666666667!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.766666666667!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.833333333333!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.766666666667!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.833333333333!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.833333333333!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.9!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.833333333333!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.9!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.9!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!0.966666666667!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.9!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!0.966666666667!(tcn_out-neareast) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-farwest)!0.966666666667!(tcn_out-nearwest) $) -- ($ (tcn_out-farwest)!1!(tcn_out-nearwest) $);
+\draw[very thin,gray!55,opacity=0.85] ($ (tcn_out-fareast)!0.966666666667!(tcn_out-neareast) $) -- ($ (tcn_out-fareast)!1!(tcn_out-neareast) $);
+
+\begin{scope}[on background layer]
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.133333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.066666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.133333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.133333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.133333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.066666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.2!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.133333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.2!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.2!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.2!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.133333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.266666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.2!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.266666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.266666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.266666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.2!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.333333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.266666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.333333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.333333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.333333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.266666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.4!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.333333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.4!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.4!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.4!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.333333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.466666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.4!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.466666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.466666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.466666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.4!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.533333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.466666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.533333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.533333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.533333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.466666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.6!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.533333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.6!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.6!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.6!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.533333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.666666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.6!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.666666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.666666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.666666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.6!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.733333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.666666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.733333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.733333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.733333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.666666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.8!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.733333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.8!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.8!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.8!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.733333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.866666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.8!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.866666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.866666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.866666666667!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.8!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.933333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.866666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.933333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b1_c1-fareast)!0.933333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!0.933333333333!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.866666666667!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!1!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!0.933333333333!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!1!(tcn_b1_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b1_c1-fareast)!1!(tcn_b1_c1-neareast) $) -- ($ (tcn_b1_c2-farwest)!1!(tcn_b1_c2-nearwest) $);
+\end{scope}
+
+\pic[shift={(0,0,0)}] at ($ (tcn_b1_c2-east)!0.5!(tcn_b2_c1-west) $) 
+    {Ball={
+        name=tcn_res_12,
+        fill=\SumColor,
+        opacity=0.6,
+        radius=2.5,
+        logo=$+$
+        }
+    };
+\path coordinate (tcn_skip_in_res0) at ($ (tcn_in-east)!0.5!(tcn_b1_c1-west) $);
+\begin{scope}[canvas is xz plane at y=0]
+\draw [connection path xz mid]  (tcn_skip_in_res0)    -- ++(0,-7) coordinate (tcn_skip_in_res1);
+\path coordinate (tcn_skip_in_res2) at (tcn_skip_in_res1 -| tcn_res_12-anchor);
+\draw [connection path xz mid]  (tcn_skip_in_res1)    -- (tcn_skip_in_res2);
+\end{scope}
+\draw [connection]  (tcn_skip_in_res2)    -- node {\midarrow} (tcn_res_12-far);
+
+\draw [connection]  (tcn_b1_c2-east)    -- node {\midarrow} (tcn_res_12-west);
+\draw [connection]  (tcn_res_12-east)    -- node {\midarrow} (tcn_b2_c1-west);
+
+\begin{scope}[on background layer]
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.133333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.133333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.133333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.066666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.2!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.2!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.2!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.266666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.133333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.266666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.266666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.266666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.066666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.333333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.2!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.333333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.333333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.333333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.133333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.4!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.266666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.4!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.4!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.4!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.2!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.466666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.333333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.466666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.466666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.466666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.266666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.533333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.4!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.533333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.533333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.533333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.333333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.6!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.466666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.6!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.6!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.6!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.4!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.666666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.533333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.666666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.666666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.666666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.466666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.733333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.6!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.733333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.733333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.733333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.533333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.8!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.666666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.8!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.8!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.8!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.6!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.866666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.733333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.866666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.866666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.866666666667!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.666666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.933333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.8!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.933333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b2_c1-fareast)!0.933333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!0.933333333333!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.733333333333!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!1!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!0.866666666667!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!1!(tcn_b2_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b2_c1-fareast)!1!(tcn_b2_c1-neareast) $) -- ($ (tcn_b2_c2-farwest)!1!(tcn_b2_c2-nearwest) $);
+\end{scope}
+
+\pic[shift={(0,0,0)}] at ($ (tcn_b2_c2-east)!0.5!(tcn_b3_c1-west) $) 
+    {Ball={
+        name=tcn_res_23,
+        fill=\SumColor,
+        opacity=0.6,
+        radius=2.5,
+        logo=$+$
+        }
+    };
+\path coordinate (tcn_skip_res_230) at (tcn_res_12-near);
+\begin{scope}[canvas is xz plane at y=0]
+\draw [connection path xz mid]  (tcn_skip_res_230)    -- ++(0,7) coordinate (tcn_skip_res_231);
+\path coordinate (tcn_skip_res_232) at (tcn_skip_res_231 -| tcn_res_23-anchor);
+\draw [connection path xz mid]  (tcn_skip_res_231)    -- (tcn_skip_res_232);
+\end{scope}
+\draw [connection]  (tcn_skip_res_232)    -- node {\midarrow} (tcn_res_23-near);
+
+\draw [connection]  (tcn_b2_c2-east)    -- node {\midarrow} (tcn_res_23-west);
+\draw [connection]  (tcn_res_23-east)    -- node {\midarrow} (tcn_b3_c1-west);
+
+\begin{scope}[on background layer]
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.133333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.133333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.2!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.2!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.266666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.266666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.266666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.066666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.333333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.333333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.333333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.133333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.4!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.4!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.4!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.2!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.466666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.466666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.466666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.533333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.266666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.533333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.533333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.533333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.066666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.6!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.333333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.6!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.6!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.6!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.133333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.666666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.4!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.666666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.666666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.666666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.2!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.733333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.466666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.733333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.733333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.733333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.266666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.8!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.533333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.8!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.8!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.8!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.333333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.866666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.6!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.866666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.866666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.866666666667!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.4!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.933333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.666666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.933333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,densely dashed,draw=\edgecolor,opacity=0.38] ($ (tcn_b3_c1-fareast)!0.933333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!0.933333333333!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b3_c1-fareast)!0.466666666667!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!1!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b3_c1-fareast)!0.733333333333!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!1!(tcn_b3_c2-nearwest) $);
+\draw[-{Stealth[length=1.2mm,width=0.9mm]},semithick,draw=\edgecolor,opacity=0.72] ($ (tcn_b3_c1-fareast)!1!(tcn_b3_c1-neareast) $) -- ($ (tcn_b3_c2-farwest)!1!(tcn_b3_c2-nearwest) $);
+\end{scope}
+
+\pic[shift={(0,0,0)}] at ($ (tcn_b3_c2-east)!0.5!(tcn_out-west) $) 
+    {Ball={
+        name=tcn_res_3out,
+        fill=\SumColor,
+        opacity=0.6,
+        radius=2.5,
+        logo=$+$
+        }
+    };
+\path coordinate (tcn_skip_res_3out0) at (tcn_res_23-far);
+\begin{scope}[canvas is xz plane at y=0]
+\draw [connection path xz mid]  (tcn_skip_res_3out0)    -- ++(0,-7) coordinate (tcn_skip_res_3out1);
+\path coordinate (tcn_skip_res_3out2) at (tcn_skip_res_3out1 -| tcn_res_3out-anchor);
+\draw [connection path xz mid]  (tcn_skip_res_3out1)    -- (tcn_skip_res_3out2);
+\end{scope}
+\draw [connection]  (tcn_skip_res_3out2)    -- node {\midarrow} (tcn_res_3out-far);
+
+\draw [connection]  (tcn_b3_c2-east)    -- node {\midarrow} (tcn_res_3out-west);
+\draw [connection]  (tcn_res_3out-east)    -- node {\midarrow} (tcn_out-west);
+\path ($ (tcn_b1_c1-nearsoutheast)!0.5!(tcn_b1_c2-nearsouthwest) $) +(-60pt,-106pt) node[anchor=north, inner sep=2pt, align=center] {\textbf{TCN Block 1}};
+\path ($ (tcn_b2_c1-nearsoutheast)!0.5!(tcn_b2_c2-nearsouthwest) $) +(-60pt,-106pt) node[anchor=north, inner sep=2pt, align=center] {\textbf{TCN Block 2}};
+\path ($ (tcn_b3_c1-nearsoutheast)!0.5!(tcn_b3_c2-nearsouthwest) $) +(-60pt,-106pt) node[anchor=north, inner sep=2pt, align=center] {\textbf{TCN Block 3}};
+
+\end{tikzpicture}
+\end{document}

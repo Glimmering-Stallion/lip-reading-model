@@ -1,0 +1,180 @@
+
+\documentclass[border=8pt, multi, tikz]{standalone} 
+\usepackage{import}
+\subimport{./layers/}{init}
+\usetikzlibrary{positioning}
+\usetikzlibrary{calc}
+\usetikzlibrary{3d} %for including external image 
+
+\def\ConvColor{rgb:yellow,5;red,2.5;white,5}
+\def\ConvReluColor{rgb:yellow,5;red,5;white,5}
+\def\PoolColor{rgb:red,1;black,0.3}
+\def\UnpoolColor{rgb:blue,2;green,1;black,0.3}
+\def\FcColor{rgb:blue,5;red,2.5;white,5}
+\def\FcReluColor{rgb:blue,5;red,5;white,4}
+\def\SoftmaxColor{rgb:magenta,5;black,7}   
+\def\SumColor{rgb:blue,5;green,15}
+\def\TensorIoColor{rgb:black,3.5;white,14}
+
+\newcommand{\copymidarrow}{\tikz \draw[-Stealth,line width=0.8mm,draw={rgb:blue,4;red,1;green,1;black,3}] (-0.3,0) -- ++(0.3,0);}
+
+\begin{document}
+\begin{tikzpicture}
+\tikzstyle{connection}=[ultra thick,every node/.style={sloped,allow upside down},draw=\edgecolor,opacity=0.7]
+\tikzstyle{copyconnection}=[ultra thick,every node/.style={sloped,allow upside down},draw={rgb:blue,4;red,1;green,1;black,3},opacity=0.7]
+\tikzset{connection path xz mid/.style={
+  ultra thick,
+  draw=\edgecolor,
+  opacity=0.7,
+  decoration={
+    markings,
+    mark=at position 0.5 with {\arrow[scale=1.12]{Stealth[length=4.5mm,width=3.4mm,line width=0.8mm,fill={\edgecolor}]}}
+  },
+  postaction={decorate}
+}}
+\tikzset{connection path xy mid/.style={
+  ultra thick,
+  draw=\edgecolor,
+  opacity=0.7,
+  decoration={
+    markings,
+    mark=at position 0.5 with {\arrow[scale=1.12]{Stealth[length=4.5mm,width=3.4mm,line width=0.8mm,fill={\edgecolor}]}}
+  },
+  postaction={decorate}
+}}
+\tikzset{connection path plain/.style={
+  ultra thick,
+  draw=\edgecolor,
+  opacity=0.7
+}}
+
+\pic[shift={ (0,0,0) }] at (0,0,0)
+    {Box={
+        name=rb_in,
+        caption={\parbox{2.3cm}{\raggedright \mbox{Input}\\\mbox{Tensor}\\\mbox{$C_{\mathrm{in}}\times T\times H\times W$}}},
+        caption yshift=52,
+        caption xshift=-12,
+        xlabel={{"$C_{\mathrm{in}}$", }},
+        zlabel={\mbox{$H\times W$}},
+        zlabel pos=0.5,
+        fill=\TensorIoColor,
+        opacity=0.58,
+        height=35,
+        width=2.64,
+        depth=35
+        }
+    };
+
+\pic[shift={ (3.0,0,0) }] at (rb_in-east) 
+    {RightBandedBox={
+        name=rb_conv1,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv3D+}\\\mbox{GN+}\\\mbox{ReLU}\\$C_{\mathrm{in}}\to C_{\mathrm{out}}$}},
+        caption yshift=52,
+        caption xshift=-12,
+        xlabel={{"$C_{\mathrm{out}}$", }},
+        zlabel={\mbox{$H/\mathrm{S}\times W/\mathrm{S}$}},
+        fill=\ConvColor,
+        bandfill=\ConvReluColor,
+        height=18,
+        width={ 4 },
+        depth=18
+        }
+    };
+
+\pic[shift={(3.0,0,0)}] at (rb_conv1-east)
+    {Box={
+        name=rb_conv2,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Conv3D+GN}\\$C_{\mathrm{out}}\to C_{\mathrm{out}}$}},
+        caption yshift=52,
+        caption xshift=-12,
+        xlabel={{"$C_{\mathrm{out}}$", }},
+        zlabel=\mbox{$H/\mathrm{S}\times W/\mathrm{S}$},
+        fill=\ConvColor,
+        height=18,
+        width=2.64,
+        depth=18
+        }
+    };
+
+\pic[shift={(3.0,0,0)}] at (rb_conv2-east)
+    {Box={
+        name=rb_relu,
+        caption={\parbox{1.2cm}{\raggedright \mbox{ReLU}}},
+        caption yshift=52,
+        caption xshift=-12,
+        xlabel={{"", }},
+        zlabel=\mbox{$H/\mathrm{S}\times W/\mathrm{S}$},
+        fill=\ConvReluColor,
+        opacity=0.6,
+        height=18,
+        width=1.32,
+        depth=18
+        }
+    };
+
+\pic[shift={ (3.0,0,0) }] at (rb_relu-east)
+    {Box={
+        name=rb_out,
+        caption={\parbox{2.3cm}{\raggedright \mbox{Output}\\\mbox{Tensor}\\\mbox{$C_{\mathrm{out}}\times T\times H/\mathrm{S}\times W/\mathrm{S}$}}},
+        caption yshift=52,
+        caption xshift=-12,
+        xlabel={{"$C_{\mathrm{out}}$", }},
+        zlabel={\mbox{$H/\mathrm{S}\times W/\mathrm{S}$}},
+        zlabel pos=0.5,
+        fill=\TensorIoColor,
+        opacity=0.58,
+        height=18,
+        width=2.64,
+        depth=18
+        }
+    };
+
+\pic[shift={(0,0,0)}] at ($ (rb_conv2-east)!0.5!(rb_relu-west) $) 
+    {Ball={
+        name=rb_sum,
+        fill=\SumColor,
+        opacity=0.6,
+        radius=2.5,
+        logo=$+$
+        }
+    };
+
+\draw [connection]  (rb_in-east)    -- node {\midarrow} (rb_conv1-west);
+
+\draw [connection]  (rb_conv1-east)    -- node {\midarrow} (rb_conv2-west);
+
+\draw [connection]  (rb_conv2-east)    -- node {\midarrow} (rb_sum-west);
+\draw [connection]  (rb_sum-east)    -- node {\midarrow} (rb_relu-west);
+
+\draw [connection]  (rb_relu-east)    -- node {\midarrow} (rb_out-west);
+\path coordinate (rb_skip_xy0) at ($ (rb_in-east)!0.5!(rb_conv1-west) $);
+\begin{scope}[canvas is xy plane at z=0]
+\draw [connection path xy mid]  (rb_skip_xy0)    -- ++(0,5.5) coordinate (rb_skip_xy1);
+\path coordinate (rb_skip_xy2) at (rb_skip_xy1 -| rb_sum-north);
+\end{scope}
+\path coordinate (rb_skip_xy_proj_w) at ($ (rb_skip_xy1)!0.5!(rb_skip_xy2) + (-0.2,0,0) $);
+
+\pic[shift={(0,0,0)}] at (rb_skip_xy_proj_w)
+    {Box={
+        name=rb_skip_proj,
+        caption={\parbox{2.5cm}{\raggedright \mbox{Proj}\\$C_{\mathrm{in}}\to C_{\mathrm{out}}$}},
+        caption yshift=46,
+        caption xshift=-6,
+        caption anchor=ne,
+        xlabel={{"$C_{\mathrm{out}}$", }},
+        zlabel={\mbox{$H/\mathrm{S}\times W/\mathrm{S}$}},
+        fill=\ConvColor,
+        height=18,
+        width=2.64,
+        depth=18
+        }
+    };
+
+\begin{scope}[canvas is xy plane at z=0]
+\draw [connection path xy mid]  (rb_skip_xy1)    -- (rb_skip_proj-west);
+\draw [connection path xy mid]  (rb_skip_proj-east)    -- (rb_skip_xy2);
+\end{scope}
+\draw [connection]  (rb_skip_xy2)    -- node {\midarrow} (rb_sum-north);
+
+\end{tikzpicture}
+\end{document}

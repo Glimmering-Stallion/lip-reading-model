@@ -247,7 +247,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 **VsrmPredictorConfig**
 
 - `model_id`, `frame_dims`, `temporal_window` (0 = derive from model receptive field), `temporal_stride`, `search_type: CtcDecodeType`.
-- **Speech gate (live inference):** `speech_gate_enabled` (default `true`), `speech_gate_on_frames` (default `4`), `speech_gate_off_frames` (default `12`). See **§33**.
+- **Speech gate (live inference):** `speech_gate_enabled` (default `true`), `speech_gate_on_frames`, `speech_gate_off_frames`. See **§33**.
 
 ## 18. Batcher and Misc
 
@@ -361,13 +361,13 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 **`SpeechGate`** ([`src/inference/speech_gate.rs`](src/inference/speech_gate.rs)):
 
 - A **good** frame is `has_lock && has_lip_motion`. The gate maintains good/bad streak counters with asymmetric hysteresis.
-- **Open:** after **`speech_gate_on_frames`** consecutive good frames (default **4**).
-- **Close:** after **`speech_gate_off_frames`** consecutive non-good frames (default **12**, usually larger than `on` to reduce flip-flop).
+- **Open:** after **`speech_gate_on_frames`** consecutive good frames.
+- **Close:** after **`speech_gate_off_frames`** consecutive non-good frames (usually larger than `on` to reduce flip-flop).
 - **`update(has_lock, has_lip_motion) -> (speech_active, just_became_idle)`**: `just_became_idle` is true on the frame the gate transitions active → inactive (caller clears buffers and drains stale async results).
 
 **`VsrmPredictorConfig`** ([`src/inference/predictor.rs`](src/inference/predictor.rs)):
 
-- Adds `speech_gate_enabled`, `speech_gate_on_frames`, `speech_gate_off_frames` (Burn `Config` defaults as above). **`run_infer_vsrm`** / CLI inference builds config with the builder pattern; gate fields use those defaults unless extended later.
+- Adds `speech_gate_enabled`, `speech_gate_on_frames`, `speech_gate_off_frames` (Burn `Config` defaults). **`run_infer_vsrm`** / CLI inference builds config with the builder pattern; gate fields use those defaults unless extended later.
 
 **`infer_live`** ([`src/inference/predictor.rs`](src/inference/predictor.rs)):
 
@@ -375,7 +375,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - While **`speech_active`**: push crop into [`SlidingWindow`](src/inference/predictor.rs), stride and send `FramesBuffer` to the worker as before.
 - On **`just_became_idle`**: [`SlidingWindow::clear`](src/inference/predictor.rs), clear last prediction string, drain the bounded result channel so old decode strings are dropped.
 - Worker completions are applied to the UI only if still **`speech_active`** on that frame (avoids flashing text after the gate closed).
-- Overlays: “Tracker: Locked / Searching”; “Is Talking: Yes / No / --” where **Yes** means the gate is speech-active (lock + hysteresis on lip motion), **--** when not locked.
+- Overlays: “Tracker Lock: Yes / No”; “Is Talking: Yes / No / --” where **Yes** means the gate is speech-active (lock + hysteresis on lip motion), **--** when not locked.
 - If **`speech_gate_enabled`** is `false`, the loop treats the gate as always active (no idle transitions, no buffer clears from the gate).
 
 **Static file VSRM decode:** `predict_frames` / final prediction string for a bundle is unchanged (one decode over the loaded clip).
@@ -383,8 +383,6 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 **Annotated MP4 overlay:** When `speech_gate_enabled`, [`annotate_video`](LRM Rust/src/inference/predictor.rs) runs [`SpeechGate::update`](LRM Rust/src/inference/speech_gate.rs) every frame (same hysteresis as live). The burned-in prediction caption and “Is Talking” line follow `speech_active`; see **§34**.
 
 **Tuning notes:** Raise `energy_threshold` or `mouth_isolation_ratio` if “Is Talking: Yes” appears with still lips or whole-head motion; lower them if real speech rarely opens the gate. `energy_threshold` applies to the **inner zone** mean of the temporal absolute-difference map on gradient magnitudes (see **§35**), not raw grayscale. Adjust speech gate on/off frame counts for responsiveness vs stability.
-
-# Change Logs Since Last Git Commit
 
 ## 34. Annotated video overlay uses speech gate (parity with live)
 
@@ -407,6 +405,24 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 
 - [`discover_grid_files_at_any_depth`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs) recursive walk: skip entries named `__MACOSX`, empty names, or with `.`‑prefixed names (macOS zip / AppleDouble noise); still only indexes `.mpg` and `.align` under parents that pass [`is_grid_speaker_dir`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs).
 - [`list_bundled_dirs`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs): same skips for utterance subdirectories so `normalize_to_standard_formats` / `clean_corpus` do not treat metadata folders as samples.
+
+# Change Logs Since Last Git Commit
+
+## 38. ONNX export (through a PyTorch twin)
+
+**CLI:** `cargo run -- export --model <model_id>` from `LRM Rust/` spawns `tools/onnx_export/export_onnx.py` (requires Python 3 with **`torch` and `onnx`**; install with `pip install -r tools/requirements.txt`). Set `PYTHON` to pick the interpreter (e.g. a venv).
+
+**Behavior:** Reads `models/<model_id>/model_config.json`, builds a **structural PyTorch twin** of [`VsrModel`](src/vsrm/vsrm.rs). Creates **`exports/<model_id>_export/`** (or **`--output <bundle_dir>`**) with **`onnx/vsrm_export.onnx`** and **`tex/`** (PlotNeuralNet macro diagram + `layers/`). **`--output`** is the bundle root, not a single `.onnx` path. **`--opset`** / **`--time-steps`** apply to ONNX only. Weights are **PyTorch defaults**, not the trained Burn checkpoint, unless you add a weight-mapping step later.
+
+**ONNX note:** The twin uses bilinear `interpolate` to 4×4 instead of `AdaptiveAvgPool2d`, because TorchScript ONNX exporter rejects that op when output size does not divide input spatial size (e.g. 7×13 → 4×4). `interpolate(..., mode="area")` still traced to `adaptive_avg_pool2d` and failed the same way. Rust/Burn still uses true AAP.
+
+## 39. TeX architecture diagram (`tools/tex_export`)
+
+**CLI:** Same `cargo run -- export --model <model_id>`. After ONNX export to **`<bundle>/onnx/vsrm_export.onnx`**, the runner invokes `tools/tex_export/export_tex.py` with **`--output-dir <bundle>/tex`**, using vendored **[PlotNeuralNet](https://github.com/HarisIqbal88/PlotNeuralNet)** at **`tools/plotneuralnet/`** (`pycore.tikzeng`). It writes **`vsrm_export.tex`** (macro architecture) plus synced **`layers/`** for `\subimport{./layers/}{init}`. Spatial sizes mirror Rust ResBlock stride (`k=3`, `p=1`, `s=2` on H and W).
+
+**Resilience:** ONNX and TeX steps always run in order. A failure in one step is logged and the rest still run; the process exits with an error if any step failed.
+
+- **Layout note:** An optional `assets/` directory under the crate root can hold compiled diagram PDFs or similar artifacts separate from regenerated export bundles.
 
 ## Files Modified (Summary)
 
@@ -432,7 +448,9 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `utils.rs`                | levenshtein, io_err; fused `log_sum_exp_3_tensor`; fewer `max` clones in `log_sum_exp_2_tensor`                 |
 | `lib.rs`                  | Tracker re-exports updated                                                                                     |
 | `pipeline/mod.rs`         | Tracker re-exports updated                                                                                     |
-| `README.md` (repo root)   | Project tree (`.txt`, `speech_gate.rs`), inference overlay + GRID hygiene notes; CLI / CTC references                                           |
+| `README.md` (repo root)   | Project tree (assets, export / TeX notes), inference overlay + GRID hygiene; CLI / CTC references |
+| `main.rs`                 | **§40:** Python export subprocess stderr/stdout on failure |
+| `tools/tex_export`, `plotneuralnet/pycore/tikzeng` | **§40:** input frame strip, spacing, Input caption |
 | `Info.plist`              | macOS camera key: `NSCameraUseContinuityCameraDeviceType=true`                                                  |
 | `Cargo.toml`              | `crossbeam-channel`, macOS `embed_plist`, `rustc-hash` (decoder `FxHashMap`)                                                                   |
 | `ctc_loss.rs`             | Pre-gather target log-probs; precomputed `[N,T]` time mask; DP loop slices                                                                     |

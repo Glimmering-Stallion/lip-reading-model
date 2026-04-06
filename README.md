@@ -153,16 +153,18 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 - **Inference:** Using an `InferenceSession` engine, which supports static file inference (as a bundled video-transcript input) with `infer_file` and async live webcam inference with `infer_live` (main thread captures/tracks/overlays; worker thread runs model forward passes).
 - **Verification:** Unit tests for CTC loss/decoding, tracker ROI behavior, and sanity checks for model input/output dataflow; training convergence validated via overfit tests.
 - **Mouth tracking:** Haar-cascade face/mouth detection with stabilized mouth ROI per frame.
-- **CLI:** `build-lm`, `preprocess`, `train` (new/resume), and `infer` (static file / live cam input types) subcommands are available.
+- **CLI:** `build-lm`, `preprocess`, `train` (new/resume), `infer` (static file / live cam), and `export` (bundle `exports/<model_id>_export/` with `onnx/` + `tex/`, optional `--output` bundle root) subcommands are available.
 - **Inference viz overlay:** `FrameAnnotator` in `LRM Rust/src/inference/overlay.rs` draws tracker ROIs, stabilized center, a bottom-left status block, and a bottom-right mouth-crop PIP (`draw_mouth_crop_inset`). `OverlayLayout::from_frame` scales margins, text, ROI strokes, and PIP size from the frame’s shorter side (live and annotated export).
 - **Live inference speech gating:** When speech gating is enabled, `annotate_video` and `infer_live` both apply `SpeechGate` per frame so the prediction caption matches hysteresis (`LRM Rust/src/inference/speech_gate.rs`).
+- **Model exporting:** The export command writes a bundle under exports with an ONNX file plus TeX outputs. ONNX is produced by a small PyTorch twin (since Burn does not emit ONNX itself). Install the Python packages in `requirements.txt` listed under LRM Rust tools. When a Python step fails, the Rust CLI prints its `stderr` so errors like a missing torch install are visible. TeX uses a vendored `PlotNeuralNet` (cloned the upstream repo into this repo's tools once and then customized): macro, TCN detail, and ResBlock diagrams, with optional single-image or multi-frame thumbnails to the left of the input block (this multi-frame art is picked up from a folder next to the TeX export script). To compile and render the generated TeX files for visualization, just upload the whole generated `tex` directory to Overleaf and hit compile.
 
 ## Pending / Future Work
 
 - **Add Landmark-Based Tracker:** Improve ROI stability and accuracy, plus rotational invariance benefits by adding a landmark/pose-based tracker backend (e.g. MediaPipe) as a separate tracker option to the existing layered Haar cascades tracker.
 - **Grad-CAM For Overlay Visualization:** During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
-- **FPS video standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
-- **Word-Level N-gram vs. Char Level Decoder Incongruity:** Current decoding uses character-level LM scoring; evaluate unifying with a word-level LM/tokenization or retraining the LM to match the decoder’s output unit.
+- **FPS Video Standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
+- **Normalize Haar Has Lip Motion Output By Time:** Perform delta time normalization between the gradient changes between last and current frames to account for variable frame-rate video/cam inputs.
+- **Speech Gate Hysteresis Tweak:** Have a reduced off frames field (or combine on/off frames into a single field) then have an epsilon for the additional extra frames to add to an off condition instead. Then wire the "speech active" state to the true on/off frame conditions, while only have the model inferencing period subject to the hysteresis (where a person might pause a bit with intention to still talk; the speech active state updates responsively to that short pause and says "not talking", while the model inferencing period is not destroyed). In short, apply hysteresis to model inferencing, while keep the speech active state responsive and true to time.
 
 ## CLI Usage
 
@@ -201,6 +203,12 @@ cargo run -- infer --model [my_vsrm] --live
 
 # Live inference from a specific camera (OpenCV device index):
 cargo run -- infer --model [my_vsrm] --live [my_camera]
+
+# Export bundle: exports/[my_vsrm]_export/onnx/vsrm_export.onnx + tex/ (see Model exporting)
+cargo run -- export --model [my_vsrm]
+
+# Optional: custom bundle root, ONNX opset, trace length T
+cargo run -- export --model [my_vsrm] --output [path/to/bundle_dir] --opset 17 --time-steps 96
 ```
 
 ## Attributions
@@ -264,8 +272,26 @@ Lip Reading Model
 │  │     └─ librispeech-lm-norm.txt
 │  ├─ models
 │  ├─ outputs
+│  ├─ assets
+│  ├─ exports
+│  │  └─ <model_id>_export
+│  │     ├─ onnx
+│  │     │  └─ vsrm_export.onnx
+│  │     └─ tex
+│  │        ├─ resblk_export.tex
+│  │        ├─ tcn_export.tex
+│  │        ├─ vsrm_export.tex
+│  │        └─ layers
 │  ├─ rust-toolchain.toml
 │  ├─ rustfmt.toml
+│  ├─ tools
+│  │  ├─ requirements.txt
+│  │  ├─ plotneuralnet
+│  │  ├─ onnx_export
+│  │  │  ├─ export_onnx.py
+│  │  │  └─ vsrm_twin.py
+│  │  └─ tex_export
+│  │     └─ export_tex.py
 │  ├─ src
 │  │  ├─ cli.rs
 │  │  ├─ context.rs

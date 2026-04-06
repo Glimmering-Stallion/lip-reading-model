@@ -440,7 +440,14 @@ impl<B: Backend> VsrModel<B> {
     /// ### Returns:
     /// [N, T, Vocab] logits for each timestep.
     pub fn forward(&self, input: Tensor<B, 5>) -> Tensor<B, 3> {
-        // note: N is samples per batch (batch size), C is channels, T is timesteps (number of frames), H is height (frame dim y), W is width (frame dim x)
+        // note:
+        // N is samples per batch (batch size),
+        // C is channels,
+        // T is timesteps (number of frames),
+        // H is height (frame dim y),
+        // W is width (frame dim x)
+        // D is hidden dimension for TCN layers
+        // V is vocab size (number of character classes)
 
         // three custom ResBlock3D layers (with strided downsampling and ReLU internally applied)
         let x = self.rb1.forward(input);     // [N, C, T, (H / 2), (W / 2)]
