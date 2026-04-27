@@ -1,3 +1,6 @@
+<!-- This is the file that serves as an engineering record (documenting changes, additions, corrected failure points) -->
+<!-- Rule of thumb for what goes here: "Is this documenting my committed changes?" -->
+
 # Change Log Summaries
 
 This document records all modifications to the project for future reference and onboarding.
@@ -326,7 +329,7 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - **Use FxHashMap over HashMap and preallocate with capacity:** Faster hasher for controlled keys; `with_capacity_and_hasher` reduces reallocations during the timestep loop.
 - **Quickselect instead of sorting for prefix candidates:** `sort_by` on all surviving prefixes costs $O(P \log P)$; only the top `beam_width` matter. `select_nth_unstable_by` partitions in expected $O(P)$, then `truncate(beam_width)`.
 - **Truncate over take:** Prune `next_prefixes_vec` in place instead of allocating a new `Vec` from an iterator chain.
-- **BeamPrefix constructor:** `BeamPrefix::new` precomputes `combined_log_prob` (acoustic lse + $\alpha$ LM + $\beta$ length) so pruning compares cached floats instead of recomputing `score()` on every comparator invocation.
+- **Prefix constructor (beam search):** `Prefix::new` precomputes `combined_log_prob` (emission lse + $\alpha$ LM + $\beta$ length) so pruning compares cached floats instead of recomputing `score()` on every comparator invocation.
 - **Single CPU materialization per sample:** After `log_softmax`, one `to_data()` / `Vec<f32>` holds `[T, V]` in row-major order; each timestep indexes `t_idx * V ..` for the frame row. Avoids per-frame GPU `topk` + host sync (major win on Wgpu).
 - **CPU top-k per frame:** Reuse a length-`V` buffer of `(token_id, log_prob)` pairs, fill from the current row, then `select_nth_unstable_by(k - 1, …)` and read `top_k_pairs[..k]`; blank log-prob read directly from the row slice.
 - **Batch decode:** `log_probs.dims()` without cloning the tensor solely for shape.
@@ -406,13 +409,11 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 - [`discover_grid_files_at_any_depth`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs) recursive walk: skip entries named `__MACOSX`, empty names, or with `.`‑prefixed names (macOS zip / AppleDouble noise); still only indexes `.mpg` and `.align` under parents that pass [`is_grid_speaker_dir`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs).
 - [`list_bundled_dirs`](LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs): same skips for utterance subdirectories so `normalize_to_standard_formats` / `clean_corpus` do not treat metadata folders as samples.
 
-# Change Logs Since Last Git Commit
-
 ## 38. ONNX export (through a PyTorch twin)
 
 **CLI:** `cargo run -- export --model <model_id>` from `LRM Rust/` spawns `tools/onnx_export/export_onnx.py` (requires Python 3 with **`torch` and `onnx`**; install with `pip install -r tools/requirements.txt`). Set `PYTHON` to pick the interpreter (e.g. a venv).
 
-**Behavior:** Reads `models/<model_id>/model_config.json`, builds a **structural PyTorch twin** of [`VsrModel`](src/vsrm/vsrm.rs). Creates **`exports/<model_id>_export/`** (or **`--output <bundle_dir>`**) with **`onnx/vsrm_export.onnx`** and **`tex/`** (PlotNeuralNet macro diagram + `layers/`). **`--output`** is the bundle root, not a single `.onnx` path. **`--opset`** / **`--time-steps`** apply to ONNX only. Weights are **PyTorch defaults**, not the trained Burn checkpoint, unless you add a weight-mapping step later.
+**Behavior:** Reads `models/<model_id>/model_config.json`, builds a **structural PyTorch twin** of [`VsrModel`](src/vsrm/vsrm.rs). Creates **`exports/<model_id>_export/`** (or **`--output <bundle_dir>`**) with **`onnx/vsrm_export.onnx`** and **`tex/`** (PlotNeuralNet macro diagram + `layers/`). **`--output`** is the bundle root, not a single `.onnx` path. The Rust **`export` command does not take `--opset` or `--time_steps`**; ONNX opset and trace length (`T`) are **only** the `EXPORT_ONNX_OPSET` / `EXPORT_ONNX_TIME_STEPS` values in `main.rs` (change the constants to retune). `export_onnx.py` can still be run by hand with its own flags. Weights are **PyTorch defaults**, not the trained Burn checkpoint, unless you add a weight-mapping step later.
 
 **ONNX note:** The twin uses bilinear `interpolate` to 4×4 instead of `AdaptiveAvgPool2d`, because TorchScript ONNX exporter rejects that op when output size does not divide input spatial size (e.g. 7×13 → 4×4). `interpolate(..., mode="area")` still traced to `adaptive_avg_pool2d` and failed the same way. Rust/Burn still uses true AAP.
 
@@ -422,7 +423,24 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 
 **Resilience:** ONNX and TeX steps always run in order. A failure in one step is logged and the rest still run; the process exits with an error if any step failed.
 
-- **Layout note:** An optional `assets/` directory under the crate root can hold compiled diagram PDFs or similar artifacts separate from regenerated export bundles.
+- **Layout note:** An optional `assets/` directory under the crate root can hold compiled diagram PDFs or similar artifacts separate from regenerated export bundles (you can also keep published copies under the repo’s `docs/` tree).
+
+## 40. CTC test visualizers ([`src/ctc/viz/`](src/ctc/viz/))
+
+- **Test-only module:** `ctc` exposes `viz` behind **`#[cfg(test)]`** in [`ctc/mod.rs`](src/ctc/mod.rs), so normal builds are unchanged. Uses **[plotters](https://crates.io/crates/plotters)** as a **dev-dependency** for SVG; ASCII paths stay dependency-light.
+- **Forward lattice** ([`forward_lattice_viz.rs`](src/ctc/viz/forward_lattice_viz.rs)): runs the same DP as training loss, renders the time–sequence log-alpha grid (heatmap + reachability) for fixed fixtures or synthetic logits.
+- **Prefix beam** ([`prefix_beam_viz.rs`](src/ctc/viz/prefix_beam_viz.rs)): records a full prefix-beam run and draws the timestep DAG (prefix nodes, top-$K$ chips, blank stay edges) for documentation and sanity checks.
+- **Loss side:** `interleave_targets_with_blanks` in [`ctc_loss.rs`](src/ctc/ctc_loss.rs) is `pub(crate)` so tests can line up the lattice with the same blank-interleaved targets the loss uses.
+
+## 41. CTC loss/decode invariants and decoder layout ([`ctc_loss.rs`](src/ctc/ctc_loss.rs), [`ctc_decode.rs`](src/ctc/ctc_decode.rs))
+
+- **Shared input checks:** `CtcLoss::forward` and `CtcDecoder::forward` assert non-empty batch, time, and vocab (`V > 1`) and a valid `blank_id`, before the heavy path runs.
+- **Decoder structure:** internal **`Prefix`** and **`Beam`** types replace a single ad-hoc struct; **greedy** `collapse_path` is an associated function on `CtcDecoder` (skips blanks and consecutive duplicate token IDs on the argmax path); **`CtcDecodeType` derives `PartialEq, Eq`**. The prefix-beam top-of-doc complexity note now uses a **top-$K$** branch factor (not full vocab) where that applies.
+- **Observability:** **`BeamHypothesisSnapshot`** (sequence + blank/non-blank/combined log-probs) makes beam state inspectable for tests and the beam graph exporter.
+
+## 42. Repo-level planning notes ([`PLANS.md`](../PLANS.md))
+
+- **`PLANS.md`** at the repository root holds **roadmap and deferred-work** items (mostly the **`LRM Rust`** crate), in self-contained sections with links into the codebase. It is **not** a substitute for [`CHANGELOG.md`](CHANGELOG.md) (shipped / recorded implementation changes) or repo-root [`NOTES.md`](../NOTES.md) (granular “how it works today” notes).
 
 ## Files Modified (Summary)
 
@@ -449,12 +467,14 @@ Refactored the monolithic `tracker.rs` into a trait-based, multi-backend module 
 | `lib.rs`                  | Tracker re-exports updated                                                                                     |
 | `pipeline/mod.rs`         | Tracker re-exports updated                                                                                     |
 | `README.md` (repo root)   | Project tree (assets, export / TeX notes), inference overlay + GRID hygiene; CLI / CTC references |
-| `main.rs`                 | **§40:** Python export subprocess stderr/stdout on failure |
-| `tools/tex_export`, `plotneuralnet/pycore/tikzeng` | **§40:** input frame strip, spacing, Input caption |
+| `PLANS.md` (repo root)    | **§42:** roadmap / planning doc (forward-looking; complements CHANGELOG + NOTES) |
+| `main.rs`                 | **§38:** `export` has no `--opset` / `--time_steps` (ONNX `T` and opset are `const` in source); `train` uses `*dataset` copy not clone |
+| `tools/tex_export`        | Minor diagram caption text (`Logits` casing) for TeX output                                                                 |
 | `Info.plist`              | macOS camera key: `NSCameraUseContinuityCameraDeviceType=true`                                                  |
-| `Cargo.toml`              | `crossbeam-channel`, macOS `embed_plist`, `rustc-hash` (decoder `FxHashMap`)                                                                   |
-| `ctc_loss.rs`             | Pre-gather target log-probs; precomputed `[N,T]` time mask; DP loop slices                                                                     |
-| `ctc_decode.rs`           | CPU slab beam acoustics; `FxHashMap`; `select_nth_unstable_by` pruning; `BeamPrefix::new`; reused `(id, log_prob)` buffer                     |
+| `Cargo.toml`              | `crossbeam-channel`, macOS `embed_plist`, `rustc-hash` (decoder `FxHashMap`); **[dev]** `plotters` for CTC `viz` tests (**§40**)  |
+| `ctc/viz/`                | **§40** test module: `forward_lattice_viz`, `prefix_beam_viz` (SVG + ASCII)                                                |
+| `ctc_loss.rs`             | **§28, §41:** pre-gather / time-mask DP; `forward` invariants; `interleave_targets_with_blanks` → `pub(crate)` for `viz` tests  |
+| `ctc_decode.rs`           | **§29, §41:** CPU log-softmax buffer, `FxHashMap`, top-$K$ + beam pruning, `Prefix`/`Beam`/`BeamHypothesisSnapshot` layout  |
 | `inference/speech_gate.rs` | **§33:** `SpeechGate` hysteresis state machine (`has_lock` + `has_lip_motion`)                               |
 | `inference/mod.rs`        | **§33:** `pub mod speech_gate`                                                                                |
 | `pipeline/tracker/tracker.rs` | **§33:** `TrackerResult` flags (`has_lock`, `has_lip_motion`); `LipTrackerBackend` contract                  |

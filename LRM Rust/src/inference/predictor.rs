@@ -620,7 +620,7 @@ pub fn annotate_video(
         let speech_activity_text = if !has_lock { "Is Talking: --" }
         else if speech_active { "Is Talking: Yes" }
         else { "Is Talking: No" };
-        let text_lines = [prediction_text, tracker_status_text, speech_activity_text];
+        let text_lines = [tracker_status_text, speech_activity_text, prediction_text];
 
         // draw text status, tracker ROI, and mouth crop debug inset overlays
         let mut display = frame.clone();
@@ -700,21 +700,18 @@ pub fn mux_audio(
     let output = Command::new("ffmpeg")
         .args([
             "-hide_banner",
-            "-loglevel",
-            "error",
+            "-loglevel", "error",
             "-y",
-            "-i",
-            vid_path_str,
-            "-i",
-            aud_path_str,
-            "-map",
-            "0:v:0",
-            "-map",
-            "1:a:0?",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
+            "-i", vid_path_str,
+            "-i", aud_path_str,
+            "-map", "0:v:0",
+            "-map", "1:a:0?",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", "23",
+            "-preset", "veryfast",
+            "-movflags", "+faststart",
+            "-c:a", "aac",
             "-shortest",
             out_path_str,
         ])

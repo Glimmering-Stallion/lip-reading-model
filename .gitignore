@@ -13,6 +13,13 @@ LRM Python/models/checkpoint*
 # ignore Rust target builds
 **/target/
 
+# ignore custom Rust build artifacts
+target_build_verify/
+target_local/
+
+# ignore outputs
+outputs/
+
 # JetBrains / PyCharm
 .idea/
 

@@ -181,7 +181,7 @@ def build_macro_arch(
     input_includegraphics: str | None = None,
     input_bundle_frames: list[str] | None = None,
 ) -> list[str]:
-    """System-level VSRM (`vsrm.rs`): RB×3 → AAP → Flatten → Linear+ReLU → TCN×2 → FC → logits.
+    """System-level VSRM (`vsrm.rs`): RB×3 → AAP → Flatten → Linear+ReLU → TCN×2 → FC → Logits.
 
     Optional ``input_includegraphics`` or non-empty ``input_bundle_frames`` (mutually exclusive in practice): input thumbnails
     left of the Video tensor; no arrow to the input box. A bundle draws several frames evenly in ``x`` before the box,
@@ -224,7 +224,7 @@ def build_macro_arch(
         ["FC", f"\\mbox{{$D:{hd}\\to |\\mathcal{{V}}|:{vs}$}}"],
         "2.2cm",
     )
-    cap_out = caption_parbox(["logits", f"$|\\mathcal{{V}}|:{vs}$"], "1.9cm")
+    cap_out = caption_parbox(["Logits", f"$|\\mathcal{{V}}|:{vs}$"], "1.9cm")
 
     # Backend: plain Box for input / pool / flatten; RightBandedBox for rb1–3 (composite), proj (Linear+ReLU),
     # and tcn1–2 (macro policy: band = post-weight ops or composite internal structure).

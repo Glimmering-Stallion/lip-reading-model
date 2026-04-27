@@ -24,7 +24,7 @@
 
 // build N-gram LM (train if missing, else load and eval):                                                                   cargo run -- build-lm --model [lm.bin] --corpus [path/to/corpus] --n [n_gram_order]
 // preprocess a specific dataset for the VSRM::                                                                              cargo run -- preprocess --dataset [dataset_src]
-// train new VSRM with default model ID `vsrm_<dataset_src>` on specified dataset (error if ID alr exists):                 cargo run -- train --dataset [dataset_src]
+// train new VSRM with default model ID `vsrm_<dataset_src>` on specified dataset (error if ID alr exists):                  cargo run -- train --dataset [dataset_src]
 // train new VSRM with custom model ID on specified dataset (error if ID exists):                                            cargo run -- train --model [model_id] --dataset [dataset_src]
 // resume training from latest checkpoint (uses last completed epoch):                                                       cargo run -- train [...] --resume
 // resume training from specified checkpoint:                                                                                cargo run -- train [...] --resume [epoch]
@@ -32,7 +32,7 @@
 // toggle keep-all-checkpoints during training (default: keep most recent only):                                             cargo run -- train [...] --keep-all-checkpoints [on|off]
 // run inference on a video file or bundled video-transcript dir (requires --model):                                         cargo run -- infer --model [model_id] --input [path/to/video.mpg|.../bundled_dir]
 // run real-time live inference from default webcam:                                                                         cargo run -- infer --model [model_id] --live
-// run real-time live inference from a specific camera index (OpenCV device id):                                             cargo run -- infer --model [model_id] --live [device_id]
+// run real-time live inference from a specific camera index (OpenCV device idx):                                            cargo run -- infer --model [model_id] --live [device_idx]
 // export model ONNX and TeX bundle to default output path (exports/<model_id>_export/{onnx,tex}/):                          cargo run -- export --model [model_id]
 // export model ONNX and TeX bundle to specified output path:                                                                cargo run -- export --model [model_id] --output [path/to/output]
 
@@ -144,12 +144,6 @@ enum Command {
         /// Bundle root path (default: `exports/<model_id>_export/`). ONNX → `<bundle>/onnx/`, TeX → `<bundle>/tex/`.
         #[arg(long, value_name = "DIR")]
         output: Option<PathBuf>,
-
-        #[arg(long, default_value_t = 17)]
-        opset: u32,
-
-        #[arg(long, default_value_t = 96)]
-        time_steps: u32,
     },
 }
 
@@ -195,7 +189,7 @@ fn main() -> Result<(), ESS> {
             run_train_vsrm(
                 &context,
                 model.as_deref(),
-                dataset.clone(),
+                *dataset,
                 *resume,
                 *subset,
                 keep_all_checkpoints.as_ref().map(|o| o.as_deref()),
@@ -224,16 +218,12 @@ fn main() -> Result<(), ESS> {
         }
         Command::Export {
             model,
-            output,
-            opset,
-            time_steps,
+            output
         } => {
             run_export_vsrm(
                 &context,
                 model,
-                output.as_deref(),
-                *opset,
-                *time_steps,
+                output.as_deref()
             )?;
         }
     }
@@ -487,6 +477,11 @@ fn run_infer_vsrm(
 
 
 
+/// Default ONNX opset version passed to `export_onnx.py` (not a CLI flag; change here if a runtime requires it).
+const EXPORT_ONNX_OPSET: u32 = 17;
+/// Default trace sequence length `T` for ONNX (not a CLI flag; change here if the traced graph needs a different `T`).
+const EXPORT_ONNX_TIME_STEPS: u32 = 96;
+
 /// Runs all exporters (`export_onnx.py`, `export_tex.py`) into a single bundle directory.
 ///
 /// - ONNX export requires Python with torch and onnx installed (`pip install -r tools/requirements.txt`, or set `PYTHON` to that interpreter).
@@ -499,8 +494,6 @@ fn run_infer_vsrm(
 /// - `context`: Filesystem context for paths.
 /// - `model_id`: Model directory name (required).
 /// - `output`: Optional bundle root destination path; if `None`, defaults to `exports/<model_id>_export/`.
-/// - `opset`: ONNX opset version (default 17).
-/// - `time_steps`: Trace sequence length `T` for ONNX (default 96).
 /// 
 /// ### Returns:
 /// `Ok(())` on success, or [`ESS`] if export fails or prerequisites are not met.
@@ -508,8 +501,6 @@ fn run_export_vsrm(
     context: &Context,
     model_id: &str,
     output: Option<&Path>,
-    opset: u32,
-    time_steps: u32,
 ) -> Result<(), ESS> {
     let model_path = context.models_path.join(model_id);
     if !model_path.is_dir() { return Err(io_err(format!("model directory not found: {:?}", model_path), ErrorKind::NotFound)); }
@@ -568,9 +559,9 @@ fn run_export_vsrm(
         cmd.arg("--model-dir");
         cmd.arg(model_dir.as_os_str());
         cmd.arg("--opset");
-        cmd.arg(opset.to_string());
+        cmd.arg(EXPORT_ONNX_OPSET.to_string());
         cmd.arg("--time-steps");
-        cmd.arg(time_steps.to_string());
+        cmd.arg(EXPORT_ONNX_TIME_STEPS.to_string());
         cmd.arg("--output");
         cmd.arg(onnx_path.as_os_str());
 

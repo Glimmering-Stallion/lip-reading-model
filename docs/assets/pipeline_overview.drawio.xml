@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net">
+  <diagram name="Page-1" id="DL2sOrl_VGJNp3R8rsmU">
+    <mxGraphModel dx="2335" dy="1960" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-46" parent="1" style="whiteSpace=wrap;strokeWidth=2;verticalAlign=top;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);rounded=1;recursiveResize=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Data Pipeline" vertex="1">
+          <mxGeometry height="380" width="160" x="360" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-47" parent="hYz-eGyRqhsfhWKrr2qj-46" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Dataset" vertex="1">
+          <mxGeometry height="48" width="80" x="40" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-48" parent="hYz-eGyRqhsfhWKrr2qj-46" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Lip Tracker" vertex="1">
+          <mxGeometry height="48" width="90" x="35" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-50" parent="hYz-eGyRqhsfhWKrr2qj-46" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Batcher" vertex="1">
+          <mxGeometry height="48" width="80" x="40" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="6kCjD2qCOhAYMtHE1cOs-2" parent="hYz-eGyRqhsfhWKrr2qj-46" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Adapter" vertex="1">
+          <mxGeometry height="48" width="80" x="40" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-51" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-46" source="hYz-eGyRqhsfhWKrr2qj-47" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=0;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;entryDx=0;entryDy=0;" target="6kCjD2qCOhAYMtHE1cOs-2" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="6kCjD2qCOhAYMtHE1cOs-6" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-46" source="6kCjD2qCOhAYMtHE1cOs-2" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=1;fontFamily=Space Grotesk;fontSource=https://fonts.googleapis.com/css?family=Space+Grotesk;textShadow=0;entryDx=0;entryDy=0;exitDx=0;exitDy=0;" target="hYz-eGyRqhsfhWKrr2qj-48" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+            <mxPoint x="80" y="150" as="sourcePoint" />
+            <mxPoint x="80" y="170" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-49" parent="hYz-eGyRqhsfhWKrr2qj-46" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Train/Eval Split" vertex="1">
+          <mxGeometry height="48" width="110" x="25" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-52" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-46" source="hYz-eGyRqhsfhWKrr2qj-48" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-49" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-53" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-46" source="hYz-eGyRqhsfhWKrr2qj-49" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-50" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-54" parent="1" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);textShadow=0;labelBorderColor=none;labelBackgroundColor=none;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;" value="CLI Dispatch" vertex="1">
+          <mxGeometry height="40" width="120" x="501" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-55" edge="1" parent="1" source="hYz-eGyRqhsfhWKrr2qj-54" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=1;exitDx=0;exitDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-46" value="train">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="560" y="100" />
+              <mxPoint x="440" y="100" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-56" edge="1" parent="1" source="hYz-eGyRqhsfhWKrr2qj-54" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=1;entryDx=0;entryDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-66" value="infer">
+          <mxGeometry relative="1" x="-0.0004" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="560" y="100" />
+              <mxPoint x="680" y="100" />
+            </Array>
+            <mxPoint x="680" y="148" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-57" edge="1" parent="1" source="hYz-eGyRqhsfhWKrr2qj-54" style="curved=0;startArrow=none;endArrow=block;exitX=0;exitY=0.5;rounded=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;flowAnimation=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-105" value="export">
+          <mxGeometry relative="1" x="-0.8702" as="geometry">
+            <mxPoint as="offset" />
+            <Array as="points">
+              <mxPoint x="290" y="60" />
+              <mxPoint x="290" y="1325" />
+            </Array>
+            <mxPoint x="250" y="1070" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-58" edge="1" parent="1" source="hYz-eGyRqhsfhWKrr2qj-46" style="curved=1;startArrow=none;endArrow=block;entryX=0.5;entryY=0;rounded=1;entryDx=0;entryDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="hYz-eGyRqhsfhWKrr2qj-74" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="440" y="520" />
+              <mxPoint x="561" y="520" />
+            </Array>
+            <mxPoint x="400" y="500" as="sourcePoint" />
+            <mxPoint x="561" y="740" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-59" edge="1" parent="1" source="hYz-eGyRqhsfhWKrr2qj-66" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=1;entryDx=0;entryDy=0;exitDx=0;exitDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-74" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="680" y="520" />
+              <mxPoint x="561" y="520" />
+            </Array>
+            <mxPoint x="680" y="664" as="sourcePoint" />
+            <mxPoint x="561" y="740" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-60" edge="1" parent="1" source="hYz-eGyRqhsfhWKrr2qj-74" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=1;exitDx=0;exitDy=0;entryDx=0;entryDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-90" value="train">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="560" y="870" />
+              <mxPoint x="420" y="870" />
+            </Array>
+            <mxPoint x="561" y="1256" as="sourcePoint" />
+            <mxPoint x="151" y="1328" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-61" edge="1" parent="1" source="hYz-eGyRqhsfhWKrr2qj-74" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=1;exitDx=0;exitDy=0;entryDx=0;entryDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-82" value="infer">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="560" y="870" />
+              <mxPoint x="700" y="870" />
+            </Array>
+            <mxPoint x="561" y="1256" as="sourcePoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-66" parent="1" style="whiteSpace=wrap;strokeWidth=2;verticalAlign=top;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);rounded=1;recursiveResize=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Inference Pipeline" vertex="1">
+          <mxGeometry height="380" width="160" x="600" y="120" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-67" parent="hYz-eGyRqhsfhWKrr2qj-66" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Loader" vertex="1">
+          <mxGeometry height="48" width="70" x="45" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-68" parent="hYz-eGyRqhsfhWKrr2qj-66" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Lip Tracker" vertex="1">
+          <mxGeometry height="48" width="90" x="35" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-69" parent="hYz-eGyRqhsfhWKrr2qj-66" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Speech Gate" vertex="1">
+          <mxGeometry height="48" width="100" x="30" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-70" parent="hYz-eGyRqhsfhWKrr2qj-66" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Inference Session" vertex="1">
+          <mxGeometry height="48" width="130" x="15" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-71" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-66" source="hYz-eGyRqhsfhWKrr2qj-67" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-68" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-72" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-66" source="hYz-eGyRqhsfhWKrr2qj-68" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-69" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-73" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-66" source="hYz-eGyRqhsfhWKrr2qj-69" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-70" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="6kCjD2qCOhAYMtHE1cOs-8" parent="hYz-eGyRqhsfhWKrr2qj-66" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Annotator Overlay" vertex="1">
+          <mxGeometry height="48" width="130" x="15" y="310" as="geometry" />
+        </mxCell>
+        <mxCell id="6kCjD2qCOhAYMtHE1cOs-10" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-66" source="hYz-eGyRqhsfhWKrr2qj-70" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=1;entryX=0.5;entryY=0;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;exitDx=0;exitDy=0;entryDx=0;entryDy=0;" target="6kCjD2qCOhAYMtHE1cOs-8" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+            <mxPoint x="79" y="220" as="sourcePoint" />
+            <mxPoint x="79" y="242" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-74" parent="1" style="whiteSpace=wrap;strokeWidth=2;verticalAlign=top;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);rounded=1;recursiveResize=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="VsrModel" vertex="1">
+          <mxGeometry height="310" width="180" x="471" y="540" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-75" parent="hYz-eGyRqhsfhWKrr2qj-74" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="ResBlock3D × 3" vertex="1">
+          <mxGeometry height="48" width="120" x="30" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-76" parent="hYz-eGyRqhsfhWKrr2qj-74" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="AAP2D + Linear Proj" vertex="1">
+          <mxGeometry height="48" width="140" x="20" y="102" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-77" parent="hYz-eGyRqhsfhWKrr2qj-74" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="TCN × 2" vertex="1">
+          <mxGeometry height="48" width="70" x="55" y="172" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-78" parent="hYz-eGyRqhsfhWKrr2qj-74" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Linear FC" vertex="1">
+          <mxGeometry height="48" width="80" x="50" y="242" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-79" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-74" source="hYz-eGyRqhsfhWKrr2qj-75" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-76" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-80" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-74" source="hYz-eGyRqhsfhWKrr2qj-76" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-77" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-81" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-74" source="hYz-eGyRqhsfhWKrr2qj-77" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-78" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-82" parent="1" style="whiteSpace=wrap;strokeWidth=2;verticalAlign=top;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);rounded=1;recursiveResize=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="CTC Decode" vertex="1">
+          <mxGeometry height="310" width="200" x="600" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-101" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-82" source="hYz-eGyRqhsfhWKrr2qj-83" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-100">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="175" y="56" />
+              <mxPoint x="175" y="264" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-83" parent="hYz-eGyRqhsfhWKrr2qj-82" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Greedy Search" vertex="1">
+          <mxGeometry height="48" width="110" x="40" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-102" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-82" source="hYz-eGyRqhsfhWKrr2qj-85" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-100">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="175" y="196" />
+              <mxPoint x="175" y="264" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-84" parent="hYz-eGyRqhsfhWKrr2qj-82" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Prefix Beam Search" vertex="1">
+          <mxGeometry height="48" width="140" x="25" y="102" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-85" parent="hYz-eGyRqhsfhWKrr2qj-82" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="N-gram LM" vertex="1">
+          <mxGeometry height="48" width="90" x="50" y="172" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-88" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-82" source="hYz-eGyRqhsfhWKrr2qj-84" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-85" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-100" parent="hYz-eGyRqhsfhWKrr2qj-82" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Output" vertex="1">
+          <mxGeometry height="48" width="66.25" x="61.88" y="240" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-90" parent="1" style="whiteSpace=wrap;strokeWidth=2;verticalAlign=top;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);rounded=1;recursiveResize=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="CTC Loss" vertex="1">
+          <mxGeometry height="310" width="200" x="320" y="890" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-91" parent="hYz-eGyRqhsfhWKrr2qj-90" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Forward DP" vertex="1">
+          <mxGeometry height="48" width="90" x="55" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-92" parent="hYz-eGyRqhsfhWKrr2qj-90" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Burn Autodiff" vertex="1">
+          <mxGeometry height="48" width="100" x="50" y="102" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-93" parent="hYz-eGyRqhsfhWKrr2qj-90" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="AdamW + ComposedLR" vertex="1">
+          <mxGeometry height="48" width="160" x="20" y="172" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-94" parent="hYz-eGyRqhsfhWKrr2qj-90" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Checkpoint" vertex="1">
+          <mxGeometry height="48" width="90" x="55" y="242" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-95" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-90" source="hYz-eGyRqhsfhWKrr2qj-91" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-92" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-96" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-90" source="hYz-eGyRqhsfhWKrr2qj-92" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-93" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-97" edge="1" parent="hYz-eGyRqhsfhWKrr2qj-90" source="hYz-eGyRqhsfhWKrr2qj-93" style="curved=1;startArrow=none;endArrow=block;exitX=0.5;exitY=0.99;entryX=0.5;entryY=-0.01;rounded=1;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" target="hYz-eGyRqhsfhWKrr2qj-94" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-105" parent="1" style="whiteSpace=wrap;strokeWidth=2;verticalAlign=top;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);rounded=1;recursiveResize=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Export Pipeline" vertex="1">
+          <mxGeometry height="170" width="160" x="380" y="1240" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-106" parent="hYz-eGyRqhsfhWKrr2qj-105" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="ONNX Export" vertex="1">
+          <mxGeometry height="48" width="100" x="30" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-107" parent="hYz-eGyRqhsfhWKrr2qj-105" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="TeX Export" vertex="1">
+          <mxGeometry height="48" width="90" x="35" y="102" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-113" parent="1" style="whiteSpace=wrap;strokeWidth=2;verticalAlign=top;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);rounded=1;recursiveResize=0;fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="CTC Visualization" vertex="1">
+          <mxGeometry height="170" width="160" x="580" y="1240" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-114" parent="hYz-eGyRqhsfhWKrr2qj-113" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Forward Lattice" vertex="1">
+          <mxGeometry height="48" width="115" x="22.5" y="32" as="geometry" />
+        </mxCell>
+        <mxCell id="hYz-eGyRqhsfhWKrr2qj-115" parent="hYz-eGyRqhsfhWKrr2qj-113" style="rounded=1;arcSize=20;strokeWidth=2;fillColor=light-dark(#eeeeee,#1f2020);strokeColor=light-dark(#999999,#cccccc);fontColor=light-dark(#333333,#cccccc);fontFamily=Space Grotesk;fontSource=https%3A%2F%2Ffonts.googleapis.com%2Fcss%3Ffamily%3DSpace%2BGrotesk;textShadow=0;" value="Prefix Beam" vertex="1">
+          <mxGeometry height="48" width="100" x="30" y="102" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

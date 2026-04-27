@@ -11,8 +11,11 @@
 //! For Prefix Beam Search, there is support for shallow fusion with an external
 //! `LanguageModel` to rescore hypothesis paths during the search process.
 
-// if using prefix beam search as the decoder, expect O(DWB * log(WB)) complexity
-// where D = depth (timesteps), W = beam width (# of kept hypotheses), B = branch factor (vocab size)
+// if using prefix beam search as the decoder, expect O(DWK * log(WK)) complexity
+// where:
+// D = depth (# timesteps)
+// W = beam width (# of kept hypotheses at each timestep)
+// K = branch factor (vocab size pruned to top K token candidates at each timestep)
 
 
 
@@ -38,18 +41,24 @@ use rustc_hash::FxHashMap;
 
 
 
-struct BeamPrefix {
-    sequence: Vec<usize>,       // sequence of symbol IDs in vocab
-    log_prob_blank: f32,        // log-prob of prefix ending in blank
-    log_prob_non_blank: f32,    // log-prob of prefix ending in non-blank
-    log_prob_lm: f32,           // log-prob from language model (for LM fusion)
-    combined_log_prob: f32,     // combined accumulated log-prob score of this prefix
+/// Single prefix hypothesis on the beam during CTC prefix beam search.
+pub(crate) struct Prefix {
+    pub(crate) sequence: Vec<usize>,       // sequence of token IDs in vocab
+    pub(crate) log_prob_blank: f32,        // log-prob of prefix ending in blank
+    pub(crate) log_prob_non_blank: f32,    // log-prob of prefix ending in non-blank
+    pub(crate) log_prob_lm: f32,           // log-prob from language model (for LM fusion)
+    pub(crate) combined_log_prob: f32,     // combined accumulated log-prob score of this prefix
 }
 
 
 
-impl BeamPrefix {
-    fn new(
+/// Active beam: the ordered list of prefix hypotheses for one decode step.
+pub(crate) struct Beam(Vec<Prefix>);
+
+
+
+impl Prefix {
+    pub(crate) fn new(
         sequence: Vec<usize>,
         log_prob_blank: f32,
         log_prob_non_blank: f32,
@@ -73,12 +82,39 @@ impl BeamPrefix {
         }
     }
 
-    fn last_char(&self) -> Option<usize> { self.sequence.last().copied() }
+    pub(crate) fn last_char(&self) -> Option<usize> { self.sequence.last().copied() }
 }
 
 
 
-#[derive(Config, Debug, Copy)]
+impl Beam {
+    /// Create initial beam with single empty-prefix hypothesis before first timestep (t = -1).
+    pub(crate) fn new() -> Self {
+        Self(vec![
+            Prefix::new(
+                Vec::new(),
+                0.0,                  // log(1)
+                f32::NEG_INFINITY,    // log(0)
+                0.0,
+                0.0,
+                0.0,
+            ),
+        ])
+    }
+
+    /// Create new beam from given prefix hypotheses for next timestep.
+    pub(crate) fn from_hypotheses(hypotheses: Vec<Prefix>) -> Self { Self(hypotheses) }
+
+    /// Returns slice of prefix hypotheses in beam for current timestep.
+    pub(crate) fn hypotheses(&self) -> &[Prefix] { &self.0 }
+
+    /// Returns vector of prefix hypotheses in beam for current timestep.
+    pub(crate) fn into_hypotheses(self) -> Vec<Prefix> { self.0 }
+}
+
+
+
+#[derive(Config, Debug, Copy, PartialEq, Eq)]
 pub enum CtcDecodeType {
     GreedySearch,
     BeamSearch,
@@ -103,7 +139,7 @@ pub struct CtcDecoderConfig {
     pub lm: Option<LanguageModelConfig>,  // optional language model to supplement beam search
     
     #[config(default = 0.0)]              // with LM, default should be between [0.2, 3.0]
-    pub lm_alpha: f32,                    // weight of language model score when combining with acoustic model score
+    pub lm_alpha: f32,                    // weight of language model score when combining with visual model score
     
     #[config(default = 0.0)]              // with LM, default should be between [1.5, 5.0]
     pub lm_beta: f32,                     // length normalization factor for beam search (to avoid short sequence bias)
@@ -138,6 +174,17 @@ pub struct CtcDecoder {
 
 
 
+/// One hypothesis on the beam after a CTC prefix beam step (for inspection / visualization).
+#[derive(Clone, Debug)]
+pub struct BeamHypothesisSnapshot {
+    pub sequence: Vec<usize>,
+    pub log_prob_blank: f32,
+    pub log_prob_non_blank: f32,
+    pub combined_log_prob: f32,
+}
+
+
+
 impl Clone for CtcDecoder {
     fn clone(&self) -> Self {
         Self {
@@ -162,17 +209,28 @@ impl CtcDecoder {
     /// - `inputs`: [N, T, Vocab] logits from model.
     ///
     /// ### Returns:
-    /// Sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L].
+    /// Sequences of predicted token IDs (collapsed paths) for each sample in batch [N, L].
     pub fn forward<B: Backend>(
         &self,
         inputs: Tensor<B, 3>,
     ) -> Vec<Vec<i64>> {
+        let [n, t, v] = inputs.dims();
+
+        assert!(n > 0, "no samples in batch");
+        assert!(t > 0, "no timesteps in inputs");
+        assert!(v > 1, "vocab size must be > 1 for CTC decode");
+        assert!(self.blank_id < v, "blank ID ({}) is out of vocabulary size bounds ({})", self.blank_id, v);
+
         match &self.search_type {
             CtcDecodeType::GreedySearch => self.greedy_search_decode(inputs),
             CtcDecodeType::BeamSearch => self.beam_search_decode(inputs),
         }
     }
+}
 
+
+
+impl CtcDecoder {
     /// Greedy search decode for batch of samples.
     /// 
     /// Inputs assumed to be padded to max timesteps length in batch.
@@ -181,15 +239,14 @@ impl CtcDecoder {
     /// - `inputs`: [N, T, Vocab] logits from model.
     ///
     /// ### Returns:
-    /// Sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L].
+    /// Sequences of predicted token IDs (collapsed paths) for each sample in batch [N, L].
     fn greedy_search_decode<B: Backend>(
         &self,
         inputs: Tensor<B, 3>
     ) -> Vec<Vec<i64>> {
-        let [n, t, _] = inputs.dims();
-        assert!(self.blank_id < inputs.dims()[2], "blank ID {} is out of vocabulary size bounds {}", self.blank_id, inputs.dims()[2]);
+        let [n, t, _v] = inputs.dims();
 
-        // grab most probable symbol ID from vocab distribution (dim 2), per frame (dim 1), per sample (dim 0)
+        // grab most probable token ID from vocab distribution (dim 2), per timestep (dim 1), per sample (dim 0)
         let argmax_ids = inputs          // [N, T, Vocab]
             .argmax(2)                   // [N, T, 1]
             .reshape([n, t])           // [N, T]
@@ -201,10 +258,39 @@ impl CtcDecoder {
         // collapse singular most probable path per sample by removing dupes and blanks
         argmax_ids
             .chunks(t)
-            .map(|seq| collapse_path(seq, self.blank_id as i64))
+            .map(|seq| Self::collapse_path(seq, self.blank_id as i64))
             .collect::<Vec<Vec<i64>>>()
     }
 
+    /// Helper function for greedy search to collapse a path by:
+    /// - removing blanks and false duplicates (repeated chars between blanks),
+    /// - keeping true duplicates (repeated chars separated by blanks).
+    /// 
+    /// This helps to align time-based predictions with text-based targets.
+    ///
+    /// ### Params:
+    /// - `path`: Sequence of token int IDs deemed most probable by model (with blanks and duplicates) [T].
+    /// - `blank_id`: ID of blank token in vocab.
+    ///
+    /// ### Returns:
+    /// Collapsed sequence of token int IDs (without blanks or duplicates) [L].
+    fn collapse_path<T: PartialEq + Copy>(path: &[T], blank_id: T) -> Vec<T> {
+        let mut collapsed_path = Vec::with_capacity(path.len());
+        let mut prev = None;
+
+        // ignore dupes and blanks
+        for &token in path {
+            if Some(token) != prev && token != blank_id { collapsed_path.push(token); }
+            prev = Some(token);
+        }
+
+        collapsed_path
+    }
+}
+
+
+
+impl CtcDecoder {
     /// Beam search decode for batch of samples.
     /// 
     /// Inputs assumed to be padded to max timesteps length in batch.
@@ -213,7 +299,7 @@ impl CtcDecoder {
     /// - `inputs`: [N, T, Vocab] logits from model.
     ///
     /// ### Returns:
-    /// Sequences of predicted symbol IDs (collapsed paths) for each sample in batch [N, L].
+    /// Sequences of predicted token IDs (collapsed paths) for each sample in batch [N, L].
     fn beam_search_decode<B: Backend>(
         &self,
         inputs: Tensor<B, 3>
@@ -222,7 +308,6 @@ impl CtcDecoder {
         let [n, t, vocab_size] = log_probs.dims();
         let mut top_seq_ids = Vec::with_capacity(n);
 
-        assert!(self.blank_id < vocab_size, "blank ID ({}) is out of vocabulary size bounds ({})", self.blank_id, vocab_size);
         assert!((1..=15).contains(&self.beam_width), "beam width ({}) must be in [1, 15]", self.beam_width);
         if self.lm.is_some() {
             assert!((0.2..=3.0).contains(&self.lm_alpha), "LM alpha value ({}) must be in [0.2, 3.0]", self.lm_alpha);
@@ -232,7 +317,7 @@ impl CtcDecoder {
         // loop over samples in batch
         for sample in 0..n {
             let sample_log_probs = log_probs.clone().slice([sample..(sample + 1), 0..t, 0..vocab_size]).squeeze::<2>(); // [T, V]
-            top_seq_ids.push(self.per_sample_decode(sample_log_probs));
+            top_seq_ids.push(self.decode_sample(sample_log_probs));
         }
 
         top_seq_ids
@@ -241,50 +326,36 @@ impl CtcDecoder {
     /// Beam search decode for single sample.
     /// 
     /// Decoding obtained via: logits --> log softmax --> prefix beam search.
+    /// Delegates to [`Beam::new`], [`select_top_k_pairs`], [`prefix_extend_step`],
+    /// [`beam_prune_step`], and [`select_best_prefix`].
     /// 
     /// Works by:
-    /// - iteratively building prefix sequences of symbol IDs per timestep,
-    /// - tracking their log-probabilities of ending in blank/non-blank (from VSRM and optional LM),
-    /// - pruning to top K most probable prefixes and vocab candidates for keeping search tractable.
+    /// - initializing beam with empty prefix hypothesis before first timestep,
+    /// - iterating over timesteps and token-extending/pruning beam prefixes according to CTC prefix rules,
+    /// - selecting best scoring prefix at end as final decoded sequence.
     ///
     /// ### Params:
-    /// - `log_probs`: Log-probabilities for each vocab symbol per-timestep given by model [T, Vocab].
+    /// - `log_probs`: Log-probabilities for each vocab token per-timestep given by model [T, Vocab].
     ///
     /// ### Returns:
-    /// Sequence of predicted symbol IDs (collapsed path) [L].
+    /// Sequence of predicted token IDs (collapsed path) [L].
     #[inline]
-    fn per_sample_decode<B: Backend>(
+    fn decode_sample<B: Backend>(
         &self,
         log_probs: Tensor<B, 2>,
     ) -> Vec<i64> {
-        let blank = self.blank_id;
-        // let sentinel_value = -1e30;
-        let sentinel_value = f32::NEG_INFINITY;
         let [t, v] = log_probs.dims();
         let w = self.beam_width;
-        let k = (w + 1).min(v); // plus 1 to account for possible blank skipping
-        assert!(t > 0, "no timesteps in input");
-        assert!(v > 0);
-        assert!(blank < v, "blank ID ({}) is out of vocabulary size bounds ({})", blank, v);
+        let k = w.min(v - 1); // branch factor (vocab size pruned to top K token candidates at each timestep)
 
         // t = -1 (base case)
-        // initialize prefix beam container with empty prefix (starts with size 1 and grows to beam_width)
-        let mut prefixes = vec![
-            BeamPrefix::new(
-                Vec::new(),
-                0.0,            // log(1)
-                sentinel_value, // log(0)
-                0.0,
-                self.lm_alpha,
-                self.lm_beta,
-            )
-        ];
+        let mut beam = Beam::new();
 
         // vector buffer to store per-timestep (ID, log-prob) pairs
-        let mut id_prob_pairs: Vec<(usize, f32)> = vec![(0, 0.0); v];
+        let mut top_k_pairs: Vec<(usize, f32)> = vec![(0, 0.0); v];
 
         // pull log-probs GPU tensor to CPU
-        let log_probs = log_probs
+        let mut log_probs = log_probs
             .to_data()
             .convert::<f32>()
             .to_vec::<f32>()
@@ -292,162 +363,240 @@ impl CtcDecoder {
 
         // 0 ≤ t ≤ T - 1 (recurrence case)
         for t_idx in 0..t {
-            // reset HashMap buffer
-            // maps sequence of symbol IDs to a (log_prob_blank, log_prob_non_blank, log_prob_lm) tuple
-            let max_capacity = w * (k + 1);
-            let mut next_prefixes: FxHashMap<Vec<usize>, (f32, f32, f32)> = FxHashMap::with_capacity_and_hasher(max_capacity, Default::default());
-
-            // grab log-probs of each symbol given by model at current timestep
+            // grab log-probs of each token given by model at current timestep
             let t_chunk = t_idx * v;
-            let curr_log_probs = &log_probs[t_chunk..(t_chunk + v)];
+            let log_probs_t = &mut log_probs[t_chunk..(t_chunk + v)];
+            
+            // unconditionally obtain blank log-prob at current timestep for blank extension (then mask it out)
+            // separately obtain top-K char log-probs for non-blank extension
+            let log_prob_blank = log_probs_t[self.blank_id];
+            log_probs_t[self.blank_id] = f32::NEG_INFINITY;
+            self.select_top_k_pairs(log_probs_t, k, &mut top_k_pairs);
 
-            // fill (ID, log-prob) pairs buffer with current timestep's pair values
-            for (char_id, &char_log_prob) in curr_log_probs.iter().enumerate()
-            { id_prob_pairs[char_id] = (char_id, char_log_prob); }
+            let extended_prefix = self.prefix_extend_step(
+                beam.into_hypotheses(),
+                &top_k_pairs[..k],
+                log_prob_blank,
+                self.lm.as_deref(),
+            );
 
-            // get top K highest log-prob from those (ID, log-prob) pairs
-            id_prob_pairs.select_nth_unstable_by((k - 1), |a, b| {
-                b.1.partial_cmp(&a.1).unwrap() // sort by log-prob (descending)
-            });
-            let top_k_pairs = &id_prob_pairs[..k];
-            let log_prob_blank = curr_log_probs[blank];
+            beam = Beam::from_hypotheses(self.beam_prune_step(extended_prefix, w, self.lm_alpha, self.lm_beta));
+        }
 
-            for prefix in prefixes.into_iter() {
-                // build key for next prefix sequence hypothesis
-                let sequence_key = prefix.sequence.clone();
+        self.select_best_prefix(beam.into_hypotheses())
+    }
 
-                // compute succeeding log-prob of extending prefix with blank at current timestep
-                // can extend from either path ending with blank or non-blank
-                let ext_log_prob = log_sum_exp_2_scalar(
-                    prefix.log_prob_blank + log_prob_blank,
-                    prefix.log_prob_non_blank + log_prob_blank,
-                );
+    /// Fills a given buffer with `(id, log_prob)` pairs and partial-sorts to place the top `k` first.
+    /// 
+    /// This is used to efficiently select the top `k` candidate tokens from the vocabulary at each timestep for beam search extension.
+    /// 
+    /// ### Params:
+    /// - `log_probs_t`: Log-probabilities of each token in vocab at current timestep (length = vocab size).
+    /// - `k`: Number of top candidate tokens to select.
+    /// - `buf`: Mutable buffer to store `(id, log_prob)` pairs for each token in vocab (length = vocab size).
+    pub(crate) fn select_top_k_pairs(
+        &self,
+        log_probs_t: &[f32],
+        k: usize,
+        buf: &mut [(usize, f32)],
+    ) {
+        // fill (id, log-prob) pairs buffer with current timestep's pair values
+        for (char_id, &char_log_prob) in log_probs_t.iter().enumerate()
+        { buf[char_id] = (char_id, char_log_prob); }
 
-                // update log-prob for current prefix path (ending with blanks)
-                // accumulate total log-prob of prefix ending with blank
-                let entry = next_prefixes
-                    .entry(sequence_key.clone())
-                    .or_insert((sentinel_value, sentinel_value, prefix.log_prob_lm));
-                entry.0 = log_sum_exp_2_scalar(entry.0, ext_log_prob);
+        // get top K highest log-prob from those (id, log-prob) pairs
+        buf.select_nth_unstable_by(k - 1, |a, b| {
+            b.1.partial_cmp(&a.1).unwrap() // sort by log-prob (descending)
+        });
+    }
 
-                // extend with non-blank characters (char is the candidate symbol ID in vocab)
-                for &(char_id, char_log_prob) in top_k_pairs {
-                    if char_id == blank { continue; }
+    /// Extends all beam prefixes by one timestep using CTC prefix beam rules.
+    ///
+    /// For each prefix, computes blank extension and non-blank extensions (cases A/B/C)
+    /// with optional language model rescoring.
+    /// 
+    /// ### Params:
+    /// - `prefixes`: Current beam prefixes to extend.
+    /// - `top_k_pairs`: Top K (ID, log-prob) pairs for current timestep to consider for extension.
+    /// - `log_prob_blank`: Log-prob of blank token at current timestep (for blank extension).
+    /// - `lm`: Optional language model for rescoring extensions with LM log-prob adjustments (for LM fusion).
+    /// 
+    /// ### Returns:
+    /// Accumulated `(blank_lp, non_blank_lp, lm_lp)` per unique sequence key.
+    pub(crate) fn prefix_extend_step(
+        &self,
+        prefixes: Vec<Prefix>,
+        top_k_pairs: &[(usize, f32)],
+        log_prob_blank: f32,
+        lm: Option<&(dyn LanguageModel + Send + Sync)>,
+    ) -> FxHashMap<Vec<usize>, (f32, f32, f32)> {
+        let sentinel = f32::NEG_INFINITY;
+        let max_capacity = prefixes.len() * (top_k_pairs.len() + 1);
+        let mut next_prefixes: FxHashMap<Vec<usize>, (f32, f32, f32)> =
+            FxHashMap::with_capacity_and_hasher(max_capacity, Default::default());
 
-                    // case A (skip):       same char, previous path ended with non-blank
-                    // case B (stretch):    same char, previous path ended with blank
-                    // case C (append):     diff char, previous path ended with either blank or non-blank
-                    match prefix.last_char() {
-                        // if char equals last char in prefix path
-                        // can only extend from path ending with blank log-prob
-                        Some(last_char_id) if last_char_id == char_id => {
+        for prefix in prefixes.into_iter() {
+            // build key for current prefix sequence hypothesis
+            let sequence = prefix.sequence.clone();
 
-                            // --------------- (A) ---------------
-                            // - non-blank source state
-                            // - cont. with same prefix sequence
-                            // - don't append duplicate char
+            // compute log-prob of extending prefix with blank at current timestep
+            // this is the succeeding prob-mass for both blank/non-blank source states
+            let ext_log_prob = log_sum_exp_2_scalar(
+                prefix.log_prob_blank + log_prob_blank,
+                prefix.log_prob_non_blank + log_prob_blank,
+            );
 
-                            // build key for next prefix sequence hypothesis
-                            let sequence_a = prefix.sequence.clone();
+            // update total accumulated blank log-prob for current prefix path
+            let entry = next_prefixes
+                .entry(sequence.clone())
+                .or_insert((sentinel, sentinel, prefix.log_prob_lm));
+            entry.0 = log_sum_exp_2_scalar(entry.0, ext_log_prob);
 
-                            // compute succeeding log-prob of extending prefix with same symbol at current timestep
-                            let ext_log_prob_a = prefix.log_prob_non_blank + char_log_prob;
+            // extend with non-blank characters (char is the candidate token ID in vocab)
+            for &(char_id, char_log_prob) in top_k_pairs {
+                // case A (remain):     same char, previous path state ended with non-blank
+                // case B (repeat):     same char, previous path state ended with blank
+                // case C (append):     diff char, previous path state ended with either blank or non-blank
+                match prefix.last_char() {
+                    // if char equals last char in prefix path
+                    Some(last_char_id) if last_char_id == char_id => {
 
-                            // update log-prob for current prefix path (ending with non-blanks)
-                            // accumulate total log-prob of prefix ending with non-blank
-                            let entry_a = next_prefixes
-                                .entry(sequence_a)
-                                .or_insert((sentinel_value, sentinel_value, prefix.log_prob_lm));
-                            entry_a.1 = log_sum_exp_2_scalar(entry_a.1, ext_log_prob_a);
+                        // --------------- (A) ---------------
+                        // - non-blank source state
+                        // - cont. with same prefix sequence
+                        // - don't append duplicate char
 
-                            // --------------- (B) ---------------
-                            // - blank source state
-                            // - start new prefix sequence
-                            // - do append duplicate char
+                        // build key for current prefix sequence hypothesis
+                        let sequence_a = sequence.clone();
 
-                            // build key for next prefix sequence hypothesis
-                            let mut sequence_b = prefix.sequence.clone();
-                            sequence_b.push(char_id); // append duplicate char
+                        // compute log-prob of extending prefix with same char for current timestep
+                        // this is the succeeding prob-mass for the non-blank source state only
+                        let ext_log_prob_a = prefix.log_prob_non_blank + char_log_prob;
 
-                            // compute succeeding log-prob of extending prefix with same symbol at current timestep
-                            let ext_log_prob_b = prefix.log_prob_blank + char_log_prob;
+                        // update total accumulated non-blank log-prob for current prefix path
+                        let entry_a = next_prefixes
+                            .entry(sequence_a)
+                            .or_insert((sentinel, sentinel, prefix.log_prob_lm));
+                        entry_a.1 = log_sum_exp_2_scalar(entry_a.1, ext_log_prob_a);
 
-                            // optional language model score adjustment (applied for extending with duplicate char)
-                            let mut new_lm_log_prob = prefix.log_prob_lm;
-                            if let Some(lm) = self.lm.as_ref()
-                            { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
+                        // --------------- (B) ---------------
+                        // - blank source state
+                        // - start new prefix sequence
+                        // - do append duplicate char
 
-                            // update log-prob for current prefix path (ending with non-blanks)
-                            // accumulate total log-prob of prefix ending with non-blank
-                            let entry_b = next_prefixes
-                                .entry(sequence_b)
-                                .or_insert((sentinel_value, sentinel_value, new_lm_log_prob));
-                            entry_b.1 = log_sum_exp_2_scalar(entry_b.1, ext_log_prob_b);
-                        }
+                        // build key for current prefix sequence hypothesis
+                        let mut sequence_b = sequence.clone();
+                        sequence_b.push(char_id); // append duplicate char
 
-                        // if char differs from last char in prefix path
-                        // can extend from either path ending with blank or non-blank log-prob
-                        _ => {
+                        // compute log-prob of extending prefix with same char for current timestep
+                        // this is the succeeding prob-mass for the blank source state only
+                        let ext_log_prob_b = prefix.log_prob_blank + char_log_prob;
 
-                            // --------------- (C) ---------------
-                            // - new prefix sequence
-                            // - append char from either state
+                        // optional language model score adjustment (applied for extending with duplicate char)
+                        let mut new_lm_log_prob = prefix.log_prob_lm;
+                        if let Some(lm) = lm
+                        { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
 
-                            // build key for next prefix sequence hypothesis
-                            let mut sequence_c = prefix.sequence.clone();
-                            sequence_c.push(char_id);
+                        // update total accumulated non-blank log-prob for current prefix path
+                        let entry_b = next_prefixes
+                            .entry(sequence_b)
+                            .or_insert((sentinel, sentinel, new_lm_log_prob));
+                        entry_b.1 = log_sum_exp_2_scalar(entry_b.1, ext_log_prob_b);
+                    }
 
-                            // compute succeeding log-prob of extending prefix with different symbol at current timestep
-                            let ext_log_prob_c = log_sum_exp_2_scalar(
-                                prefix.log_prob_blank,
-                                prefix.log_prob_non_blank,
-                            ) + char_log_prob;
+                    // if char differs from last char in prefix path
+                    _ => {
 
-                            // optional language model score adjustment (applied for extending with different char)
-                            let mut new_lm_log_prob = prefix.log_prob_lm;
-                            if let Some(lm) = self.lm.as_ref()
-                            { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
+                        // --------------- (C) ---------------
+                        // - new prefix sequence
+                        // - append char from either state
 
-                            // update log-prob for current prefix path (ending with non-blanks)
-                            // accumulate total log-prob of prefix ending with non-blank
-                            let entry_c = next_prefixes
-                                .entry(sequence_c)
-                                .or_insert((sentinel_value, sentinel_value, new_lm_log_prob));
-                            entry_c.1 = log_sum_exp_2_scalar(entry_c.1, ext_log_prob_c);
-                        }
+                        // build key for current prefix sequence hypothesis
+                        let mut sequence_c = sequence.clone();
+                        sequence_c.push(char_id);
+
+                        // compute log-prob of extending prefix with different char for current timestep
+                        // this is the succeeding prob-mass for both blank/non-blank source states
+                        let ext_log_prob_c = log_sum_exp_2_scalar(
+                            prefix.log_prob_blank,
+                            prefix.log_prob_non_blank,
+                        ) + char_log_prob;
+
+                        // optional language model score adjustment (applied for extending with different char)
+                        let mut new_lm_log_prob = prefix.log_prob_lm;
+                        if let Some(lm) = lm
+                        { new_lm_log_prob += lm.next_log_prob(&prefix.sequence, char_id); }
+
+                        // update total accumulated non-blank log-prob for current prefix path
+                        let entry_c = next_prefixes
+                            .entry(sequence_c)
+                            .or_insert((sentinel, sentinel, new_lm_log_prob));
+                        entry_c.1 = log_sum_exp_2_scalar(entry_c.1, ext_log_prob_c);
                     }
                 }
             }
-
-            // convert HashMap to Vec<BeamPrefix> for sorting
-            let mut next_prefixes: Vec<BeamPrefix> = next_prefixes
-                .into_iter()
-                .map(|(sequence, (log_prob_blank, log_prob_non_blank, log_prob_lm))| {
-                    BeamPrefix::new(
-                        sequence,
-                        log_prob_blank,
-                        log_prob_non_blank,
-                        log_prob_lm,
-                        self.lm_alpha,
-                        self.lm_beta,
-                    )
-                }).collect();
-
-            // if next_prefixes expanded past beam_width
-            // partition to top w by log-prob score
-            // then drop remaining candidates
-            let num_candidates = next_prefixes.len();
-            if num_candidates > w {
-                // select top beam_width prefix candidates
-                next_prefixes.select_nth_unstable_by((w - 1), |a, b| {
-                    b.combined_log_prob.partial_cmp(&a.combined_log_prob).unwrap() // sort by score (descending)
-                });
-                next_prefixes.truncate(w); // remove non-top beam_width prefixes
-            };
-
-            prefixes = next_prefixes;
         }
 
+        next_prefixes
+    }
+
+    /// Converts extended prefix map to sorted `Vec<Prefix>`, pruning to top `beam_width`.
+    /// 
+    /// If number of extended prefixes exceeds `beam_width`, partitions to top `beam_width` by combined log-prob score and drops rest.
+    /// 
+    /// ### Params:
+    /// - `extended_prefix`: Map of extended prefix sequences to their accumulated log-prob scores (blank, non-blank, LM).
+    /// - `beam_width`: Max number of prefix hypotheses to keep for next timestep.
+    /// - `lm_alpha`: Weight of language model score when combining with visual model score (for LM fusion).
+    /// - `lm_beta`: Length normalization factor for beam search (to avoid short sequence bias, for LM fusion).
+    /// 
+    /// ### Returns:
+    /// Sorted vector of top `beam_width` prefix hypotheses for next timestep, with combined log-prob scores.
+    pub(crate) fn beam_prune_step(
+        &self,
+        extended_prefix: FxHashMap<Vec<usize>, (f32, f32, f32)>,
+        beam_width: usize,
+        lm_alpha: f32,
+        lm_beta: f32,
+    ) -> Vec<Prefix> {
+        // convert HashMap to Vec<Prefix> for sorting
+        let mut candidates: Vec<Prefix> = extended_prefix
+            .into_iter()
+            .map(|(sequence, (log_prob_blank, log_prob_non_blank, log_prob_lm))| {
+                Prefix::new(
+                    sequence,
+                    log_prob_blank,
+                    log_prob_non_blank,
+                    log_prob_lm,
+                    lm_alpha,
+                    lm_beta,
+                )
+            }).collect();
+
+        // if candidates extended past beam_width
+        // partition to top w by log-prob score
+        // then drop remaining candidates
+        if candidates.len() > beam_width {
+            // select top beam_width prefix candidates
+            candidates.select_nth_unstable_by(beam_width - 1, |a, b| {
+                b.combined_log_prob.partial_cmp(&a.combined_log_prob).unwrap() // sort by score (descending)
+            });
+            candidates.truncate(beam_width); // remove non-top beam_width prefixes
+        }
+
+        candidates
+    }
+
+    /// Selects highest-scoring prefix and returns its sequence as `Vec<i64>`.
+    /// 
+    /// Assumes input prefixes are already pruned to top `beam_width` and sorted by score.
+    /// 
+    /// ### Params:
+    /// - `prefixes`: Candidate prefix sequences with accumulated log-prob scores to select from.
+    /// 
+    /// ### Returns:
+    /// Sequence of predicted token IDs (collapsed path) for best prefix.
+    pub(crate) fn select_best_prefix(&self, prefixes: Vec<Prefix>) -> Vec<i64> {
         // return highest scoring prefix sequence
         let best_prefix = prefixes.into_iter()
             .max_by(|a, b|
@@ -458,33 +607,6 @@ impl CtcDecoder {
         // convert usize IDs to i64 IDs
         best_prefix.sequence.into_iter().map(|u| u as i64).collect()
     }
-}
-
-
-
-/// Helper function for greedy search to collapse a path by:
-/// - removing blanks and false duplicates (repeated chars between blanks),
-/// - keeping true duplicates (repeated chars separated by blanks).
-/// 
-/// This helps to align time-based predictions with text-based targets.
-///
-/// ### Params:
-/// - `path`: Sequence of symbol int IDs deemed most probable by model (with blanks and duplicates) [T].
-/// - `blank_id`: ID of blank token in vocab.
-///
-/// ### Returns:
-/// Collapsed sequence of symbol int IDs (without blanks or duplicates) [L].
-pub fn collapse_path<T: PartialEq + Copy>(path: &[T], blank_id: T) -> Vec<T> {
-    let mut collapsed_path = Vec::with_capacity(path.len());
-    let mut prev = None;
-
-    // ignore dupes and blanks
-    for &token in path {
-        if Some(token) != prev && token != blank_id { collapsed_path.push(token); }
-        prev = Some(token);
-    }
-
-    collapsed_path
 }
 
 
@@ -535,7 +657,7 @@ mod tests {
         let token_map = TokenMap::new(vocab);
 
         let path = vec![7, 4, 4, blank_id, 11, blank_id, 11, 11, 14, 14, 14]; // "h e e _ l _ l l o o o"
-        let collapsed_path = collapse_path(&path, blank_id);
+        let collapsed_path = CtcDecoder::collapse_path(&path, blank_id);
 
         println!("\nOriginal path IDs: {:?}", path);
         println!("Collapsed path IDs: {:?}\n", collapsed_path);
@@ -554,7 +676,7 @@ mod tests {
         let device = Default::default();
         let dist = Distribution::Uniform(0.0, 1.0);
 
-        // dummy logits for 2 samples, 5 timesteps, V vocab symbols
+        // dummy logits for 2 samples, 5 timesteps, V vocab tokens
         let logits = Tensor::<B, 3>::random([2, 5, vocab_size], dist, &device);
 
         let decoder = CtcDecoderConfig::new()
@@ -585,7 +707,7 @@ mod tests {
         const T: usize = 11;
         const V: usize = VOCAB_SIZE;
 
-        const HI: f32 = 8.0; // big logit for target symbol
+        const HI: f32 = 8.0; // big logit for target token
         const LO: f32 = 0.0; // baseline for rest
 
         let blank_id = BLANK_ID;
@@ -598,7 +720,7 @@ mod tests {
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
-        // dummy logits for 2 samples, 11 timesteps, V vocab symbols (manually biased high blanks)
+        // dummy logits for 2 samples, 11 timesteps, V vocab tokens (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -639,7 +761,7 @@ mod tests {
         let device = Default::default();
         let dist = Distribution::Uniform(0.0, 1.0);
 
-        // dummy logits for 2 samples, 5 timesteps, V vocab symbols
+        // dummy logits for 2 samples, 5 timesteps, V vocab tokens
         let logits = Tensor::<B, 3>::random([2, 5, vocab_size], dist, &device);
 
         let decoder = CtcDecoderConfig::new()
@@ -671,7 +793,7 @@ mod tests {
         const T: usize = 11;
         const V: usize = VOCAB_SIZE;
 
-        const HI: f32 = 8.0; // big logit for target symbol
+        const HI: f32 = 8.0; // big logit for target token
         const LO: f32 = 0.0; // baseline for rest
 
         let blank_id = BLANK_ID;
@@ -684,7 +806,7 @@ mod tests {
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
-        // dummy logits for 2 samples, 11 timesteps, V vocab symbols (manually biased high blanks)
+        // dummy logits for 2 samples, 11 timesteps, V vocab tokens (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -723,7 +845,7 @@ mod tests {
         const T: usize = 11;
         const V: usize = VOCAB_SIZE;
 
-        const HI: f32 = 8.0; // big logit for target symbol
+        const HI: f32 = 8.0; // big logit for target token
         const LO: f32 = 0.0; // baseline for rest
 
         let blank_id = BLANK_ID;
@@ -736,7 +858,7 @@ mod tests {
         let chars_1 = token_map.ids_to_chars(&ids_1).unwrap();
         let chars_2 = token_map.ids_to_chars(&ids_2).unwrap();
 
-        // dummy logits for 2 samples, 11 timesteps, V vocab symbols (manually biased high blanks)
+        // dummy logits for 2 samples, 11 timesteps, V vocab tokens (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -791,7 +913,7 @@ mod tests {
         const T: usize = 14;
         const V: usize = VOCAB_SIZE;
 
-        const HI: f32 = 8.0; // big logit for target symbol
+        const HI: f32 = 8.0; // big logit for target token
         const LO: f32 = 0.0; // baseline for rest
 
         let blank_id = BLANK_ID;
@@ -818,7 +940,7 @@ mod tests {
             vec![7, 14, 15, 15, 4, 3, 26, 7, 14, 15, 4, 3],       // "h o p p e d   h o p e d"
         ];
 
-        // dummy logits for 5 samples, 14 timesteps, V vocab symbols (manually biased high blanks)
+        // dummy logits for 5 samples, 14 timesteps, V vocab tokens (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [
             array::from_fn(|t| one_hot_logits::<V>(ids_1[t], HI, LO)),
             array::from_fn(|t| one_hot_logits::<V>(ids_2[t], HI, LO)),
@@ -941,7 +1063,7 @@ mod tests {
         println!("Greedy decoded char sequences: {:?}\n", greedy_decoded_char_sequences);
 
         // beam sums log-probs across alignments
-        // greedy picks per-frame optimums
+        // greedy picks per-timestep optimums
         assert_eq!(beam_decoded_id_sequences[0], vec![0, 0]); // "aa"
         assert_eq!(greedy_decoded_id_sequences[0], vec![0, 1, 0]); // "aba"
     }
@@ -952,7 +1074,7 @@ mod tests {
         const T: usize = 4;
         const V: usize = VOCAB_SIZE;
 
-        const HI: f32 = 8.0; // big logit for target symbol
+        const HI: f32 = 8.0; // big logit for target token
         const LO: f32 = 0.0; // baseline for rest
 
         let token_map = TokenMap::new(VOCAB);
@@ -960,7 +1082,7 @@ mod tests {
 
         let (a_id, e_id, h_id, t_id, blank_id) = (0, 4, 7, 19, BLANK_ID); // "a", "e", "h", "t", "_"
 
-        // dummy logits for 1 sample, 4 timesteps, V vocab symbols (manually biased high blanks)
+        // dummy logits for 1 sample, 4 timesteps, V vocab tokens (manually biased high blanks)
         let logits: [[[f32; V]; T]; N] = [[
             one_hot_logits(t_id, HI, LO),                            // t = 0: "t"
             one_hot_logits(h_id, HI, LO),                            // t = 1: "h"
@@ -1010,7 +1132,7 @@ mod tests {
         const T: usize = 6;
         const V: usize = VOCAB_SIZE;
 
-        const HI: f32 = 8.0; // big logit for target symbol
+        const HI: f32 = 8.0; // big logit for target token
         const LO: f32 = 0.0; // baseline for rest
 
         let token_map = TokenMap::new(VOCAB);

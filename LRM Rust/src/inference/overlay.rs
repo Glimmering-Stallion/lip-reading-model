@@ -157,7 +157,9 @@ impl FrameAnnotator {
         );
 
         let x0 = frame_w - margin - dst_w;
-        let y0 = frame_h - margin - dst_h;
+        let y0 = frame_h - margin - dst_h; // bottom anchoring
+        // let y0 = margin; // top anchoring
+
         if x0 < 0 || y0 < 0 { return; }
         let dst_rect = Rect::new(x0, y0, dst_w, dst_h);
         if let Ok(mut roi) = frame.roi_mut(dst_rect)
@@ -179,6 +181,7 @@ impl FrameAnnotator {
         let frame_h = frame.rows();
         let x = layout.margin;
 
+        // bottom anchoring
         for (i, text) in text_lines
             .iter()
             .rev()
@@ -190,6 +193,18 @@ impl FrameAnnotator {
             let position = Point::new(x, y);
             self.draw_text(frame, text, position, layout.text_size, layout.text_thickness);
         }
+
+        // top anchoring
+        // for (i, text) in text_lines
+        //     .iter()
+        //     .filter(|t| !t.is_empty())
+        //     .enumerate()
+        // {
+        //     let y = layout.margin + (i as i32) * layout.text_line_spacing;
+
+        //     let position = Point::new(x, y);
+        //     self.draw_text(frame, text, position, layout.text_size, layout.text_thickness);
+        // }
     }
 
     /// Draws a given text at a given position within a given frame.

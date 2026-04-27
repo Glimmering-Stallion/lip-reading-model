@@ -77,6 +77,13 @@ impl CtcLoss {
         input_lengths: Tensor<B, 1, Int>,
         target_lengths: Tensor<B, 1, Int>,
     ) -> Tensor<B, 1> {
+        let [n, t, v] = inputs.dims();
+
+        assert!(n > 0, "no samples in batch");
+        assert!(t > 0, "no timesteps in inputs");
+        assert!(v > 1, "vocab size must be > 1 for CTC loss");
+        assert!(self.blank_id < v, "blank ID ({}) is out of vocabulary size bounds ({})", self.blank_id, v);
+
         let tensor = self.forward_no_reduction(inputs, targets, input_lengths, target_lengths);
         match &self.reduction.0 {
             Reduction::Mean => tensor.mean(),
@@ -89,10 +96,10 @@ impl CtcLoss {
     ///
     /// Since inputs/targets are padded to max length found in batch, needs separate input/target lengths for true lengths.
     /// Works by:
-    /// - computing log-probs from logits via log softmax
-    /// - modifying target sequences by interleaving blanks between symbols
-    /// - iteratively computing accumulated log-probabilities of all possible paths through
-    /// time-sequence grid that align with the modified target sequence
+    /// - computing log-probs from logits via log softmax,
+    /// - modifying target sequences by interleaving blanks between symbols,
+    /// - iteratively computing accumulated log-probabilities of all possible paths through time-sequence grid that align with the modified target sequence.
+    /// - masking out padded timesteps/positions in inputs/targets based on true lengths.
     ///
     /// ### Params:
     /// - `inputs`: [N, T_max, Vocab] (time-padded logits from model).
@@ -110,9 +117,9 @@ impl CtcLoss {
         target_lengths: Tensor<B, 1, Int>,
     ) -> Tensor<B, 1> {
         let device = inputs.device();
-        let [n, t, v] = inputs.dims();
-        // let sentinel_value = f32::NEG_INFINITY; // possibly causes NaNs
-        let sentinel_value = -1e30; // numerically stable
+        let [n, t, _v] = inputs.dims();
+        // let sentinel = f32::NEG_INFINITY; // possibly causes NaNs
+        let sentinel = -1e30; // numerically stable
 
         assert_eq!(inputs.dims()[0], targets.dims()[0], "Inputs/targets batch size mismatch");
         assert_eq!(input_lengths.dims()[0], inputs.shape()[0], "Inputs/lengths batch size mismatch");
@@ -142,7 +149,7 @@ impl CtcLoss {
             );                                                                       // [N, T, (2L + 1)]
 
         // init DP buffer for storing accumulated log-probs for paths through time-sequence grid
-        let mut curr_fwd: Tensor<B, 2> = Tensor::full([n, intr_pad_targ_length], sentinel_value, &device); // [N, (2L_max + 1)]
+        let mut curr_fwd: Tensor<B, 2> = Tensor::full([n, intr_pad_targ_length], sentinel, &device); // [N, (2L_max + 1)]
 
         // precompute skip validity masks for 1-pos and 2-pos jumps in DP grid
         // (these are same across timesteps, so can compute once here and reuse in DP loop)
@@ -163,14 +170,14 @@ impl CtcLoss {
 
         // t = 0: DP base case (initialization)
         // init DP with log-probs of first two symbols in blank-interleaved target sequence
-        for i in 0..2 {
-            // gather batch-wise log-probs of i-th symbol ID at t = 0
-            let log_prob_0_i = log_probs_targets.clone()    // [N, T, (2L + 1)]
-                .slice([0..n, 0..1, i..(i + 1)])  // [N, 1, 1]
+        for s in 0..2 {
+            // gather batch-wise log-probs of s-th symbol ID at t = 0
+            let log_prob_0_s = log_probs_targets.clone()    // [N, T, (2L + 1)]
+                .slice([0..n, 0..1, s..(s + 1)])  // [N, 1, 1]
                 .reshape([n, 1]);                      // [N, 1]
 
             // write initial t = 0 log-probs to DP buffer
-            curr_fwd = curr_fwd.slice_assign([0..n, i..(i + 1)], log_prob_0_i);
+            curr_fwd = curr_fwd.slice_assign([0..n, s..(s + 1)], log_prob_0_s);
         }
 
         // t ≥ 1: DP recurrence
@@ -188,7 +195,7 @@ impl CtcLoss {
                 .squeeze_dim(1)                                                                        // [N, (2L + 1)]
                 .mask_where(
                     time_mask_t.clone().bool_not(),
-                    Tensor::full([n, intr_pad_targ_length], sentinel_value, &device)
+                    Tensor::full([n, intr_pad_targ_length], sentinel, &device)
                 );
 
             // possible actions at current timestep (based on what could have happened at previous frame)
@@ -198,15 +205,15 @@ impl CtcLoss {
             let stay = curr_fwd.clone();
             let adv_1 = curr_fwd.clone()
                 .roll_dim(-1, 1) // shift right by 1 on dim 1
-                .mask_fill(skip_1_mask.clone().bool_not(), sentinel_value);
+                .mask_fill(skip_1_mask.clone().bool_not(), sentinel);
             let adv_2 = curr_fwd.clone()
                 .roll_dim(-2, 1) // shift right by 2 on dim 1
-                .mask_fill(skip_2_mask.clone().bool_not(), sentinel_value);
+                .mask_fill(skip_2_mask.clone().bool_not(), sentinel);
 
             // compute accumulated log-prob for current path (in time-sequence grid) from all possible actions
             // then mask out log-probs at positions beyond true blank-interleaved target lengths
             let next_fwd = (log_sum_exp_3_tensor(stay, adv_1, adv_2) + log_probs_t.clone()) // [N, (2L + 1)]
-                .mask_fill(length_mask.clone().bool_not(), sentinel_value);
+                .mask_fill(length_mask.clone().bool_not(), sentinel);
 
             curr_fwd = curr_fwd.mask_where(time_mask_t, next_fwd);
         }
@@ -220,7 +227,6 @@ impl CtcLoss {
         -total_log_prob.squeeze_dim(1) // [N]
     }
 
-
     /// Interleaves blank IDs into target sequences in batch for CTC loss computation.
     ///
     /// ### Params:
@@ -229,7 +235,7 @@ impl CtcLoss {
     ///
     /// ### Returns:
     /// [N, (2L + 1)] (target sequences with blanks interleaved, where L is original target length without blanks)
-    fn interleave_targets_with_blanks<B: Backend>(
+    pub(crate) fn interleave_targets_with_blanks<B: Backend>(
         &self,
         targets: Tensor<B, 2, Int>, // [N, L_max]
         device: &B::Device,
@@ -252,9 +258,9 @@ impl CtcLoss {
         // - flatten    [N, 2L + 1]
         // to obtain: [blank, y1, blank, y2, ..., blank, yT, blank] (IDs of blank-interleaved targets of length 2L + 1)
         let interleaved = Tensor::stack::<3>(vec![blanks, labels], 1) // [N, 2, L + 1]
-                .swap_dims(1, 2)
-                .reshape([n, (len_targ_orig + 1) * 2])
-                .slice([0..n, 0..len_targ_intr]);
+            .swap_dims(1, 2)
+            .reshape([n, (len_targ_orig + 1) * 2])
+            .slice([0..n, 0..len_targ_intr]);
         assert_eq!(interleaved.dims()[1], len_targ_intr, "Interleaved targets/length mismatch");
 
         interleaved
@@ -269,7 +275,7 @@ impl CtcLoss {
     /// ### Returns:
     /// Tuple of masks, where each is a [N, 2L + 1] bool tensor indicating whether it's valid to skip by 1
     /// or 2 positions in DP grid at a position in blank-interleaved target sequence.
-    fn compute_skip_validity_masks<B: Backend>(
+    pub(crate) fn compute_skip_validity_masks<B: Backend>(
         &self,
         interleaved_targets: Tensor<B, 2, Int>,
         device: &B::Device,

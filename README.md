@@ -1,214 +1,111 @@
-# Project: End-to-End Visual Speech Recognition Model (VSRM) in Rust (Audioless)
+<!-- This is the file that serves as the entry point (what it is how to run, what works now, where to go next) -->
+<!-- Rule of thumb for what goes here: "Would a new visitor need this in 60 seconds?" -->
 
-Objective:
+# End-to-End Visual Speech Recognition Model (VSRM) in Rust (Audioless)
+
+## Objective
+
 Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering data ingestion, model architecture, training, loss computation, decoding, and language model integration, with a long-term goal of live camera inference using a dynamically tracking mouth-cropped ROI.
 
-## Accomplishments to Date
+## Motivations
 
-### Data Ingestion (`pipeline/io.rs` and `pipeline/adapters/grid/grid_dataset.rs`)
+- Deep learning is currently heavily Python-dominated, despite being well established. For **real-time** systems, Python stacks often imply heavier runtimes and more moving parts.
+- My goal with this project was to test what was possible with Rust for ML by building an **audio-free end-to-end Visual Speech Recognition Model (VSRM)** for lip-reading tasks, using **Burn** for the deep learning side, and **OpenCV** for the computer vision side.
 
-- For now, using [GRID](https://zenodo.org/records/3625687) corpus as proof of concept that the VSRM can converge (speaker ("s1", "s2", ..., "s34") data organized into sample bundles under `data/grid-lr-corpus/<speaker>/<sample_id>/`). Each sample folder holds video (`<sample_id>.mp4` preferred after preprocess, else `.mpg`) and transcript (`<sample_id>.txt` preferred after preprocess, else `.align`).
-- For GRID, `cargo preprocess --dataset grid` also writes mouth-crop frame tensors as `.bin` files under `data/grid-lr-corpus/cropped_frames/` (`GridDataset::pre_extract_all`), so training can load crops from disk instead of re-decoding video every epoch.
-- GRID corpus discovery and bundled-dir listing skip `__MACOSX`, hidden (`.`‑prefixed) entries, and non-`.mpg`/`.align` files so macOS zip metadata does not break normalize/preprocess (`LRM Rust/src/pipeline/adapters/grid/grid_adapter.rs`).
-- In future, will consider using the [Oxford-BBC LRW](https://www.robots.ox.ac.uk/~vgg/data/lip_reading/lrw1.html) corpus in the future, for a broad-term generalization to conversational speech to generalize the VSRM to broader use.
-- Built dataset utilities that:
-  - Infer file name stems automatically.
-  - Pair videos with alignment annotations.
-  - Download and extract compressed datasets when missing.
-- Implemented a video pipeline using OpenCV in `grid_dataset.rs` that:
-  - Decodes video files frame by frame.
-  - Converts frames to grayscale.
-  - Uses pre-trained Haar Cascade detectors for face and mouth localization (see [Attributions](#attributions)).
-  - Crops a dynamic mouth ROI per frame.
-  - Flattens pixel data into contiguous `Vec<u8>` tensors.
+- I have two layers of success established:
+  - I started with the long-term goal of wanting broad-corpus training (like Oxford BBC's LRW or LRS2/3) to enable generalized live model inferencing (deferred for now, as a phase 2 future ordeal).
+  - The current checkpoint represents a milestone in a working data ingestion system (source-agnostic), training framework, with model demonstrating palpable loss convergence on the GRID Audio-Visual Speech Corpus, and a working inference engine using a swappable mouth tracker.
 
-### Data Standardization & Normalization (`adapters/`)
+## Why Rust?
 
-- Implemented dataset adapters that contain source-specific logic to:
-  - Transcode src video files into `.mp4`, and write `.txt` from src transcript files, then remove redundant src video/transcript files when safe.
-  - Map raw datasets (GRID, LRW, etc.) into a standardized `VsrmItem` format.
-  - Rely on the more abstract `DatasetSplit` utility in `pipeline/dataset.rs` for train/val/test partitioning.
-- The adapter modules are to reshape a dataset into a dir containing sharded video-transcript bundles, where video files are `.mp4` and transcript files are `.txt` (GRID adapter modules enforces this currently, but other dataset sources are intended to follow the same form).
-- In future, will consider FPS standardization to a target FPS (25) as well (frame dropping preferred over interpolation due to simplicity and avoidance of ghost data).
+- Rust provides tighter thread and runtime control.
+- Native compilation should help keep inference overhead low.
+- Rust's ownership/borrow system eliminates entire classes of runtime errors common in other low-level system languages (like dangling pointers, double-frees, null dereferences, etc.).
+- Unlike Python with its Global Interpreter Lock, Rust's concurrent nature allows multi-core parallelism (in my case, Burn's ```DataLoader``` spawning multi-worker threads to fetch/process frames, or ```VsrmBatcher``` concurrently collating data on CPU before moving to GPU).
+- Rust compiles projects into one lightweight deployable binary which mitigates container bloat / deployment sizes (compared with Python + CUDA + framework heavy stacks).
 
-### Data Batching (`pipeline/batcher.rs`)
+## Stack
 
-- Developed a custom `VsrmBatcher` that takes a collection of standardized `VsrmItem`  standardizes and pads data.
-- Standardization handled by:
-  - Scaling pixel values to [0, 1].
-  - Centering pixel values to zero mean and unit variance.
-- Padding handled by:
-  - Finding longest video-frames/transcript-sequences among a batch of sequences (as `max_t`/`max_l`).
-  - Padding variable-length video frames in that batch to `max_t` with $0$.
-  - Padding variable-length transcript sequences in that batch to `max_l` with `BLANK_ID`.
-- Uses a CPU-to-GPU staging strategy, where tensors are collated on the `NdArray` CPU backend before a single-shot move to the `Wgpu` GPU backend for minimizing PCIe bus latency.
+**Deep dives** — section-by-section detail in the [**LRM portfolio article**](docs/lrm-portfolio-article.md). Each link below jumps to the matching *Part*.
 
-### Data Partitioning (`pipeline/dataset.rs`)
+- **Data pipeline** — GRID normalization/bundling, adapters, batching, norm stats, optional `cropped_frames/` cache.  
+  [Part 1 — Data pipeline](docs/lrm-portfolio-article.md#part-1--data-pipeline)
 
-- Dataset splitting policy is delegated to a generic and source-agnostic `DatasetSplit` wrapper, to allow any dataset (GRID, LRW, etc.) to be partitioned through index-mapping without modifying the more specialized adapter logic.
-- Applies a random but deterministic shuffle to the index-mapping.
-- Then partitions dataset instances into train/val/test splits.
+- **Model architecture** — Conv3D/ResBlock frontend, GroupNorm, TCN backend, CTC head.  
+  [Part 2 — Neural architecture](docs/lrm-portfolio-article.md#part-2--neural-architecture)
 
-### Alignment & Vocabulary Handling (`vocab.rs`)
+- **Training framework** — Burn `Learner`, LR scheduling, CTC loss/decode, optional char n-gram LM.  
+  [Part 3 — DL training framework](docs/lrm-portfolio-article.md#part-3--dl-training-framework)
 
-- Implemented parsing of .align files.
-- Filters out silence tokens ("sil", "sp").
-- Inserts spaces between words in alignment-derived targets (`SPACE_ID`) for WER metrics.
-- Converts labels into integer sequences using a bidirectional vocabulary map.
-- Designed a character-level vocabulary including:
-  - Lowercase letters (a–z)
-  - Space (word boundaries)
-  - Dedicated CTC blank symbol
-- Ensured the blank symbol:
-  - Appears only in model outputs.
-  - Never appears in training targets.
-  - Is removed during decoding.
+- **Inference framework** — Haar tracker, overlays, speech gating, file and live inference paths.  
+  [Part 4 — CV inference framework](docs/lrm-portfolio-article.md#part-4--cv-inference-framework)
 
-### VSR Model Architecture (`vsrm/vsrm.rs` and `vsrm/tcn.rs`)
+- **CLI & export** — `build-lm`, `preprocess`, `train`, `infer`, `export` (ONNX + TeX).  
+  [Part 5 — CLI design and usage](docs/lrm-portfolio-article.md#part-5--cli-design-and-usage)
 
-- Implemented a full spatiotemporal VSRM in Rust.
-- Uses a 3D convolutional (Conv3D) front-end for joint spatial–temporal feature extraction.
-- Gave strided convolutions to Conv3D layers (over 3D maxpooling) for learned rather than naive downsampling.
-- Uses GroupNorm following Conv3D layers for mitigating internal covariance shift during forward/backward passes. GroupNorm chosen over:
-  - BatchNorm because BatchNorm struggles with small batches and larger batches is memory-heavy against high-dim video data.
-  - LayerNorm because LayerNorm globalizes its averaging across all channels, pixels, and timesteps, leading to "washing-out" of localized variations in spatial data.
-- Replaced BiLSTMs with Temporal Convolutional Networks (TCN) to improve:
-  - Parallelism
-  - Inference latency
-  - Deployment simplicity
-- Built modular TCN blocks featuring:
-  - Dilated causal convolutions
-  - Per-timestep causal LayerNorm (normalizes over channels only)
-  - Residual blocks
-  - Dropout and non-linear activations
-- Added a projection head mapping features to per-time-step character logits.
+## Quick Start
 
-### Training Pipeline (`training/learner.rs` and `training/trainer.rs`)
+Note: Currently verified end-to-end on GRID dataset only; other datasets like LRW/LRS are planned extensions, not plug-and-play yet.
 
-- Keeping a legacy `trainer.rs` file implementing a manual training loop to test model convergence on dummy data.
-- Implemented a complete training and validation pipeline using Burn's `Learner` API in Rust as `learner.rs`.
-- Supports:
-  - Batching
-  - Epoch-based training
-  - Auto-checkpointing
-  - Metric logging
-  - Train/validation dataset splitting
-- Handles dynamic train/eval mode switching implicitly with Burn's `Autodiff` and `Module` traits (which allows gradient tracking).
-- Integrated the Adam optimizer with configurable learning rates.
-- Implemented Noam-style learning rate warmup and scheduling.
-- Added numerical utility functions (mean, standard deviation, normalization).
-
-### Custom CTC Loss (`ctc/ctc_loss.rs`)
-
-- Implemented custom Connectionist Temporal Classification (CTC) loss.
-- Uses forward-backward dynamic programming.
-- Performs all computations in log-space for numerical stability.
-- Correctly handles blank symbols, repeated labels, and variable-length input/target sequences
-- Designed to be framework-agnostic within Burn.
-
-### Custom CTC Decoding & Inference (`ctc/ctc_decode.rs`)
-
-- Implemented custom CTC decoding (greedy and prefix beam search).
-- Prefix beam search decoding has:
-  - Separate blank and non-blank probability tracking
-  - Log-probability accumulation
-  - Beam pruning and prefix merging
-- Decoder architecture designed to support incremental/streaming inference.
-
-### Language Model Integration (`ctc/lm.rs`)
-
-- Incorporated a dedicated language model interface for CTC decoder's prefix beam search.
-- Designed for character-level N-gram scoring.
-- In future, might consider a word-level N-gram.
-- Uses an enum to support different LM types (N-gram LM, Neural LM, etc.)
-- Supports configurable:
-  - Language model weight (alpha): controls influence of LM over base VSRM's predictions (lower alpha means trusting VSRM over LM more and vice versa for higher alpha).
-  - Insertion bonus (beta): counteracts LM's bias toward shorter sequences (adding more tokens makes log-prob score more negative, where beta adds a small positive bonus).
-- Currently implementing an N-gram LM to improve decoding coherence.
-- Training on the [OpenSLR LibriSpeech LM Norm](https://www.openslr.org/11) corpus.
-- For now, just using self-trained char-level trigram model.
-- In future, will consider using pre-trained [trigram ARPA LM](https://www.openslr.org/11) word-level model.
-- In future, will also consider using a tiny neural LM (char/BPE GRU or small Transformer) with prefix-state caching per beam (running it only on top-K acoustic symbols each step to bound cost; or use it as an N-best reranker after beam, which mitigates per-frame latency).
-
-### System Design & Engineering Decisions
-
-- Entire pipeline implemented in Rust (no Python, PyTorch, or TensorFlow dependencies) for emphasis on:
-  - Determinism
-  - Parallelism
-  - Memory safety
-  - Low-latency inference
-- Architecture explicitly designed to support future extensions:
-  - Real-time webcam input
-  - Sliding-window streaming inference
-  - Dynamic mouth tracking via face detection and landmarks
-  - Portable deployment via ONNX or native Rust runtimes (e.g., Tract)
-
-## Current Status
-
-- **I/O and data acquisition:** Video encoding/decoding, mouth ROI extraction utilities, and dataset download/extract helpers are in place.
-- **Data pipeline:** Adapter mapping (at least for GRID), preprocessing (including optional on-disk mouth-crop cache in `cropped_frames/`), deterministic splitting, and batching are implemented.
-- **Loss:** Custom CTC loss implemented in log-space (forward/backward DP) with vectorized batch support for variable-length sequences.
-- **Decoding:** Greedy and prefix beam-search CTC decoding, optionally rescored with the integrated char-level N-gram LM (supports alpha/beta).
-- **Training:** Burn `Learner`-based training/validation loop with checkpointing, metrics, and LR scheduling. Uses `create_dataloaders` helper to handle train/val splits, batching, and dataloading for source-specific datasets.
-- **Inference:** Using an `InferenceSession` engine, which supports static file inference (as a bundled video-transcript input) with `infer_file` and async live webcam inference with `infer_live` (main thread captures/tracks/overlays; worker thread runs model forward passes).
-- **Verification:** Unit tests for CTC loss/decoding, tracker ROI behavior, and sanity checks for model input/output dataflow; training convergence validated via overfit tests.
-- **Mouth tracking:** Haar-cascade face/mouth detection with stabilized mouth ROI per frame.
-- **CLI:** `build-lm`, `preprocess`, `train` (new/resume), `infer` (static file / live cam), and `export` (bundle `exports/<model_id>_export/` with `onnx/` + `tex/`, optional `--output` bundle root) subcommands are available.
-- **Inference viz overlay:** `FrameAnnotator` in `LRM Rust/src/inference/overlay.rs` draws tracker ROIs, stabilized center, a bottom-left status block, and a bottom-right mouth-crop PIP (`draw_mouth_crop_inset`). `OverlayLayout::from_frame` scales margins, text, ROI strokes, and PIP size from the frame’s shorter side (live and annotated export).
-- **Live inference speech gating:** When speech gating is enabled, `annotate_video` and `infer_live` both apply `SpeechGate` per frame so the prediction caption matches hysteresis (`LRM Rust/src/inference/speech_gate.rs`).
-- **Model exporting:** The export command writes a bundle under exports with an ONNX file plus TeX outputs. ONNX is produced by a small PyTorch twin (since Burn does not emit ONNX itself). Install the Python packages in `requirements.txt` listed under LRM Rust tools. When a Python step fails, the Rust CLI prints its `stderr` so errors like a missing torch install are visible. TeX uses a vendored `PlotNeuralNet` (cloned the upstream repo into this repo's tools once and then customized): macro, TCN detail, and ResBlock diagrams, with optional single-image or multi-frame thumbnails to the left of the input block (this multi-frame art is picked up from a folder next to the TeX export script). To compile and render the generated TeX files for visualization, just upload the whole generated `tex` directory to Overleaf and hit compile.
-
-## Pending / Future Work
-
-- **Add Landmark-Based Tracker:** Improve ROI stability and accuracy, plus rotational invariance benefits by adding a landmark/pose-based tracker backend (e.g. MediaPipe) as a separate tracker option to the existing layered Haar cascades tracker.
-- **Grad-CAM For Overlay Visualization:** During the forward pass, save the "activations" of the last TCN or Conv layer. Treat those activations as a heatmap. Upscale that heatmap to match the mouth-crop size. Then alpha-blend it (transparent overlay) onto the video.
-- **FPS Video Standardization:** Unify potentially varying frame-rates between different video-transcript dataset sources.
-- **Normalize Haar Has Lip Motion Output By Time:** Perform delta time normalization between the gradient changes between last and current frames to account for variable frame-rate video/cam inputs.
-- **Speech Gate Hysteresis Tweak:** Have a reduced off frames field (or combine on/off frames into a single field) then have an epsilon for the additional extra frames to add to an off condition instead. Then wire the "speech active" state to the true on/off frame conditions, while only have the model inferencing period subject to the hysteresis (where a person might pause a bit with intention to still talk; the speech active state updates responsively to that short pause and says "not talking", while the model inferencing period is not destroyed). In short, apply hysteresis to model inferencing, while keep the speech active state responsive and true to time.
-
-## CLI Usage
-
-From the `LRM Rust` directory (project root):
+### Setup
 
 ```
-# Build N-gram LM (trains if missing, else loads and evaluates perplexity)
-cargo run -- build-lm --model [my_lm.bin] --corpus [path/to/corpus.txt] --n [n_gram_order]
+# 1. Install Rust toolchain manager (rustup)
 
-# Preprocess a specific dataset for the VSRM:
-cargo run -- preprocess --dataset [dataset_src]
+# macOS (zsh)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
 
-# Train new VSRM with default model ID "vsrm_{dataset_src}" (error if ID alr exists):
-cargo run -- train --dataset [dataset_src]
+# Windows (PowerShell)
+winget install Rustlang.Rustup
+$env:Path += ";$env:USERPROFILE\.cargo\bin"
+# Note: USERPROFILE is your home folder on Windows (e.g., C:\Users\YourName)
 
-# Train new VSRM with custom model ID (error if ID exists; --dataset required for fresh start):
-cargo run -- train --model [my_vsrm] --dataset [dataset_src]
+# check versions
+rustup --version
+cargo --version
 
-# Resume training from latest checkpoint (uses last completed epoch):
-cargo run -- train --model [my_vsrm] --resume
+# 2. Install OpenCV system libs
 
-# Resume training from specified epoch checkpoint:
-cargo run -- train --model [my_vsrm] --resume [epoch]
+# macOS (zsh)
+brew install opencv
 
-# Train using a subset of the dataset (e.g. fraction = 0.1 for 10%):
-cargo run -- train --model [...] --subset [fraction]
+# Windows (PowerShell)
+winget install OpenCV.OpenCV
 
-# Keep all checkpoints (default: keep most recent only; enables resume from earlier epochs):
-cargo run -- train --model [...] --keep-all-checkpoints [on|off]
+# 3. Clone and enter Rust Crate
+git clone https://github.com/Glimmering-Stallion/lip-reading-model.git
+cd "lip-reading-model/LRM Rust"
 
-# Inference on a bundled video-transcript directory (predictions printed to stdout):
-cargo run -- infer --model [my_vsrm] --input [path/to/dir_id]
+# 4. Build and compile local package and dependencies
+cargo build
+```
 
-# Live inference from default webcam (device index 0):
-cargo run -- infer --model [my_vsrm] --live
+### Data layout (required)
 
-# Live inference from a specific camera (OpenCV device index):
-cargo run -- infer --model [my_vsrm] --live [my_camera]
+The CLI expects local datasets under `LRM Rust/data/` with these paths:
 
-# Export bundle: exports/[my_vsrm]_export/onnx/vsrm_export.onnx + tex/ (see Model exporting)
-cargo run -- export --model [my_vsrm]
+```text
+data/
+├─ grid-lr-corpus/
+│  └─ <speaker>/<sample_id>/
+│     ├─ <sample_id>.mp4   # preferred (normalized video)
+│     └─ <sample_id>.txt   # preferred (normalized transcript)
+└─ librispeech-lm-norm/
+   └─ librispeech-lm-norm.txt
+```
 
-# Optional: custom bundle root, ONNX opset, trace length T
-cargo run -- export --model [my_vsrm] --output [path/to/bundle_dir] --opset 17 --time-steps 96
+### First Run
+
+```
+# 1. Preprocess on GRID dataset (only GRID supported, also may take a while as it runs for entire dataset)
+cargo run -- preprocess --dataset grid
+
+# 2. Train on GRID dataset
+cargo run -- train --model my_vsrm --dataset grid
+
+# 3. Infer on a GRID video-transcript sample
+cargo run -- infer --model my_vsrm --input path/to/<bundle_id>
 ```
 
 ## Attributions
@@ -240,103 +137,44 @@ Resources that informed the implementation of concepts in this project:
 - **TCNs for sequence modeling (popularized):** Bai et al. (2018). An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling. [arXiv](https://arxiv.org/abs/1803.01271)
 - **AdamW optimizer** Loshchilov, I. & Hutter, F. (2019). Decoupled Weight Decay Regularization. ICLR. [arXiv](https://arxiv.org/abs/1711.05101)
 
-## Project Tree
+## Project Tree (abridged)
+
+Top-level layout and main Rust module directories. For every file and nested path, see [**NOTES**](./NOTES.md#project-tree-detailed) (*Project Tree (detailed)*).
 
 ```
 Lip Reading Model
 ├─ LICENSE
+├─ docs
+│  ├─ assets
+│  └─ lrm-portfolio-article.md
 ├─ LRM Python
 │  ├─ application
-│  │  ├─ animation.gif
-│  │  ├─ general_utils.py
-│  │  ├─ lipread.py
-│  │  └─ model_utils.py
 │  ├─ lipread.ipynb
 │  ├─ main.py
 │  └─ requirements.txt
 ├─ LRM Rust
-│  ├─ Cargo.lock
 │  ├─ Cargo.toml
+│  ├─ Cargo.lock
+│  ├─ CHANGELOG.md
 │  ├─ data
-│  │  ├─ grid-lr-corpus
-│  │  │  ├─ cropped_frames
-│  │  │  ├─ s1
-│  │  │  │  └─ <stem_id>
-│  │  │  │  ⋮  ├─ <stem_id>.mp4
-│  │  │  │  ⋮  └─ <stem_id>.txt
-│  │  │  └─ s34
-│  │  │     └─ <stem_id>
-│  │  │        ├─ <stem_id>.mp4
-│  │  │        └─ <stem_id>.txt
-│  │  └─ librispeech-lm-norm
-│  │     └─ librispeech-lm-norm.txt
 │  ├─ models
 │  ├─ outputs
-│  ├─ assets
 │  ├─ exports
-│  │  └─ <model_id>_export
-│  │     ├─ onnx
-│  │     │  └─ vsrm_export.onnx
-│  │     └─ tex
-│  │        ├─ resblk_export.tex
-│  │        ├─ tcn_export.tex
-│  │        ├─ vsrm_export.tex
-│  │        └─ layers
-│  ├─ rust-toolchain.toml
-│  ├─ rustfmt.toml
 │  ├─ tools
-│  │  ├─ requirements.txt
 │  │  ├─ plotneuralnet
 │  │  ├─ onnx_export
-│  │  │  ├─ export_onnx.py
-│  │  │  └─ vsrm_twin.py
 │  │  └─ tex_export
-│  │     └─ export_tex.py
-│  ├─ src
-│  │  ├─ cli.rs
-│  │  ├─ context.rs
-│  │  ├─ ctc
-│  │  │  ├─ ctc_decode.rs
-│  │  │  ├─ ctc_loss.rs
-│  │  │  ├─ lm.rs
-│  │  │  └─ mod.rs
-│  │  ├─ inference
-│  │  │  ├─ loader.rs
-│  │  │  ├─ mod.rs
-│  │  │  ├─ overlay.rs
-│  │  │  ├─ predictor.rs
-│  │  │  └─ speech_gate.rs
-│  │  ├─ lib.rs
-│  │  ├─ main.rs
-│  │  ├─ pipeline
-│  │  │  ├─ adapters
-│  │  │  │  ├─ grid/
-│  │  │  │  │  ├─ grid_dataset.rs
-│  │  │  │  │  ├─ grid_adapter.rs
-│  │  │  │  │  └─ mod.rs
-│  │  │  │  └─ mod.rs
-│  │  │  ├─ batcher.rs
-│  │  │  ├─ dataset.rs
-│  │  │  ├─ io.rs
-│  │  │  ├─ mod.rs
-│  │  │  └─ tracker
-│  │  │     ├─ haar.rs
-│  │  │     ├─ mod.rs
-│  │  │     └─ tracker.rs
-│  │  ├─ training
-│  │  │  ├─ learner.rs
-│  │  │  ├─ metrics.rs
-│  │  │  ├─ mod.rs
-│  │  │  └─ trainer.rs
-│  │  ├─ utils.rs
-│  │  ├─ vocab.rs
-│  │  └─ vsrm
-│  │     ├─ mod.rs
-│  │     ├─ residual.rs
-│  │     ├─ summary.rs
-│  │     ├─ tcn.rs
-│  │     └─ vsrm.rs
-│  └─ target
+│  └─ src
+│     ├─ lib.rs
+│     ├─ main.rs
+│     ├─ utils.rs
+│     ├─ vocab.rs
+│     ├─ pipeline
+│     ├─ vsrm
+│     ├─ ctc
+│     ├─ training
+│     └─ inference
 ├─ NOTES.md
+├─ PLANS.md
 └─ README.md
 ```

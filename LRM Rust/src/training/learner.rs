@@ -174,7 +174,7 @@ impl<B: AutodiffBackend> TrainStep for VsrModel<B> {
         let logits = self.forward(batch.inputs);
 
         let [n, t, v] = logits.dims();
-        assert!(n > 0 && t > 0 && v > 0);
+        assert!(n > 0 && t > 0 && v > 1);
 
         // -------------------------------------- Debugging --------------------------------------
 
@@ -252,7 +252,7 @@ impl<B: Backend> InferenceStep for VsrModel<B> {
         let logits = self.forward(batch.inputs);
 
         let [n, t, v] = logits.dims();
-        assert!(n > 0 && t > 0 && v > 0);
+        assert!(n > 0 && t > 0 && v > 1);
 
         // -------------------------------------- Debugging --------------------------------------
 
@@ -338,7 +338,7 @@ where
     // ------------------------ Training learner, LR scheduling, and optimizer setup ------------------------
 
     let num_items = train_dataloader.num_items();
-    let num_batches = num_items.div_ceil(learner_config.batch_size);
+    let num_batches = num_items.div_ceil(learner_config.batch_size); // batches per epoch
     let total_steps = num_batches * learner_config.num_epochs;
     let warmup_steps = num_batches; // warmup over first epoch
 
