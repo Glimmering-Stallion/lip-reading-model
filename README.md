@@ -26,7 +26,7 @@ Build a real-time, audio-free VSRM lip-reading system entirely in Rust, covering
 
 ## Stack
 
-**Deep dives** — section-by-section detail in the [**LRM portfolio article**](docs/lrm-portfolio-article.md). Each link below jumps to the matching *Part*.
+The following are the section-by-section **Deep dives** found in the [**LRM portfolio article**](docs/lrm-portfolio-article.md). Each link below jumps to the matching *Part*.
 
 - **Data pipeline** — GRID normalization/bundling, adapters, batching, norm stats, optional `cropped_frames/` cache.  
   [Part 1 — Data pipeline](docs/lrm-portfolio-article.md#part-1--data-pipeline)

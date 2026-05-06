@@ -1,3 +1,18 @@
+---
+repo: https://github.com/Glimmering-Stallion/lip-reading-model
+dateModified: 2026-05-01
+accordionState:
+  the-motivation-the-why: closed
+  the-overview-the-what: closed
+  the-hurdles: closed
+  the-results-preliminary: closed
+  part-1--data-pipeline: closed
+  part-2--neural-architecture: closed
+  part-3--dl-training-framework: closed
+  part-4--cv-inference-framework: closed
+  part-5--cli-design-and-usage: closed
+---
+
 <!-- This is the file for providing the narrative -->
 <!-- Rule of thumb for what goes here: "Is this explaining my engineering journey?" -->
 
@@ -18,57 +33,59 @@ Pronouns
 
 Formatting
   • Proper names and acronyms: capitalized as usual (Rust, Burn, GRID, LRS, VSRM, CTC, GPU, LM, CPU, and so on).
-  • Markdown headings: sentence case for ## and ###. Use title case or branded phrasing only where it reads as a named label in prose (such as “The Kitchen Prep”).
-  • Colons: if the clause after a colon continues the same sentence, start with lowercase. If it begins a new sentence or a titled field (label–value blocks), start with a capital letter. Stay consistent within a section.
+  • Markdown headings: **title case** for all section headers (`##`, `###`, `####`): capitalize principal words. Preserve acronym/proper styling (Rust, VSRM, CTC, CLI, QoL, AAP2D, ResBlock3D, TCN, etc.) and keep slashes/parentheticals readable (for example `Training / CTC Loss`).
+  • Colons: if the clause after a colon continues the same sentence, start with lowercase. If it begins a new sentence or a titled field (label-value blocks), start with a capital letter. Stay consistent within a section.
   • Source layout: indent nested structure in the markdown with four spaces per level so it is easy to scan in source—this applies to nested list items, raw HTML (for example tables), and other hierarchical blocks.
   • Fenced code blocks: keep the opening and closing fence lines (triple backticks) flush left. Indentation inside a fence is whatever the snippet needs for valid code.
-  • Backticks: Wrap literals like `TokenMap` in backticks.
+  • Backticks: Wrap literals like `TokenMap` in backticks. In prose, **functions and callable methods** use empty parentheses (for example `train()`, `GridDataset::get()`, `has_lock()`) so they read distinctly from types, traits, fields, and CLI subcommand keywords.
+  • Quotation marks: Use straight ASCII " and ' in Markdown source (including contractions like it's). The site renderer (`@portfolio/article-shell`, rehype pass) converts them to typographic quotes in visible prose text only. Fenced code, inline code, KaTeX, and raw HTML/CSS (including attribute values) are left unchanged.
   • Bolding: in lists/definition-style blocks, bold the label before colons. Keep narrative signposts like `The goal: …` plain. Otherwise use bold sparingly (contrast, warnings).
+  • Dashes: en dash (–) for spans only (year ranges, figure ranges, numeric spans). Hyphen (-) for compound words and joined terms (label-value, CNN-RNN-CTC, video-transcript). Em dash (—) for section titles (Part 1 — …), parenthetical breaks in prose, and cross-reference labels.
   • Italics: in running prose, italicize the first use of standard ML terms (e.g. *tokens*, *logits*, *learning rate*, *batch size*, *epochs*, *loss*, *blank*, *decoder*), and close kin on first use (*weights*, *hyperparameters*, *objective function*, *vocabulary*, *tensors*). Subsequent repeats and obvious variants (e.g. *tokenization* after *tokens*) stay plain. Optional light *voice* stress in hub or hurdles, very sparingly. No italics in code fences or backticks.
 -->
 
 <a id="top"></a>
 
-# LRM Portfolio Article
+# Building a Visual Speech Recognition System in Rust
 
-## Series navigation
-- [Hub — main article](#main-high-level-hub-article)
+*Tackling the tradeoffs of building ML infrastructure outside the Python ecosystem*
+
+---
+
+## Series Navigation
+
+- [Hub](#main-high-level-hub-article)
     - [Motivation](#the-motivation-the-why)
-    - [Overview](#the-high-level-pipeline-overview-the-what)
-    - [Hurdles](#the-hurdles-along-the-way)
-    - [Results](#the-current-results)
-- [Spokes — secondary articles](#secondary-low-level-spoke-articles)
-    - [Part 1 — Data pipeline](#part-1--data-pipeline)
-    - [Part 2 — Neural architecture](#part-2--neural-architecture)
+    - [Overview](#the-overview-the-what)
+    - [Hurdles](#the-hurdles)
+    - [Results](#the-results-preliminary)
+- [Spokes](#secondary-low-level-spoke-articles)
+    - [Part 1 — Data Pipeline](#part-1--data-pipeline)
+    - [Part 2 — Neural Architecture](#part-2--neural-architecture)
     - [Part 3 — Training / CTC Loss](#part-3--dl-training-framework)
     - [Part 4 — Inference / CTC Decode](#part-4--cv-inference-framework)
-    - [Part 5 — CLI & export](#part-5--cli-design-and-usage)
+    - [Part 5 — CLI & Export](#part-5--cli-design-and-usage)
 
 ---
 
 <a id="main-high-level-hub-article"></a>
 
-## The motivation (the why)
-**Header**: Building a Visual Speech Recognition System in Rust from the Ground Up
+## The Motivation (The Why)
 
-**Tagline**: Tackling the tradeoffs of building ML infrastructure outside the Python ecosystem
+As of the time of this writing, deep learning frameworks are heavily dominated by Python. Although Python is well-established in the ML industry and for research purposes, when it comes to deploying real-time, low-latency systems for tasks like processing 25 FPS video for visual speech recognition, it’ll likely end up involving heavy runtimes and parallelization.
 
-**Body:**
+For this project, I wanted to test the waters with whether or not I could build a complete real-time Visual Speech Recognition Model (shortened to VSRM from here on) entirely in a systems-level language. I chose Rust — with Burn for the deep learning framework and OpenCV (Rust bindings) for the computer vision tasks — because such a stack can offer me a whole list of benefits. Such benefits being things like: robust memory safety, high control over threading/concurrency, low-latency runtimes, backend abstraction, and single-binary deployment, all without Python's GIL (Global Interpreter Lock) getting in the way.
 
-Deep learning frameworks are heavily dominated by Python as of the time of this writing. Although Python is well-established in the ML industry and for research purposes, when it comes to deploying real-time, low-latency systems for tasks like processing 25 FPS video for visual speech recognition, it’s likely going to end up requiring heavy runtimes and parallelization.
-
-For this project, I wanted to test the waters with whether or not I could build a complete real-time Visual Speech Recognition Model (shortened to VSRM from here on) entirely in a systems-level language. I chose Rust – with Burn for the deep learning framework and OpenCV (Rust bindings) for the computer vision tasks – because such a stack can offer me a whole list of things like: robust memory safety, high control over threading/concurrency, low-latency runtimes, backend abstraction, and single-binary deployment, all without Python's GIL (Global Interpreter Lock) getting in the way.
-
-But at the same time, using Rust inevitably won't come without its downsides either. With the primary tradeoffs being research velocity and library surface, Python wins on turnkey baselines, where ecosystems like PyTorch offer copy-paste starting points such that the setup towards the first loss curve is hours away, rather than days. The CV and ML tooling stays far more off-the-shelf there than with today's Rust.
+But at the same time, using Rust inevitably won't come without its downsides either. With the primary tradeoffs being reduced research velocity and library surface accessibility, Python still wins on turnkey baselines. Ecosystems like PyTorch can offer well-established copy-paste starting points such that the setup towards the first set of model training runs is hours away, rather than days. The CV and ML tooling with Python also stays far more off-the-shelf than with today's Rust.
 
 With that context set, everything that follows documents what I've built thus far, how the full system actually pieces together, and the journey it took to get there. Let's walk through each piece, starting with the high level overview below.
 
 ---
 
-## The high-level pipeline overview (the what)
+## The Overview (The What)
 
 <p align="center">
-    <img src="assets/pipeline_overview_dark.svg" alt="Full-stack pipeline overview" style="max-width: 100%; height: auto;" />
+    <img src="assets/pipeline_overview_light_transparent.svg" alt="Full-stack pipeline overview" style="max-width: min(100%, 24rem); height: auto;" />
 </p>
 
 The goal: Build a neural network model trained to recognize visual patterns from video clips of someone speaking and predict the text of what they said (without the helping hand of audio). Everything below exists to make that happen.
@@ -95,7 +112,7 @@ By the time the data reaches the model, it is a clean, consistently-shaped stack
 
 ### 2. The Brain (VSRM)
 
-We then feed the video frames into the VSRM. But the model doesn't see "words" yet, rather, it sees visual patterns instead. At this stage, it just tries to look for shapes and movement.
+We then feed the video frames into the VSRM. But the model doesn't see "words" yet. Rather, it sees visual patterns instead. At this stage, it just tries to look for shapes and movement.
 
 Under the hood, the model has three parts:
 - **The Eyes (spatial frontend):** This part handles the "where". It looks at each frame one by one, and learns to pick out features like lip shape, teeth visibility, or even tongue position from the raw mouth crop.
@@ -106,7 +123,7 @@ The results from the model are these logit outputs. Think of it as the model sho
 
 ---
 
-### 3. The Dojo / Learning Guide (Training / CTC loss)
+### 3. The Dojo / Learning Guide (Training / CTC Loss)
 
 The blank trick: To help the computer, we introduce a *blank* character to our established vocab (we use "_").
 
@@ -119,7 +136,7 @@ During training, the model might guess something along the lines of "hhhh__eeeee
 
 The problem is that the video might have 25 frames, but the word "hello" only has 5 letters. How does the computer know which frames match which letters?
 
-This is where CTC loss comes in. It serves as the mathematical guide we set for the model (called the *objective function*), and works by calculating all possible ways "hello" could fit into those 25 frames. From that, it tells the model: "Adjust your weights so that some combination of these frames equals 'hello'." We use CTC loss as the judge during the training loop to tell the model how wrong it was – with that measured wrongness being the loss.
+This is where CTC loss comes in. It serves as the mathematical guide we set for the model (called the *objective function*), and works by calculating all possible ways "hello" could fit into those 25 frames. From that, it tells the model: "Adjust your weights so that some combination of these frames equals 'hello'." We use CTC loss as the judge during the training loop to tell the model how wrong it was — with that measured wrongness being the loss.
 
 While the model learns to adjust its own *weights* (which are like thousands of internal knobs that represent the importance level of certain learned features), the human controls the *hyperparameters* (the external settings that define how the model learns), governing things like the *learning rate* (how big of a step the model takes when correcting its mistakes) or the *batch size* (how much data it looks at before making a weight adjustment).
 
@@ -127,7 +144,7 @@ This loss-adjust-repeat process runs thousands of cycles (called *epochs*) acros
 
 ---
 
-### 4. The Arena / Smart Filter (Inference / CTC decoder + n-gram LM)
+### 4. The Arena / Smart Filter (Inference / CTC Decoder + N-Gram LM)
 
 Behind the scenes, what the model's guesses actually look like for every frame aren't actually single winners, but instead rows of scores distributed over our full character set.
 
@@ -165,13 +182,13 @@ Quick note: My training runs are still in early stages on a controlled corpus, s
 
 ---
 
-## The hurdles along the way
+## The Hurdles
 
 Though as streamlined as the above pipeline overview makes it seem, getting to the phase of a full working preproc/train/eval/export suite was an ongoing battle with the realities of building in a nascent ML ecosystem. There were many days spent in cycles of experimentation and iteration, but below are some of the major highlights:
 
 ---
 
-### 1. Iteration/ecosystem tax
+### 1. Iteration/Ecosystem Tax
 
 When you build an ML pipeline in Python, there's usually already a well-trodden conventional way to handle data. But in Rust, I found out that you often have to pave the road ahead before you can drive on it. Many design commitments will happen, and in the same vein, many walk-backs may equally happen as well.
 
@@ -181,11 +198,11 @@ During this same pivot, I also recalled making an earlier naive choice of comput
 
 **The takeaway**: For every feature, plan from the top down. Additionally consider how that feature would sit with the overarching system by thinking about what the system would need from that feature and likewise, how that feature would fulfill its purpose for the system.
 
-See [Part 1 — Data pipeline](#part-1--data-pipeline) for more details.
+See [Part 1 — Data Pipeline](#part-1--data-pipeline) for more details.
 
 ---
 
-### 2. Early training loss plateaus
+### 2. Early Training Loss Plateaus
 
 With the Burn Learner framework for training setup and the data finally able to flow, this was where the heavy diagnostics began. I hit my first major training wall when the loss curve was stubbornly flatlining each run. In a deep learning project, a flat loss curve is probably the most frustrating type of failure, since the code is technically running, but the network isn't developing.
 
@@ -199,7 +216,7 @@ See [Part 3 — Training / CTC Loss](#part-3--dl-training-framework) for more de
 
 ---
 
-### 3. CTC blank collapse outputs
+### 3. CTC Blank Collapse Outputs
 
 When I got the loss to finally start moving, I then ran into a problem where, even though the loss was decreasing and the training time was long (high epochs), the model outputs were consistently filled with the CTC blank token for almost all frames/timesteps.
 
@@ -211,11 +228,11 @@ With these changes, the VSRM was finally able to stop cheating and actually star
 
 **The takeaway**: A decreasing loss is a necessary but insufficient metric for success. If the loss is dropping but the model's performance is still poor, assume the model has found a shortcut that bypasses the actual learning objective.
 
-See [Part 2 — Neural architecture](#part-2--neural-architecture) for more details.
+See [Part 2 — Neural Architecture](#part-2--neural-architecture) for more details.
 
 ---
 
-### 4. Silent data starvation
+### 4. Silent Data Starvation
 
 Perhaps the most elusive roadblock was a data-loading bug that made training look deceptively fast. Initially, my epochs were finishing in minutes, which I blindly took this as a baseline. Yet, I eventually discovered a massive mismatch in the raw GRID dataset. For some reason, many speaker video directories held data entries that didn't align with their corresponding transcript directories, causing my file-stem checks in my dataloaders to result in a huge fraction of the data being skipped. So the "fast" training I had been celebrating was actually just the model starving on incomplete data.
 
@@ -223,11 +240,11 @@ After incorporating a full-on dataset adapter module to correctly map and align 
 
 **The takeaway**: Metrics are only as honest as the data that feeds them. In a complex system, the absence of an error message is not a confirmation of health, and similarly, a silent success is often more dangerous than a loud crash.
 
-See [Part 1 — Data pipeline](#part-1--data-pipeline) for more details.
+See [Part 1 — Data Pipeline](#part-1--data-pipeline) for more details.
 
 ---
 
-### 5. External Burn API bug
+### 5. External Burn API Bug
 
 It was after those longer training runs that I decided to incorporate subset sampling from the full on-disk dataset (and then partition into train/val/test splits from that subset instead), plus a checkpoint save/load feature for the model weights to allow for stopping mid-training and resuming later.
 
@@ -241,23 +258,23 @@ See [Part 3 — Training / CTC Loss](#part-3--dl-training-framework) for more de
 
 ---
 
-## The current results
+## The Results (Preliminary)
 
-Where this project stands today is easier to state at two levels. The first is the foundational layer, which is a working data preprocessing and ingestion system, a training framework with palpable early loss convergence on the GRID dataset, a working inference engine with a swappable mouth tracker, and an exporter for model artifacts. The hard parts are all cast behind and the infrastructure needed for any serious work on the model is in place. My longer-term goal of training on a broader corpus (LRW, LRS2, LRS3) for a more generalized live model is deferred as a phase two ordeal, but the stack is in place to support it when the time comes.
+Where this project stands today is easier to state at two levels. The first is the foundational layer, which is a working data preprocessing and ingestion system, a training framework with palpable early loss convergence on the GRID dataset, a working inference engine with a swappable mouth tracker, and an exporter for model artifacts. The hard parts are all cast behind and the infrastructure needed for any serious work on the model is in place. My longer-term goal of training on a broader corpus (LRW, LRS2, LRS3) for a more generalized live model is deferred as a phase two undertaking, but the stack is in place to support it when the time comes.
 
-The second level is the model itself, which is still in the "where does the loss curve land long-term" phase. What's confirmed is that the loss makes the usual steep initial descent and then settles into a noisier and shallower regime, and I don't have the epoch budget to say whether that's a definitive plateau or a slow grind that I never ran long enough to validate. The spoke sections below are where I put the implementation details in context, along with the figures and the module-level specifics.
+The second level is the model itself, which is still in the "where does the loss curve land long-term" phase. What's confirmed is that the loss makes the usual steep initial descent and then settles into a noisier and shallower regime. However, with the checkpoint resume limitation as covered in [hurdle 5 — External Burn API Bug](#5-external-burn-api-bug), I don't have the epoch budget to say whether that's a definitive plateau or a slow grind that I never ran long enough to validate. The spoke sections below are where I put the implementation details in context, along with the figures and the module-level specifics.
 
 ---
 
 <a id="secondary-low-level-spoke-articles"></a>
 
-## Part 1 — Data pipeline
+## Part 1 — Data Pipeline
 
 I started with the intention of feeding data into the VSRM for training. But there exist different sources for data of the same modality (video-transcript data for visual speech recognition). These different sources most likely disagree on how they format around that pair (e.g., how clips are named, how transcripts are encoded, whether video and text live in the same folder or in parallel trees, and whether you get one big table or thousands of tiny bundles). One corpus might ship .mpg + .align in a flat speaker tree, another might use .mp4 + JSON captions, a third might shard by date or speaker with different nesting depth.
 
 ---
 
-### Data filesystem format standardization
+### Data Filesystem Format Standardization
 
 This is where my dataset adapters come in. They hide that surface chaos behind a settled bundle contract that the rest of my stack can trust. With these various source-specific adapter modules implemented, I could then take the data from any source of interest and have its file structure normalized to an established standard format. This way, my stack can be source-agnostic so that anything that's reshaped into my bundle contract can ride the same pipeline path without issue.
 
@@ -284,15 +301,15 @@ After I had normalized the data's filesystem layout for I/O, I was faced with a 
 
 ---
 
-### Dataset cataloging and sample loading
+### Dataset Cataloging and Sample Loading
 
 Once the bundle layout is trustworthy, the next job is to turn those disk entries into an enumerable list of training rows. In code for GRID, that is `GridDataset` in `adapters/grid/grid_dataset.rs`. It scans `data/grid-lr-corpus/`, collects valid utterance keys as `speaker/utterance` strings, optionally applies a reproducible subset draw (`active_subset` as a `(fraction, seed)` pair) from the total dataset on disk, and hangs on to a shared `TokenMap` so transcripts become integer targets. This `TokenMap` serves as a single source of bidirectional char-to-ID mapping, based on an established vocabulary set defined in `vocab.rs` so that every component in the stack can agree on the same character ID convention to prevent vocabulary drift.
 
-Now during training, I discovered a GRID-specific quirk where in practice, it can ship video and transcript trees that don't share the same utterance stems per speaker, so a simple video-transcript stem match can fail silently for many entries in the form of `None` returns from my dataset's `get` method. In Burn 0.20.1, it uses something called a batch dataloader iterator, which works by pulling entries in from `get` – as long as that getter is returning `Some`, otherwise the iterator ends all entry ingestion for that epoch pass. The practical resulting symptom of all this was model under-feeding during training and quicker ending epochs where most of the data was being skipped. This prompted me to incorporate two things: one was to incorporate helpers in the GRID-specific `adapters/grid/grid_adapter.rs` module which works to fix the video-transcript mapping per speaker up front; and another was to implement a `try_load` helper that my original getter method could wrap over so that it can keep pulling until a valid data entry is found, which should now keep returning `Some` until a full exhaustion over the range of the dataset has occurred instead of a premature `None`.
+Now during training, I discovered a GRID-specific quirk where in practice, it can ship video and transcript trees that don't share the same utterance stems per speaker, so a simple video-transcript stem match can fail silently for many entries in the form of `None` returns from my dataset's `get()` method. In Burn 0.20.1, it uses something called a batch dataloader iterator, which works by pulling entries in from `get()` — as long as that getter is returning `Some`, otherwise the iterator ends all entry ingestion for that epoch pass. The practical resulting symptom of all this was model under-feeding during training and quicker ending epochs where most of the data was being skipped. This prompted me to incorporate two things: one was to incorporate helpers in the GRID-specific `adapters/grid/grid_adapter.rs` module which works to fix the video-transcript mapping per speaker up front; and another was to implement a `try_load()` helper that my original getter method could wrap over so that it can keep pulling until a valid data entry is found, which should now keep returning `Some` until a full exhaustion over the range of the dataset has occurred instead of a premature `None`.
 
 ---
 
-### Video mouth crop pre-extraction
+### Video Mouth Crop Pre-Extraction
 
 The core issue here is that raw video frames are noisy and inconsistent. Different speakers sit at different distances from the camera, framing varies, and the model really only cares about one small region: the mouth. Feeding full video frames would just bury the signal in extraneous background clutter and make the model's job unnecessarily hard.
 
@@ -304,7 +321,7 @@ I went with a Haar cascade tracker in OpenCV here (implemented as `HaarTracker` 
 
 ---
 
-### Preprocess trace
+### Preprocess Trace
 
 The preprocess subcommand runs the GRID adapter pipeline in order: align (validate and print any video-tree vs alignment-tree speaker mismatch), bundle (move into per-speaker per-utterance folders using that mapping), normalize (standard mp4 and txt with a progress bar), clean (drop redundant legacy files once each utterance has the new pair), then constructs the dataset handle and pre-extracts mouth crops into the corpus crop cache directory.
 
@@ -330,7 +347,7 @@ Reading down: the first line is a video-to-transcript mapping-only diagnostic (n
 
 ---
 
-### Dataset partitioning
+### Dataset Partitioning
 
 Next up is handling the dataset train/eval splitting. I created a source-agnostic `DatasetSplit` wrapper, where the dataset gets shuffled and split into train, validation, and test partitions over a given subset of the entire data on disk. The shuffle is deterministic so that with the same seed, I get the same splits every run and validation numbers stay relatively comparable across experiments without worrying about lucky data draws.
 
@@ -340,7 +357,7 @@ With partitioning out of the way, the remaining data pipeline steps are about ge
 
 ### Batching
 
-Now when the training dataloader asks `GridDataset` for a sample by index, `GridDataset::get` returns a single standardized dataset entry as `VsrmItem`. That load path either reads pre-extracted crops from `cropped_frames/` (the `.bin` cache produced by the pre-extract pass) or, if those tensors are not present yet, decodes the normalized `.mp4` and reuses the tracker-backed crop pipeline from the mouth-crop step (so behavior matches the pre-extract before the cache exists).
+Now when the training dataloader asks `GridDataset` for a sample by index, `GridDataset::get()` returns a single standardized dataset entry as `VsrmItem`. That load path either reads pre-extracted crops from `cropped_frames/` (the `.bin` cache produced by the pre-extract pass) or, if those tensors are not present yet, decodes the normalized `.mp4` and reuses the tracker-backed crop pipeline from the mouth-crop step (so behavior matches the pre-extract before the cache exists).
 
 ```rust
 // C = number of color/feature-map channels (1 for grayscale)
@@ -356,7 +373,7 @@ pub struct VsrmItem {
 }
 ```
 
-Then comes batching. I designed the model to expect data in the form of batch payloads consisting of padded video input / target transcript sequence tensors, along with original input/target length tensors. Now, GPUs expect data tensors to be rectangular. Since every utterance in the dataset is not guaranteed to be the same length (a short clip might be 20 frames, a longer one 75), I can't just naively stack them into a tensor (even though the GRID dataset videos are largely uniform length). The `VsrmBatcher` collects a mini-batch of the variable-length input videos and target transcript sequences inside each `VsrmItem`, finds the longest duration video and longest spanning transcript sequence in the group, and pads the other shorter entries up to that length: video frames get zero-padded, transcripts get padded with the special CTC blank token (see [CTC loss](#ctc-loss) in Part 3 for more details about CTC and the importance of the blank token). However, because the model has no way of distinguishing the real data from the dummy padding, the batch also carries the original unpadded input/target length info along with it. This way, the subsequent loss function and decoder know exactly where to stop paying attention such that the blank token doesn't get processed.
+Then comes batching. I designed the model to expect data in the form of batch payloads consisting of padded video input / target transcript sequence tensors, along with original input/target length tensors. Now, GPUs expect data tensors to be rectangular. Since every utterance in the dataset is not guaranteed to be the same length (a short clip might be 20 frames, a longer one 75), I can't just naively stack them into a tensor (even though the GRID dataset videos are largely uniform length). The `VsrmBatcher` collects a mini-batch of the variable-length input videos and target transcript sequences inside each `VsrmItem`, finds the longest duration video and longest spanning transcript sequence in the group, and pads the other shorter entries up to that length: video frames get zero-padded, transcripts get padded with the special CTC blank token (see [CTC Loss](#ctc-loss) in Part 3 for more details about CTC and the importance of the blank token). However, because the model has no way of distinguishing the real data from the dummy padding, the batch also carries the original unpadded input/target length info along with it. This way, the subsequent loss function and decoder know exactly where to stop paying attention such that the blank token doesn't get processed.
 
 After collation, everything for one training iteration is carried in a single `Batch` (see `VsrmBatcher` / `Batch` in `LRM Rust/src/pipeline/batcher.rs`): padded tensors for the stack, plus per-sample lengths.
 
@@ -405,7 +422,7 @@ let mouth_clip_u8_flat: Vec<u8> = vec![12,  18,  22,  19, /* ... */, 9, 12, 15, 
 
 ---
 
-### Video pixel normalization
+### Video Pixel Normalization
 
 Pixel values are then normalized to zero mean and unit variance using stats computed once across the full dataset (or data subset). The tradeoff is that this normalization (zero-mean, unit-variance) has to happen at batch time rather than being baked into the cached files. But that's actually a feature since it means the crop cache is reusable regardless of which normalization stats you're using, and you can swap between global dataset stats and per-sample fallback normalization without re-extracting anything.
 
@@ -414,15 +431,15 @@ During my collation phase when batching, the `u8` buffers are loaded, cast, padd
 
 ---
 
-## Part 2 — Neural architecture
+## Part 2 — Neural Architecture
 
-Visual sentence recognition has a fairly stable macro-shape: crop the mouth, run a spatiotemporal encoder, map frames to a character distribution with a sequence model, and train with CTC as the loss function (or, in other lines of work, attention/seq2seq). Classic end-to-end pipelines like LipNet made that CNN–RNN–CTC pattern familiar on the GRID corpus. Later systems often kept the same skeleton but swapped the temporal trunk (for example, Zhang et al. (2021) replaced the heavy RNN layers with a Temporal Convolutional Network (TCN) while still decoding with CTC).
+Visual sentence recognition has a fairly stable macro-shape: crop the mouth, run a spatiotemporal encoder, map frames to a character distribution with a sequence model, and train with CTC as the loss function (or, in other lines of work, attention/seq2seq). Classic end-to-end pipelines like LipNet made that CNN-RNN-CTC pattern familiar on the GRID corpus. Later systems often kept the same skeleton but swapped the temporal trunk (for example, Zhang et al. (2021) replaced the heavy RNN layers with a Temporal Convolutional Network (TCN) while still decoding with CTC).
 
 Across my Rust code, I tried following Burn’s design philosophy by having a small `…Config` type (serializable hyperparameters and an `init()` constructor), and a separate base module struct that actually holds tensors so the VSRM stack, CTC loss, decoders, and training knobs stay consistent with the rest of the ecosystem instead of inventing one-off design-inconsistent constructors everywhere.
 
 ---
 
-### Main model (VSRM)
+### Main Model (VSRM)
 
 My VSRM follows in the footsteps of this established blueprint. As such, the core challenges of this project were less about inventing a novel architecture, but more so on how I could instantiate this template from scratch in the Rust/Burn framework, and whether or not I could still achieve similar results when I stress-tested it.
 
@@ -434,11 +451,11 @@ The macro PlotNeuralNet export below matches that end-to-end path:
     <img src="assets/vsrm_viz.png" alt="Macro VSRM: ResBlocks → pool / projection → dual TCN → FC head" style="max-width: 100%; height: auto;" />
 </p>
 
-Figure 1: The Macro VSRM (`vsrm.rs`). The network forwards data through three spatial ResBlock stages (time axis implicit in the spatial frontend layers), compresses with adaptive average pooling over `H × W` and a linear projection, processes time sequentially through two TCN stacks, and outputs character probabilities through a fully connected vocabulary head (vector [PDF](assets/vsrm_viz.pdf)).
+Figure 1: Diagram of the visual speech recognition model. The network forwards data through three spatial ResBlock stages (time axis implicit in the spatial frontend layers), compresses with adaptive average pooling over H × W and a linear projection, processes time sequentially through two TCN stacks, and outputs character probabilities through a fully connected vocabulary head (vector [PDF](assets/vsrm_viz.pdf)).
 
 ---
 
-### Spatial frontend (ResBlock3D)
+### Spatial Frontend (ResBlock3D)
 
 My frontend consists of three stacked, custom 3D residual blocks (`residual.rs`). Each block has two `Conv3D` layers with `GroupNorm` and ReLU, plus a residual path. When channels or stride change, the skip uses a `1×1×1` projection so the add stays shape-correct. I use strided convolutions on height and width rather than a spatial `MaxPool3D` stack so downsampling stays learned rather than a fixed max-pool grid.
 
@@ -452,17 +469,17 @@ The following PlotNeuralNet export shows my custom ResBlock3D component:
     <img src="assets/rb_viz.png" alt="ResBlock3D component: two Conv3D branches, GroupNorm, ReLU, residual add with 1×1 projection when shapes differ" style="max-width: 38%; height: auto;" />
 </p>
 
-Figure 2: A ResBlock3D component (time axis implicit). The main path forwards spatial features through two Conv3D/GroupNorm sequences, while the upper skip connection uses a 1×1×1 convolution to align tensor dimensions before the final element-wise sum (vector [PDF](assets/rb_viz.pdf)).
+Figure 2: Diagram of a ResBlock3D component (time axis implicit). The main path forwards spatial features through two Conv3D/GroupNorm sequences, while the upper skip connection uses a 1×1×1 convolution to align tensor dimensions before the final element-wise sum (vector [PDF](assets/rb_viz.pdf)).
 
 ---
 
-### Space–time bridge (AAP2D + projection)
+### Space-Time Bridge (AAP2D + Projection)
 
 After the third block, the model is still carrying a tensor with a wide `H × W` grid per timestep. Feeding that straight into a 1D temporal net meant the TCN’s input width would be coupled to crop resolution and depth in a brittle way. So instead, I reshape so each frame is its own 2D map, then run adaptive average pooling (fixed `4 × 4` spatial output), flatten it, and apply a linear projection into a fixed `hidden_dim` (default `512`). This boundary should, in principle, give the temporal trunk one stable and compressed vector per frame that's independent of the exact `H × W` after striding, as long as the crop meets the minimum size the frontend assumes.
 
 ---
 
-### Temporal backend (TCN)
+### Temporal Backend (TCN)
 
 The backend trunk consists of two temporal convolutional networks in sequence (`tcn.rs`). Each TCN layer consists of a stack of TCN Blocks (default config uses four blocks per layer, but in my initialized model, I use three blocks), with each block containing two causal, dilated `Conv1D` layers. Across each block are dilation steps `1 → 2 → 4 → ...`, so receptive field (the effective temporal lookback range) grows without turning the whole pass into a recurrent hidden state. `LayerNorm` is applied per time step over channels, with the tensor temporarily in `[N, T, C]` form (not `GroupNorm` across the time axis so normalization does not leak future frames into the norm statistics, which matters in my case, since I want strict causality for sliding-window inference).
 
@@ -472,13 +489,13 @@ The following PlotNeuralNet export shows my TCN component:
     <img src="assets/tcn_viz.png" alt="TCN component: two causal dilated Conv1D layers, per-timestep LayerNorm, dropout, pointwise residual projections" style="max-width: 72%; height: auto;" />
 </p>
 
-Figure 3: A TCN component stack (time axis pointing out of the page – or rather, diagonally towards the bottom left). The temporal trunk forwards temporal hidden states through blocks of two causal dilated Conv1D layers with incrementally increasing dilations 1, 2, 4 (3 blocks), causal per-timestep LayerNorm, dropout, and pointwise projections on the residual between each block (vector [PDF](assets/tcn_viz.pdf)).
+Figure 3: Diagram of a TCN component stack (time axis pointing out of the page — or rather, diagonally towards the bottom left). The temporal trunk forwards temporal hidden states through blocks of two causal dilated Conv1D layers with incrementally increasing dilations 1, 2, 4 (3 blocks), causal per-timestep LayerNorm, dropout, and pointwise projections on the residual between each block (vector [PDF](assets/tcn_viz.pdf)).
 
 I defaulted to using a TCN over a bidirectional LSTM/GRU for fast throughput and simpler deployment because conv over time parallelizes well, and there is no separate “carry” state to thread through live paths beyond the finite receptive field.
 
 ---
 
-### Final readout and QoL additions
+### Final Readout and QoL Additions
 
 The final readout is a single fully connected layer to vocab-sized logits per timestep (`[N, T, vocab]`). My implementation also allows an optional blank logit bias during initialization so the blank class does not instantly swallow the rest of the character distributions at step zero.
 
@@ -508,13 +525,13 @@ After large refactors, I kept second-guessing whether channel counts still lined
 
 ---
 
-## Part 3 — DL training framework
+## Part 3 — DL Training Framework
 
 With Part 2 in place, my VSRM now theoretically has the ability to turn mouth crops into a tensor of `[N, T, V]` character logit distributions. But a model by itself is just going to spit out noise, so my immediate next task was to figure out how to create the suite to train this model.
 
 ---
 
-### Training loop / learner
+### Training Loop / Learner
 
 Starting off, I began with writing a minimal, hand-rolled training loop (currently as `trainer.rs`) just as a proof of concept to show I could successfully orchestrate a forward pass, calculate loss, trigger a backward pass, step the optimizer, etc. It wasn't until all this was wired up that I then found out about Burn's Learner framework. Now with Rust, it doesn’t hand you a Keras-style `fit()` on a silver platter, so the spine of my training path from then on was to migrate to this newly discovered framework.
 
@@ -524,7 +541,7 @@ Burn’s training API is compartmentalized rather than one blob of hidden states
 
 My learning-rate scheduling strategy is a slow ramp-up followed by a gradual long decay. To achieve this, I use a Burn `ComposedLRScheduler` with a linear warmup that scales a multiplicative gain from `0.01` up to `1.0` across the first epoch's steps, multiplied by a cosine decay that anneals from the configured peak learning rate down to one tenth of that over the full training horizon. The two pieces are combined with `SchedulerReduction::Prod`, so the effective step size at any point is their product.
 
-I created a single `train` entry point free-function in `learner.rs`, which served as an orchestrator. It threads application context into model paths, builds the LR schedule and `Learner`, attaches `SupervisedTraining` with metrics and checkpointing, persists configs between runs, and only then launches. Early on I was tempted to inline all of that next to whatever corpus I had on disk, but as the codebase grew, splitting `create_dataloaders` behind a `DatasetSource` dispatch kept that orchestrator from turning into a massive internal if/else branch every time I imagined another corpus. Currently, my `create_grid_dataloaders` carries the GRID-specific tasks such as: splitting, caching global normalization stats, and wrapping `VsrmBatcher` in Burn loaders, while the match block leaves an obvious seam for the next adapter when I'm (or any successor to the codebase is) ready to stress the same VSRM head on another bundle.
+I created a single `train()` entry point free-function in `learner.rs`, which served as an orchestrator. It threads application context into model paths, builds the LR schedule and `Learner`, attaches `SupervisedTraining` with metrics and checkpointing, persists configs between runs, and only then launches. Early on I was tempted to inline all of that next to whatever corpus I had on disk, but as the codebase grew, splitting `create_dataloaders()` behind a `DatasetSource` dispatch kept that orchestrator from turning into a massive internal if/else branch every time I imagined another corpus. Currently, my `create_grid_dataloaders()` carries the GRID-specific tasks such as: splitting, caching global normalization stats, and wrapping `VsrmBatcher` in Burn loaders, while the match block leaves an obvious seam for the next adapter when I'm (or any successor to the codebase is) ready to stress the same VSRM head on another bundle.
 
 Once the loop is actually running, Burn’s training renderer opens a terminal UI, showing epoch/item counters and a scrolling loss/LR plot so the abstractions above show up as a watchable thing.
 
@@ -532,13 +549,13 @@ Once the loop is actually running, Burn’s training renderer opens a terminal U
     <img src="assets/burn_train_tui_loss_grid_subset10pct_ep1_iter380.png" alt="Burn training TUI showing loss plot, LR, and progress during VSRM training on a GRID subset" style="max-width: 100%; height: auto;" />
 </p>
 
-Figure 4: Burn training TUI on a 10% GRID subset (100 epochs configured), epoch 1, around iteration 380 (~58% through the epoch by item count). The loss trace is the expected L-curve with a steep drop from large initial CTC values, then a much shallower segment with batch noise. That tail is often diminishing returns within a single epoch, not by itself the same failure mode as a run that never leaves a high loss band across many epochs (the scheduler story in the hurdles section). I still treat validation CER/WER and multi-epoch trend as the serious read on progress; a flat-looking stretch after ~200 iterations here mostly says the easy alignment gain is already partly spent, not that training is “done.”
+Figure 4: Burn training TUI on a 10% GRID subset (100 epochs configured), epoch 1, around iteration 380 (~58% through the epoch by item count). The loss trace shows the expected L-curve with a steep initial drop from large CTC values as the model finds basic alignments, followed by a shallower, noisier tail as those easy gains are spent. Although the flatter stretch after ~200 iterations is expected within a single epoch, whether that tail continues descending across subsequent epochs or genuinely plateaus is the open question (the checkpoint resume limitation covered in the hurdles section is what capped how far these runs could go).
 
 ---
 
-### CTC loss
+### CTC Loss
 
-The training side uses a method known as Connectionist Temporal Classification (CTC) loss. Since Burn 0.20.1 doesn't have the CTC loss in their `burn::nn::loss` library, I had to resort to creating my own custom CTC loss implementation in `ctc_loss.rs`. This was a whole mini-project in and of itself, as I had very surface-level knowledge on how it worked at the time. But thankfully, there's a Distill article online that goes over exactly how CTC loss worked at a high level ([distill.pub/2017/ctc](https://distill.pub/2017/ctc/)) that I relied on for intuition. I also tried to mirror Burn's usual loss template with `forward()` (containing `Reduction::Mean` and `Reduction::Sum` for batch-wise loss aggregation methods) and a `forward_no_reduction()` (for per-sample loss outputs).
+The training side uses a method known as Connectionist Temporal Classification (CTC) loss. Since Burn 0.20.1 doesn't have the CTC loss in their `burn::nn::loss` library, I had to resort to creating my own custom CTC loss implementation in `ctc_loss.rs`. This was a whole mini-project in and of itself, as I had very surface-level knowledge on how it worked at the time. But thankfully, there's a [Distill article](https://distill.pub/2017/ctc/) on how CTC works at a high level that I relied on for intuition. I also tried to mirror Burn's usual loss template with `forward()` (containing `Reduction::Mean` and `Reduction::Sum` for batch-wise loss aggregation) and a `forward_no_reduction()` (for per-sample loss outputs).
 
 After a week or two of trying to get an implementation going, I finally managed to get my first working iteration and although inefficient with its nested loop approach (looping over batches, then over frames/timesteps, and finally over the modified target sequence), the milestone was in its correctness (validated with some essential unit tests that evaluate correctness on things like single-char sequences, skip transition rule adherence, proper padding vs. true length demarcation, reduction modes, etc.). It wasn't until much later that I tried giving optimization a shot by refactoring my CTC loss forward algorithm to vectorize across the batch dimension and then using masks over tensors.
 
@@ -546,7 +563,7 @@ The hub already introduced the blank token and the “many frames, few letters�
 
 ---
 
-#### How CTC loss works
+#### How CTC Loss Works
 
 The goal of the forward pass is to calculate the total probability mass of all valid ways a frame-by-frame prediction sequence can be condensed into a specific ground truth target text sequence, such that the model can learn to associate the visual features of a video with the transcript without pre-aligned timing info.
 
@@ -567,7 +584,7 @@ The forward pass for my CTC loss implementation boiled down to five important st
 
 ---
 
-#### CTC forward lattice visualization
+#### CTC Forward Lattice Visualization
 
 The above rundown glosses over how CTC loss works in theory, but it's also word-heavy. And walls of text can't convey much without complementary imagery, so I added a forward-lattice visualizer `forward_lattice_viz.rs` that shares the same DP the training loss uses, but with diverging implementations for SVG-export and ASCII-printout rendering purposes.
 
@@ -581,41 +598,41 @@ Figure 5: Forward lattice for an example target sequence "cat", with $T = 20$ co
 
 ---
 
-### Metrics, optimization, and training dynamics
+### Metrics, Optimization, and Training Dynamics
 
 Although training focuses on minimizing loss from a quantitative aspect, I also need to qualitatively measure progress in tandem with those quantitative loss measures. Beyond loss, the training has to say something about transcription. So I decided to look into incorporating CER/WER metrics into my training suite.
 
 I peeked at Burn’s stock CER/WER initially thinking I could use them for my setup, but I found out they wanted aligned int predictions next to aligned int targets (fixed `seq_len`, pad stripping, then edit distance). But by design, my VSRM hands over CTC logits over time, and the “prediction” that matters is whatever comes out after decoding (blank handling and collapse). So I had to resort to writing thin CTC-aware metrics that take a custom `VsrmMetricInput`, run `CtcDecoder`, unpad targets, and score Levenshtein on the decoded IDs. My WER metric goes one more step and turns those IDs into characters, then splits on whitespace so I measure word errors properly on a per-word basis.
 
-On the hardware side, my early WGPU training runs on Windows were dying mid-epoch, which at first, I assumed it was a bug somewhere in my loop, but I tracked it to VRAM pressure due to batch size (and, on this Windows setup, the display driver’s TDR watchdog when the GPU stayed busy too long). Since I needed an adequate batch size, but couldn't naively use that size without blowing the budget, I resorted to gradient accumulation. This is a method for keeping small per-step micro-batches, and running several forward/backward passes before each optimizer step. With this, I can treat micro-batch × accumulation as the effective batch. The values I used in `main` today without constantly tripping OOM during training for my setup are $4 × 8 = 32$.
+On the hardware side, my early WGPU training runs on Windows were dying mid-epoch, which at first, I assumed it was a bug somewhere in my loop, but I tracked it to VRAM pressure due to batch size (and, on this Windows setup, the display driver’s TDR watchdog when the GPU stayed busy too long). Since I needed an adequate batch size, but couldn't naively use that size without blowing the budget, I resorted to gradient accumulation. This is a method for keeping small per-step micro-batches, and running several forward/backward passes before each optimizer step. With this, I can treat micro-batch × accumulation as the effective batch. The values I used in `main()` today without constantly tripping OOM during training for my setup are $4 × 8 = 32$.
 
-As mentioned in [hurdle 5 — External Burn API bug](#5-external-burn-api-bug), the most significant roadblock in this phase for me was an upstream bug I discovered in Burn 0.20.1. I found that the `ComposedLrScheduler` incorrectly serialized the Cosine match arm as Linear in `burn-optim`’s composed recorder, so a loaded checkpoint could restore the wrong LR scheduler, effectively breaking my training suite's "resume from last checkpoint" feature. Since continuous, long-horizon, multi-day training runs on large audio-visual speech corpora like GRID are too infeasible for my case, a working resume path was a hard requirement. I reported the issue to the Burn maintainers (who quickly merged a fix [Burn PR #4617](https://github.com/tracel-ai/burn/pull/4617)), but for the current project snapshot, this bug capped the total training epochs I could feasibly achieve (for a given subset of the dataset), and ultimately prompted me to consider the current status of the project as a systems-level hiatus.
+As mentioned in [hurdle 5 — External Burn API Bug](#5-external-burn-api-bug), the most significant roadblock in this phase for me was an upstream bug I discovered in Burn 0.20.1. I found that the `ComposedLrScheduler` incorrectly serialized the Cosine match arm as Linear in `burn-optim`’s composed recorder, so a loaded checkpoint could restore the wrong LR scheduler, effectively breaking my training suite's "resume from last checkpoint" feature. Since continuous, long-horizon, multi-day training runs on large audio-visual speech corpora like GRID are too infeasible for my case, a working resume path was a hard requirement. I reported the issue to the Burn maintainers (who quickly merged a fix [Burn PR #4617](https://github.com/tracel-ai/burn/pull/4617)), but for the current project snapshot, this bug capped the total training epochs I could feasibly achieve (for a given subset of the dataset), and ultimately prompted me to consider the current status of the project as a systems-level hiatus.
 
 ---
 
-## Part 4 — CV inference framework
+## Part 4 — CV Inference Framework
 
 With a working training framework in place, my VSRM still only outputs `[N, T, V]` logits after training. The eventual objective I need at inference time is to have concrete text outputs for a given timespan. So for my inference pipeline, I need to do the same three things that my training pipeline assumes. These three things are: to keep a stable mouth crop, to hand the model a long enough time window, and to run CTC decode so logits can be converted to text.
 
 ---
 
-### Inference loop / predictor
+### Inference Loop / Predictor
 
-For the inference pipeline, I started from the same constraint that shaped what I had for my training pipeline, with that being the finite causal receptive field of my VSRM (so at any moment, the model only sees a bounded tail of frames). This constraint shows up in two ways. First, in static file mode, I needed to design the system to step through time with a rolling window over the clip, rather than a single monolithic tensor for the clip's entirety. Second, in live cam mode, the camera feed is the same problem – except that there is no future, so I needed to maintain a rolling buffer of the last $T$ frames. With both of these in place, I could then apply decoding to obtain text output.
+For the inference pipeline, I started from the same constraint that shaped what I had for my training pipeline, with that being the finite causal receptive field of my VSRM (so at any moment, the model only sees a bounded tail of frames). This constraint shows up in two ways. First, in static file mode, I needed to design the system to step through time with a rolling window over the clip, rather than a single monolithic tensor for the clip's entirety. Second, in live cam mode, the camera feed is the same problem — except that there is no future, so I needed to maintain a rolling buffer of the last $T$ frames. With both of these in place, I could then apply decoding to obtain text output.
 
 On the CV side, the tracker and lip crop logic from Part 1 remained as the front door because I foresaw both my training and inference frameworks requiring it (offline crop extractions for training, live cropping for inference), but raw lock and motion scores have the risk of being too twitchy to drive decoding directly. So intuitively, I jumped to the idea of decoding whenever the tracked face box exists, but quickly ran into junk predictions on non-speech states.
 
-So my next idea was to make it so that every `LipTrackerBackend` in `tracker.rs` must implement `has_lock` (which outputs a `bool` indicating if the tracker has a valid lock on the face or not) and `has_lip_motion` (which outputs a `bool` indicating if the speaker in the video is moving their lips). Just as a safety measure, I layered `speech_gate.rs` on top, where it works by counting consecutive frames where both lock and lip motion pass, then flips a "speech active" state with separate on/off thresholds so the gate accounts for possible micro-pauses during speech. When the gate opens, I treat it as a new utterance and subsequently reset the sliding window, dropping stale hypotheses, then resuming with feeding buffers into predict_frames. Conversely, when that gate closes, the buffer is treated as the end of an utterance.
+So my next idea was to make it so that every `LipTrackerBackend` in `tracker.rs` must implement `has_lock()` (which outputs a `bool` indicating if the tracker has a valid lock on the face or not) and `has_lip_motion()` (which outputs a `bool` indicating if the speaker in the video is moving their lips). Just as a safety measure, I layered `speech_gate.rs` on top, where it works by counting consecutive frames where both lock and lip motion pass, then flips a "speech active" state with separate on/off thresholds so the gate accounts for possible micro-pauses during speech. When the gate opens, I treat it as a new utterance and subsequently reset the sliding window, dropping stale hypotheses, then resuming with feeding buffers into `predict_frames()`. Conversely, when that gate closes, the buffer is treated as the end of an utterance.
 
-Mirroring the `train` free-function in the training side's `learner.rs`, I have a single `infer` free-function in `predictor.rs` serving as the inference-side orchestrator. It takes an `InferenceSession` (containing the loaded VSRM, decoder, and batching bundle) and a `Context` for resolving tracker-related paths on disk, builds a `TrackerConfig`, and dispatches to `infer_file` when an on-disk input bundle is provided, or to `infer_live` when webcam mode is specified.
+Mirroring the `train()` free-function in the training side's `learner.rs`, I have a single `infer()` free-function in `predictor.rs` serving as the inference-side orchestrator. It takes an `InferenceSession` (containing the loaded VSRM, decoder, and batching bundle) and a `Context` for resolving tracker-related paths on disk, builds a `TrackerConfig`, and dispatches to `infer_file()` when an on-disk input bundle is provided, or to `infer_live()` when webcam mode is specified.
 
-For presentation, I have an `overlay.rs` module responsible for layering `FrameAnnotator` (annotates status texts, tracker ROI boxes, and the latest prediction output text) on top of the frames the user actually sees. When I want a shareable artifact instead of a live window, my `annotate_video` helper can burn the same annotations into an output file, and another `mux_audio` helper can stitch the original soundtrack back in for demos, even though the VSRM never consumes any audio.
+For presentation, I have an `overlay.rs` module responsible for layering `FrameAnnotator` (annotates status texts, tracker ROI boxes, and the latest prediction output text) on top of the frames the user actually sees. When I want a shareable artifact instead of a live window, my `annotate_video()` helper can burn the same annotations into an output file, and another `mux_audio()` helper can stitch the original soundtrack back in for demos, even though the VSRM never consumes any audio.
 
-Lastly, to keep live preview responsive, I split responsibilities across two threads. I have a main thread that owns the OpenCV `VideoCapture` frame grab loop, runs the Haar-backed tracker on each frame, pushes mouth crops into a sliding window, and a HighGUI `LiveWindow` for previewing. Then I have a worker thread that owns a loaded `InferenceSession` (model, decoder, batcher) and does the expensive forward passes plus decoding. My `infer_live` wires that split together with bounded channels in which the main side sends a ready `FramesBuffer` when the window is full (and when the speech gate allows it), and receives back a `String` prediction. This way `predict_frames` never blocks frame acquisition or the preview redraw.
+Lastly, to keep live preview responsive, I split responsibilities across two threads. I have a main thread that owns the OpenCV `VideoCapture` frame grab loop, runs the Haar-backed tracker on each frame, pushes mouth crops into a sliding window, and a HighGUI `LiveWindow` for previewing. Then I have a worker thread that owns a loaded `InferenceSession` (model, decoder, batcher) and does the expensive forward passes plus decoding. My `infer_live()` wires that split together with bounded channels in which the main side sends a ready `FramesBuffer` when the window is full (and when the speech gate allows it), and receives back a `String` prediction. This way `predict_frames()` never blocks frame acquisition or the preview redraw.
 
 
 <p align="center">
-    <video controls playsinline width="100%" style="max-width: 720px;">
+    <video controls playsinline width="100%" style="max-width: min(100%, 52rem);">
         <source src="./assets/lbij7s_annotated_top.mp4" type="video/mp4" />
         Your browser does not support the video tag.
     </video>
@@ -625,15 +642,15 @@ Figure 6: A representative grayframe video clip output from the inference pipeli
 
 ---
 
-### CTC decode
+### CTC Decode
 
 While the training loop relies on CTC to score logit alignments against known text, the inference side needs the mirror image, which is a method to extract coherent text from raw logits. Just as Burn 0.20.1 lacked an in-house CTC loss implementation in their `burn::nn::loss` submodule, it also didn't provide a turnkey CTC decoding package. This led me to pair my custom `ctc_loss.rs` module with a symmetric `ctc_decode.rs` module alongside an additional `lm.rs` module for LM integration to complement that decoder.
 
-Looking back, implementing that decoder was a completely different engineering challenge from the loss function. Where CTC loss was a vectorized forward-only objective function relying on autodiff, CTC decoding is fundamentally a search problem. Thankfully that same Distill article I referenced for gaining knowledge on CTC loss also goes over CTC decode fundamentals ([distill.pub/2017/ctc](https://distill.pub/2017/ctc/)). I designed my decoder module around an enum to support multiple search strategies, but my current core implementation focuses on the two most standard approaches: Greedy search (simple but speedy) and Prefix Beam search (complex but accurate).
+Looking back, implementing that decoder was a completely different engineering challenge from the loss function. Where my CTC loss became a vectorized forward-only objective function relying on autodiff, CTC decoding is fundamentally a search problem. Thankfully that same [Distill article](https://distill.pub/2017/ctc) also covers CTC decode fundamentals. I designed my decoder module around an enum to support multiple search strategies, but my current core implementation focuses on the two most standard approaches: Greedy search (simple but speedy) and Prefix Beam search (complex but accurate).
 
 ---
 
-#### How CTC decode works
+#### How CTC Decode Works
 
 The goal at decode time can be seen as the inverse emphasis of the loss forward pass. Instead of summing probability over all alignments that collapse to a fixed transcript, I want a single transcript (or a small ranked set) that explains the observed frame-wise logits well (under CTC’s collapse and blank rules).
 
@@ -668,19 +685,19 @@ Prefix beam decoding manages a collection of prefixes and sums the probabilities
 
 4. **Path consolidation and LM fusion:** when several extensions to a prefix result in the same sequence, we merge their individual scores with log-sum-exp (LSE), so that prefix is turned into one unified hypothesis rather than separate paths. During this phase, we may also incorporate the score of an external LM. This LM adds a "reward" to prefixes that are linguistically likely, so as to help the decoder choose the more plausible character continuations when the baseline CTC scores alone leave multiple hypotheses competitive.
 
-5. **Pruning and final selection:** for the sake of keeping the search efficient, we sort the prefix hypotheses by a combined score that incorporates emission, LM, and length bonus (for offsetting short-sequence bias) scores – and retain only the set of top-$W$ hypotheses (which is the "beam width") for the next frame/timestep. After processing all frames/timesteps, we want to select the highest-ranking sequence as the final decoded text output.
+5. **Pruning and final selection:** for the sake of keeping the search efficient, we sort the prefix hypotheses by a combined score that incorporates emission, LM, and length bonus (for offsetting short-sequence bias) scores — and retain only the set of top-$W$ hypotheses (which is the "beam width") for the next frame/timestep. After processing all frames/timesteps, we want to select the highest-ranking sequence as the final decoded text output.
 
 ---
 
-#### CTC prefix beam visualization
+#### CTC Prefix Beam Visualization
 
 Just like with the CTC loss concepts on the training side, the rundown above is quite abstract across the beam prefix search half. The mechanisms can be spelled out right in front of you, but it can still be hard to ascertain the bigger picture of what we're trying to do. So I added another visualizer, `prefix_beam_viz.rs`, that shares the same helper methods that the decoder uses in inference, but records a real prefix beam run for rendering SVG-exports and ASCII-printouts.
 
-The figure below (generated from `prefix_beam_viz.rs`) shows the directed acyclic graph (DAG) of the beam trace for an example prediction output sequence fed from synthesized logits. These logits are peaked at the characters from the intended sequence such that the beam reliably decodes into that example output sequence. Each node is a prefix hypothesis at each timestep, and each row of chips between these node rows contains the top-$K$ candidate tokens for that timestep. The graph doesn't trace one (potentially globally suboptimal) path like what Greedy does, but instead, multiple paths representing prefix lineages that compete with each other across a timespan.
+The figure below (generated from `prefix_beam_viz.rs`) shows the directed acyclic graph (DAG) of the beam trace for an example prediction output sequence fed from synthesized logits. These logits are peaked at the characters from the intended sequence such that the beam reliably decodes into that example output sequence. Each node is a prefix hypothesis at each timestep, and each row of chips between these node rows contains the top-$K$ candidate tokens for that timestep. The graph doesn't trace one (potentially globally suboptimal) path like what Greedy does, but instead, traces multiple paths representing prefix lineages that compete with each other across a timespan.
 
 <div align="center">
   <div style="max-width: min(100%, 450px); margin: 0 auto 1em auto;">
-    <div style="max-height: min(40vh, 900px); overflow: auto; border: 1px solid #ccc; border-radius: 6px; padding: 8px;">
+    <div style="max-height: min(40vh, 900px); overflow: auto; border: 1px solid #ccc; border-radius: 0.625rem; padding: 8px;">
       <img
         src="assets/ctc_decode_beam_00.svg"
         alt="CTC prefix beam DAG (cat fixture)"
@@ -690,21 +707,21 @@ The figure below (generated from `prefix_beam_viz.rs`) shows the directed acycli
   </div>
 </div>
 
-Figure 7: Prefix beam DAG for an example prediction output sequence "cat" (fed from synthesized logits), with $T = 20$ rows as timesteps $t$ (plus an init row) and beam width $W = 5$ with columns as beam ranks $r$ (where $r = 0$ is the best-scoring prefix at that row). The emission bands between two rows are the set of top-$K$ candidate characters (acting as the branching factor) which have size $K = W = 5$ with vocab size $V = 28$. The blank is excluded from this top-$K$ pool. Prefix nodes are represented in green and candidate character chips are represented in lavender (with their colors progressively desaturating as their hypotheses/candidate rank orders diminish from left to right). The faint gray fan-out edges from each active prefix node to every token chip show all $K$ prefix–char pairings a prefix may branch into, while distinct colored edges represent the surviving lineage path carried into that prefix (up to that timestep) so competing hypotheses stay visually separable. Lineage paths will typically route into an emission character chip, but in the case of blank stay (where the prefix is unchanged because a blank was observed), the path will route directly node-to-node (rendered dashed when passing through the emission bands). The bold green edges trace the path that leads to the final decode output.
+Figure 7: Prefix beam DAG for an example prediction output sequence "cat" (fed from synthesized logits), with $T = 20$ rows as timesteps $t$ (plus an init row) and beam width $W = 5$ with columns as beam ranks $r$ (where $r = 0$ is the best-scoring prefix at that row). The emission bands between two rows are the set of top-$K$ candidate characters (acting as the branching factor) which have size $K = W = 5$ with vocab size $V = 28$. The blank is excluded from this top-$K$ pool. Prefix nodes are represented in green and candidate character chips are represented in lavender (with their colors progressively desaturating as their hypotheses/candidate rank orders diminish from left to right). The faint gray fan-out edges from each active prefix node to every token chip show all $K$ prefix-char pairings a prefix may branch into, while distinct colored edges represent the surviving lineage path carried into that prefix (up to that timestep) so competing hypotheses stay visually separable. Lineage paths will typically route into an emission character chip, but in the case of blank stay (where the prefix is unchanged because a blank was observed), the path will route directly node-to-node (rendered dashed when passing through the emission bands). The bold green edges trace the path that leads to the final decode output.
 
 ---
 
-### Latency, output quality, and inference dynamics
+### Latency, Output Quality, and Inference Dynamics
 
 At training time, the open question was whether the run was truly learning. At inference, the parallel question was whether I was getting a read I could trust at a throughput those outputs could keep up with. The decoder choice between greedy and beam is mainly a tradeoff between compute and quality. Greedy is predictable and cheap, whereas beam costs more because it keeps multiple hypotheses alive and repeatedly merges them.
 
 A small friction here is that I don't have a single dashboard plot for “inference is good” the way the Burn training TUI plots loss/LR. I use the same decoder unit tests as guardrails (single beam matches greedy, crafted logits where beam fixes duplicate collapse, LM tie breaking ambiguous paths, etc.), and I treat annotated clips and live overlay latency as the qualitative acceptance test. If the speech gate, rolling buffer, and worker thread can keep the preview smooth while the string on the HUD still updates often enough to feel real-time, then the stack is doing what I designed it for.
 
-Which brings me to the honest caveat. My current VSRM has been trained for early epochs only, resulting in outputs with broad rhythms and proper early characters, but the model hasn't gone through enough passes to stabilize consistent character-level predictions yet. With the broken checkpoint resume path capping my model's training potential, I won't be able to know whether or not the model is capable of generalizing to the selected GRID corpus as a first step towards reliable text outputs. So, until the checkpoint resume feature is fixed and longer runs are feasible, the question of whether my VSRM can generalize to data (at least on the GRID corpus for now) remains open.
+Which brings me to the honest caveat. My current VSRM has been trained for early epochs only, resulting in outputs with broad rhythms and proper early characters, but the model hasn't gone through enough passes to stabilize consistent character-level predictions yet. With the broken checkpoint resume path capping my model's training potential, I unfortunately won't be able to know whether or not the model is capable of generalizing to the selected GRID corpus as a first step towards reliable text outputs (at least, not yet). So, until the checkpoint resume feature is fixed and longer runs are feasible, the question of whether my VSRM can generalize to data (at least on the GRID corpus for now) remains open.
 
 ---
 
-## Part 5 — CLI design and usage
+## Part 5 — CLI Design and Usage
 
 As development went on, my repo accumulated more than one way to drive the system (preprocessing, building an n-gram LM, training, inference, and eventually model exporting). Early on, I acknowledged that I needed a single front door to invoke those actions from, but I let those paths grow in place until I better understood the behaviors I needed to establish. Only in the later stages of development did I try consolidating them behind one runtime shape so that running the project wasn't a scavenger hunt through internal modules anymore.
 
@@ -737,7 +754,7 @@ The following walks over what each subcommand does in practice:
 
 ---
 
-### Subcommand flags
+### Subcommand Flags
 
 The following walks over what the long flags of each subcommand does, what it defaults to, and how flags interact in the actual runners:
 
@@ -796,7 +813,7 @@ The following walks over what the long flags of each subcommand does, what it de
         </tr>
         <tr>
             <td><code>--input</code></td>
-            <td>Video file path, or a bundled video–transcript directory. Can't be used alongside <code>--live</code>.</td>
+            <td>Video file path, or a bundled video-transcript directory. Can't be used alongside <code>--live</code>.</td>
         </tr>
         <tr>
             <td><code>--live</code></td>
@@ -816,9 +833,9 @@ The following walks over what the long flags of each subcommand does, what it de
 
 ---
 
-### Friction and design choices
+### Friction and Design Choices
 
-The dominant design tension was wanting a single Rust binary to own the stack, but I still needed Python's tooling for exporting model representation artifacts. Burn doesn't provide in-house ONNX (or other viz-related) paths I wanted, so the `export` subcommand is now the seam where my Rust orchestration coexists with Python scripts. Currently I have scripts that handle traced ONNX exports for portability and PlotNeuralNet TeX generation for the paper-styled architecture figures seen in Part 2. Note that these export artifacts are not the same as the saved model bundles that result from training (which contain the configs, checkpoints, etc.).
+The dominant design tension was wanting a single Rust binary to own the stack, but I still needed Python's tooling for exporting model representation artifacts. Burn doesn't provide the in-house ONNX (or other viz-related) paths I wanted, so the `export` subcommand is now the seam where my Rust orchestration coexists with Python scripts. Currently I have scripts that handle traced ONNX exports for portability and PlotNeuralNet TeX generation for the paper-styled architecture figures seen in Part 2. Note that these export artifacts are not the same as the saved model bundles that result from training (which contain the configs, checkpoints, etc.).
 
 The other recurring theme is thinking about the filesystem discipline. Examples of that include how: fresh runs should refuse to overwrite an existing model directory; resume should validate checkpoint existence before touching configs; the Python subprocess path should capture `stderr` directly so import errors surface as readable errors rather than black-box silent exits; and a few other guardrails in the same spirit. With the ML-related hyperparameters still residing hardcoded in `main.rs` (which keeps the training recipe in one place), my CLI design is less so about trying to serve the role of a full experiment grid, and more so as the narrow interface that's used to set the end-to-end pipeline in motion from the shell.
 
